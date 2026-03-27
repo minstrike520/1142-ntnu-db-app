@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import io, { Socket } from "socket.io-client";
 import axios from "axios";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
+// 動態取得前端目前使用的 hostname，並預設掛載在 :4000 的 backend
+const host = window.location.hostname;
+const API_URL = import.meta.env.VITE_API_URL || `http://${host}:4000`;
 
 let socket: Socket | null = null;
 

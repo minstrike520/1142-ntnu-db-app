@@ -138,6 +138,6 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Backend server successfully listening on port ${PORT}`);
+server.listen(PORT as number, "0.0.0.0", () => {
+  console.log(`Backend server successfully listening on port ${PORT} (0.0.0.0)`);
 });
