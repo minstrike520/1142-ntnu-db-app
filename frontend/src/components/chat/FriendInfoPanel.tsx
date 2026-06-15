@@ -25,13 +25,14 @@ export default function FriendInfoPanel({
   showChatButton = false,
   hideHeader = false,
 }: FriendInfoPanelProps) {
-  const { user, friends, emergencySettings, saveEmergencySettings, rooms, handleOpenPrivateRoom } = useChat();
+  const { user, friends, friendRequests, emergencySettings, saveEmergencySettings, rooms, handleOpenPrivateRoom, sendFriendRequestById } = useChat();
   const router = useRouter();
   const { t } = useTranslation();
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [addFriendStatus, setAddFriendStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
 
   const isSelf = userId === user.userId;
   const [prevUserId, setPrevUserId] = useState(userId);
@@ -95,6 +96,21 @@ export default function FriendInfoPanel({
   const bio = currentProfile?.bio || t("profileCard.defaultBio");
 
   const isEmergency = friend ? emergencySettings.contacts.some((c) => c.contactId === friend.id) : false;
+  const hasPendingRequest =
+    addFriendStatus === "sent" ||
+    (targetId ? friendRequests.some((r) => r.id === targetId && r.direction === "outgoing") : false);
+
+  const handleAddFriend = async () => {
+    if (!targetId || addFriendStatus !== "idle") return;
+    setAddFriendStatus("sending");
+    try {
+      await sendFriendRequestById(targetId, profile?.name ?? friendName);
+      setAddFriendStatus("sent");
+    } catch {
+      setAddFriendStatus("error");
+      setTimeout(() => setAddFriendStatus("idle"), 3000);
+    }
+  };
 
   const handleToggleEmergency = () => {
     if (!friend) return;
@@ -142,8 +158,13 @@ export default function FriendInfoPanel({
       {!hideHeader && (
         <div className="h-14 border-b border-border-primary px-4 flex items-center justify-between select-none shrink-0 bg-surface-muted">
           <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest block">
-            {t("profileCard.friendInfo")}
+            {friend ? t("profileCard.friendInfo") : t("profileCard.memberInfo")}
           </span>
+          {!isSelf && !friend && (
+            <span className="text-[8px] font-bold text-amber-500 uppercase tracking-widest border border-amber-500/30 bg-amber-500/10 px-1 py-0.5 mr-2">
+              {t("profileCard.notFriend")}
+            </span>
+          )}
           {onClose && (
             <button
               onClick={onClose}
@@ -228,6 +249,16 @@ export default function FriendInfoPanel({
           {showChatButton && !isSelf && (
             <Button onClick={handleSendMessage} variant="primary" className="w-full mt-2 text-xs py-2 font-bold select-none">
               {t("profileCard.sendMessage")}
+            </Button>
+          )}
+          {!isSelf && !friend && targetId && (
+            <Button
+              onClick={handleAddFriend}
+              variant="secondary"
+              className="w-full mt-2 text-xs py-2 select-none"
+              disabled={addFriendStatus === "sending" || hasPendingRequest}
+            >
+              {hasPendingRequest ? t("profileCard.friendRequestSent") : t("profileCard.sendFriendRequest")}
             </Button>
           )}
         </div>

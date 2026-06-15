@@ -32,10 +32,12 @@ export default function ProfilePopover({
   const {
     user,
     friends,
+    friendRequests,
     rooms,
     handleOpenPrivateRoom,
     emergencySettings,
     saveEmergencySettings,
+    sendFriendRequestById,
   } = useChat();
   const router = useRouter();
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -44,6 +46,7 @@ export default function ProfilePopover({
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [addFriendStatus, setAddFriendStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
 
   const handleCopyUid = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -122,6 +125,22 @@ export default function ProfilePopover({
     : profile?.bio || t("profileCard.defaultBio");
 
   const isEmergency = friend ? emergencySettings.contacts.some((c) => c.contactId === friend.id) : false;
+  const hasPendingRequest =
+    addFriendStatus === "sent" ||
+    friendRequests.some((r) => r.id === userId && r.direction === "outgoing");
+
+  const handleAddFriend = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (addFriendStatus !== "idle") return;
+    setAddFriendStatus("sending");
+    try {
+      await sendFriendRequestById(userId, profile?.name ?? username);
+      setAddFriendStatus("sent");
+    } catch {
+      setAddFriendStatus("error");
+      setTimeout(() => setAddFriendStatus("idle"), 3000);
+    }
+  };
 
   const handleToggleEmergency = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -185,6 +204,11 @@ export default function ProfilePopover({
         <span className="text-[9px] font-bold text-text-muted uppercase tracking-widest">
           {isSelf ? t("profileCard.myInfo") : friend ? t("profileCard.friendInfo") : t("profileCard.memberInfo")}
         </span>
+        {!isSelf && !friend && (
+          <span className="text-[8px] font-bold text-amber-500 uppercase tracking-widest border border-amber-500/30 bg-amber-500/10 px-1 py-0.5 shrink-0">
+            {t("profileCard.notFriend")}
+          </span>
+        )}
       </div>
 
       {loading ? (
@@ -257,6 +281,20 @@ export default function ProfilePopover({
           {!isSelf && (
             <Button onClick={handleSendMessage} variant="primary" className="w-full mt-3 text-[11px] py-1.5 font-bold">
               {t("profileCard.sendMessage")}
+            </Button>
+          )}
+          {!isSelf && !friend && (
+            <Button
+              onClick={handleAddFriend}
+              variant="secondary"
+              className="w-full mt-2 text-[11px] py-1.5"
+              disabled={addFriendStatus === "sending" || hasPendingRequest}
+            >
+              {hasPendingRequest
+                ? t("profileCard.friendRequestSent")
+                : addFriendStatus === "error"
+                  ? t("profileCard.sendFriendRequest")
+                  : t("profileCard.sendFriendRequest")}
             </Button>
           )}
         </>

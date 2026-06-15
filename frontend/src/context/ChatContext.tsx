@@ -317,6 +317,7 @@ interface ChatContextType {
   searchUsersForInvite: (query: string) => Promise<PublicUser[]>;
   handleJoinByInviteCode: (inviteCode: string) => Promise<string>;
   sendFriendRequest: (query: string) => Promise<void>;
+  sendFriendRequestById: (targetUserId: string, targetName?: string) => Promise<void>;
   acceptFriendRequest: (requestId: string) => Promise<void>;
   rejectFriendRequest: (requestId: string) => Promise<void>;
   removeFriend: (friendId: string) => Promise<void>;
@@ -1744,6 +1745,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     ]);
   };
 
+  const sendFriendRequestById = async (targetUserId: string, targetName?: string) => {
+    if (!token) throw new Error("Not authenticated");
+    await sendFriendRequestApi(token, targetUserId);
+    setFriendRequests((prev) => [
+      ...prev,
+      {
+        id: targetUserId,
+        name: targetName ?? targetUserId,
+        email: "",
+        direction: "outgoing",
+      },
+    ]);
+  };
+
   const acceptFriendRequest = async (requestId: string) => {
     if (!token) return;
     const request = friendRequests.find(
@@ -2083,6 +2098,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         searchUsersForInvite,
         handleJoinByInviteCode,
         sendFriendRequest,
+        sendFriendRequestById,
         acceptFriendRequest,
         rejectFriendRequest,
         removeFriend,

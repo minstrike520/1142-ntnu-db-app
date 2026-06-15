@@ -225,7 +225,10 @@
     "setEmergency": "設為緊急聯絡人",
     "sendMessage": "傳送訊息",
     "selectPrompt": "點選好友以查看詳細資訊",
-    "defaultBio": ""
+    "defaultBio": "",
+    "notFriend": "非好友",
+    "sendFriendRequest": "傳送好友邀請",
+    "friendRequestSent": "好友邀請已送出"
   },
   "groupSettings": {
     "title": "群組設定 - {name}",

@@ -233,7 +233,10 @@
     "setEmergency": "Set as Emergency Contact",
     "sendMessage": "Send Message",
     "selectPrompt": "Select a friend to view details",
-    "defaultBio": ""
+    "defaultBio": "",
+    "notFriend": "Not a friend",
+    "sendFriendRequest": "Send Friend Request",
+    "friendRequestSent": "Friend Request Sent"
   },
   "groupSettings": {
     "title": "Group Settings - {name}",
