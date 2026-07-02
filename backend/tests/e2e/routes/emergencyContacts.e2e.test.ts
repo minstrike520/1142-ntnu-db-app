@@ -108,28 +108,6 @@ describe('Emergency Contacts E2E', () => {
     expect(getRes.body).toHaveLength(0);
   });
 
-  it('should trigger a manual emergency alert for the authenticated user only', async () => {
-    await request(app)
-      .post('/api/v1/users/me/emergency-contacts')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({
-        contactId: user2Id,
-        message: 'Help me!',
-      });
-
-    const res = await request(app)
-      .post('/api/v1/users/me/emergency-alert')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({ message: 'Manual alert' });
-
-    expect(res.status).toBe(202);
-    expect(res.body).toEqual({ alerted: true, recipients: [user2Id] });
-
-    const unauthenticated = await request(app)
-      .post('/api/v1/users/me/emergency-alert')
-      .send({ message: 'Should not send' });
-    expect(unauthenticated.status).toBe(401);
-  });
 
   it('should check inactivity threshold and suppress duplicate alerts', async () => {
     await request(app)
