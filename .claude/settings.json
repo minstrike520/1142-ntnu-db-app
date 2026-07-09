@@ -2,8 +2,13 @@
   "hooks": {
     "SessionStart": [
       {
-        "command": ".claude/hooks/session-start-db.sh",
-        "description": "Start the integration/e2e test DB in the background and run migrations"
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/cloud-session-setup.sh"
+          }
+        ]
       }
     ]
   }
