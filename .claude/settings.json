@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "command": ".claude/hooks/session-start-db.sh",
+        "description": "Start the integration/e2e test DB in the background and run migrations"
+      }
+    ]
+  }
+}
