@@ -44,7 +44,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: sh -c "pnpm run migrate:up && pnpm dev"
+    command: sh -c "bun run migrate:up && bun dev"
 
   frontend:
     build:
