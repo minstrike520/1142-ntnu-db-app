@@ -98,15 +98,20 @@ function ImageAttachmentPreview({
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(!!file.url);
   const [hasError, setHasError] = useState(false);
+  const [prevUrl, setPrevUrl] = useState(file.url);
+
+  if (file.url !== prevUrl) {
+    setPrevUrl(file.url);
+    setBlobUrl(null);
+    setIsLoading(!!file.url);
+    setHasError(false);
+  }
 
   useEffect(() => {
     if (!file.url) {
-      setIsLoading(false);
       return;
     }
     let objectUrl: string | null = null;
-    setIsLoading(true);
-    setHasError(false);
     fetchAttachmentBlobUrl(file.url)
       .then((url) => {
         objectUrl = url;
