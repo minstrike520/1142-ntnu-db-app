@@ -59,7 +59,7 @@ type UpdateMeRequest = Partial<Pick<MyProfile, 'name' | 'email' | 'bio' | 'avata
   currentPassword?: string;
 };
 type UpdateMySettingsRequest = Partial<
-  Pick<UserSettings, 'warningEnabled' | 'warningDays' | 'demoWarningEnabled' | 'demoWarningSeconds' | 'language' | 'theme' | 'notifyDesktop' | 'notifySound' | 'roomOrder'>
+  Pick<UserSettings, 'warningEnabled' | 'warningDays' | 'language' | 'theme' | 'notifyDesktop' | 'notifySound' | 'roomOrder'>
 >;
 
 type CreateGroupRequest = {
@@ -582,15 +582,6 @@ export const downloadAttachment = async (fileUrl: string, filename: string): Pro
   window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
 };
 
-export const triggerEmergencyAlert = (token: string, message?: string): Promise<EmergencyAlertResult> =>
-  requestJson<EmergencyAlertResult>(
-    '/users/me/emergency-alert',
-    {
-      method: 'POST',
-      ...withJsonBody(message ? { message } : {}),
-    },
-    { token },
-  );
 
 export const listEmergencyContacts = (token: string): Promise<EmergencyContactResponse[]> =>
   requestJson<EmergencyContactResponse[]>('/users/me/emergency-contacts', {}, { token });

@@ -35,7 +35,6 @@ export const makeUserRoutes = (ctrl: ReturnType<typeof makeUserController>): Rou
   router.get('/me/emergency-contacts', ctrl.getEmergencyContacts.bind(ctrl));
   router.post('/me/emergency-contacts', ctrl.addEmergencyContact.bind(ctrl));
   router.delete('/me/emergency-contacts/:contactId', ctrl.deleteEmergencyContact.bind(ctrl));
-  router.post('/me/emergency-alert', ctrl.triggerEmergencyAlert.bind(ctrl));
   router.post('/me/emergency-alert/check-inactivity', ctrl.checkEmergencyInactivity.bind(ctrl));
 
   return router;

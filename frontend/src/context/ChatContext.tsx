@@ -50,7 +50,6 @@ import {
   respondFriendRequest,
   searchUsers,
   sendFriendRequest as sendFriendRequestApi,
-  triggerEmergencyAlert as triggerEmergencyAlertApi,
   unblockUser as unblockUserApi,
   updateFolderRooms,
   updateMe,
@@ -156,8 +155,6 @@ export interface User {
   notifySound?: boolean;
   warningEnabled?: boolean;
   warningDays?: number;
-  demoWarningEnabled?: boolean;
-  demoWarningSeconds?: number;
   lastActivity?: Date | string;
   roomOrder?: Record<string, string[]>;
 }
@@ -199,16 +196,10 @@ export interface EmergencyContact {
 export interface EmergencySettings {
   warningEnabled: boolean;
   warningDays: number;
-  demoWarningEnabled: boolean;
-  demoWarningSeconds: number;
   contacts: EmergencyContact[];
 }
 
-interface TriggerEmergencyAlertResult {
-  alerted: boolean;
-  recipients: string[];
-  reason?: string;
-}
+
 
 export type UiLanguage = "zh-TW" | "en";
 
@@ -323,7 +314,6 @@ interface ChatContextType {
   blockFriend: (friendId: string) => Promise<void>;
   unblockUser: (blockedId: string) => Promise<void>;
   saveEmergencySettings: (settings: EmergencySettings) => Promise<void>;
-  triggerEmergencyAlertNow: (message?: string) => Promise<TriggerEmergencyAlertResult>;
   setUiLanguage: (language: UiLanguage) => void;
   activeProfilePopover: { instanceId: string; userId: string } | null;
   setActiveProfilePopover: React.Dispatch<React.SetStateAction<{ instanceId: string; userId: string } | null>>;
@@ -348,9 +338,6 @@ const toStoredUser = (
   notifyDesktop: settings?.notifyDesktop ?? true,
   notifySound: settings?.notifySound ?? true,
   warningEnabled: settings?.warningEnabled ?? false,
-  warningDays: settings?.warningDays ?? 0,
-  demoWarningEnabled: settings?.demoWarningEnabled ?? false,
-  demoWarningSeconds: settings?.demoWarningSeconds ?? 30,
   lastActivity: profile.lastActivity,
   roomOrder: settings?.roomOrder ?? {},
 });
@@ -658,8 +645,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [emergencySettings, setEmergencySettings] = useState<EmergencySettings>({
     warningEnabled: false,
     warningDays: 0,
-    demoWarningEnabled: false,
-    demoWarningSeconds: 30,
     contacts: [],
   });
   const [selectedFriendForSidebar, setSelectedFriendForSidebar] = useState<Friend | null>(null);
@@ -836,8 +821,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setEmergencySettings({
           warningEnabled: settings?.warningEnabled ?? user.warningEnabled ?? false,
           warningDays: settings?.warningDays ?? user.warningDays ?? 0,
-          demoWarningEnabled: settings?.demoWarningEnabled ?? user.demoWarningEnabled ?? false,
-          demoWarningSeconds: settings?.demoWarningSeconds ?? user.demoWarningSeconds ?? 30,
           contacts,
         });
       } catch (error) {
@@ -1367,8 +1350,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             notifySound: user.notifySound ?? true,
             warningEnabled: user.warningEnabled ?? false,
             warningDays: user.warningDays ?? 14,
-            demoWarningEnabled: user.demoWarningEnabled ?? false,
-            demoWarningSeconds: user.demoWarningSeconds ?? 30,
           }),
         };
       };
@@ -1469,8 +1450,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         notifySound: updatedSettings.notifySound, 
         warningEnabled: updatedSettings.warningEnabled, 
         warningDays: updatedSettings.warningDays,
-        demoWarningEnabled: updatedSettings.demoWarningEnabled,
-        demoWarningSeconds: updatedSettings.demoWarningSeconds,
       };
     }
 
@@ -1813,13 +1792,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const saveEmergencySettings = async (settings: EmergencySettings) => {
     if (!token) return;
     const nextWarningDays = settings.warningEnabled ? Math.max(1, settings.warningDays) : 0;
-    const nextDemoWarningSeconds = Math.max(1, settings.demoWarningSeconds);
-
     await updateMySettings(token, {
       warningEnabled: settings.warningEnabled,
       warningDays: nextWarningDays,
-      demoWarningEnabled: settings.demoWarningEnabled,
-      demoWarningSeconds: nextDemoWarningSeconds,
     });
 
     const nextContactIds = new Set(settings.contacts.map((contact) => contact.contactId));
@@ -1844,27 +1819,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       notifySound: user.notifySound ?? true,
       warningEnabled: settings.warningEnabled,
       warningDays: nextWarningDays,
-      demoWarningEnabled: settings.demoWarningEnabled,
-      demoWarningSeconds: nextDemoWarningSeconds,
     };
     await refreshSocialData(token, updatedSettings);
     const nextUser = {
       ...user,
       warningEnabled: updatedSettings.warningEnabled,
       warningDays: updatedSettings.warningDays,
-      demoWarningEnabled: updatedSettings.demoWarningEnabled,
-      demoWarningSeconds: updatedSettings.demoWarningSeconds,
     };
     localStorage.setItem("user", JSON.stringify(nextUser));
     setUser(nextUser);
-  };
-
-  const triggerEmergencyAlertNow = async (message?: string): Promise<TriggerEmergencyAlertResult> => {
-    if (!token) {
-      throw new Error("Not authenticated");
-    }
-
-    return triggerEmergencyAlertApi(token, message?.trim() ? message.trim() : undefined);
   };
 
   const setUiLanguage = (language: UiLanguage) => {
@@ -2089,7 +2052,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         blockFriend,
         unblockUser,
         saveEmergencySettings,
-        triggerEmergencyAlertNow,
         setUiLanguage,
         typingUsers,
         activeProfilePopover,

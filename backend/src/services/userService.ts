@@ -61,12 +61,10 @@ const toMyProfile = (
 });
 
 const toUserSettings = (
-  user: Pick<User, 'warningEnabled' | 'warningDays' | 'demoWarningEnabled' | 'demoWarningSeconds' | 'language' | 'theme' | 'notifyDesktop' | 'notifySound' | 'roomOrder'>,
+  user: Pick<User, 'warningEnabled' | 'warningDays' | 'language' | 'theme' | 'notifyDesktop' | 'notifySound' | 'roomOrder'>,
 ): UserSettings => ({
   warningEnabled: user.warningEnabled,
   warningDays: user.warningDays,
-  demoWarningEnabled: user.demoWarningEnabled,
-  demoWarningSeconds: user.demoWarningSeconds,
   language: user.language,
   theme: user.theme,
   notifyDesktop: user.notifyDesktop,
@@ -83,7 +81,7 @@ export const makeUserService = (
   friendRepo?: any,
   onUserUpdated?: (userId: string, data: { name?: string; avatarUrl?: string }) => void | Promise<void>,
 ) => {
-  const notifyContacts = async (userId: string, fallbackMessage: string, isTest: boolean = false): Promise<EmergencyAlertResult> => {
+  const notifyContacts = async (userId: string, fallbackMessage: string): Promise<EmergencyAlertResult> => {
     const user = await repo.findById(userId);
     if (!user) throw new NotFoundError('user', userId);
 
@@ -94,7 +92,7 @@ export const makeUserService = (
 
     const recipients: string[] = [];
     for (const contact of contacts) {
-      const msg = (isTest ? '(測試) ' : '') + (contact.message || fallbackMessage);
+      const msg = contact.message || fallbackMessage;
       if (notifyEmergencyContact) {
         await notifyEmergencyContact(contact.contactId, {
           userId,
@@ -301,9 +299,6 @@ export const makeUserService = (
       await emergencyContactRepo.delete(userId, contactId);
     },
 
-    async triggerEmergencyAlert(userId: string, message = 'Emergency alert triggered'): Promise<EmergencyAlertResult> {
-      return notifyContacts(userId, message, true);
-    },
 
     async checkInactivity(userId: string, now = new Date()): Promise<EmergencyAlertResult> {
       const user = await repo.findById(userId);
@@ -330,30 +325,6 @@ export const makeUserService = (
       return notifyContacts(userId, 'User has exceeded their inactivity warning threshold');
     },
 
-    async checkDemoInactivity(userId: string, now = new Date()): Promise<EmergencyAlertResult> {
-      const user = await repo.findById(userId);
-      if (!user) throw new NotFoundError('user', userId);
-
-      if (!user.demoWarningEnabled) {
-        return { alerted: false, recipients: [], reason: 'WARNING_DISABLED' };
-      }
-      if (user.demoWarningSeconds < 1) {
-        return { alerted: false, recipients: [], reason: 'INVALID_THRESHOLD' };
-      }
-
-      const inactiveMs = now.getTime() - user.lastActivity.getTime();
-      const thresholdMs = user.demoWarningSeconds * 1000;
-      if (inactiveMs < thresholdMs) {
-        return { alerted: false, recipients: [], reason: 'BELOW_THRESHOLD' };
-      }
-
-      const shouldAlert = await emergencyContactRepo.recordAlertIfNew(userId, user.lastActivity);
-      if (!shouldAlert) {
-        return { alerted: false, recipients: [], reason: 'ALREADY_ALERTED' };
-      }
-
-      return notifyContacts(userId, '(Demo) User has exceeded their demo inactivity warning threshold');
-    },
 
     async search(query: string, mode?: 'name' | 'userId' | 'email', currentUserId?: string): Promise<SearchUserResult[]> {
       const parsed = searchQuerySchema.safeParse({ q: query, mode, friendsOnly: !!currentUserId });
