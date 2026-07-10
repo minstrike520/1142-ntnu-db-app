@@ -44,7 +44,7 @@ export function makeAttachmentService(attachmentRepo: AttachmentRepository) {
     },
     async getAttachment(attachmentId: string) {
       const attachment = await attachmentRepo.findById(attachmentId);
-      if (!attachment) {
+      if (!attachment || attachment.message_is_recalled === true) {
         return null;
       }
       return attachment;

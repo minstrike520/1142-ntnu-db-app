@@ -277,7 +277,7 @@ export function ChatBubble({
               {isRecalled ? t("chatroom.messageRecalled") : renderMentionContent(content, isOutgoing, isHighEmphasis, searchHighlight)}
             </div>
 
-            {attachments.length > 0 && (
+            {!isRecalled && attachments.length > 0 && (
               <div className="flex flex-col gap-1.5 mt-1 border-t border-border-secondary/40 pt-2">
                 {attachments.map((file, idx) => {
                   const fileContent = (

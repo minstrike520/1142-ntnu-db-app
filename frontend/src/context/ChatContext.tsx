@@ -1038,7 +1038,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setMessages((current) =>
         hydrateReplyTargets(
           current.map((message) =>
-            message.id === messageId ? { ...message, isRecalled: true, content: "" } : message,
+            message.id === messageId
+              ? { ...message, isRecalled: true, content: "", attachments: [] }
+              : message,
           ),
         ),
       );
