@@ -1,66 +1,82 @@
-name: Task (開發任務)
-description: 功能開發、重構、修補或清理任務 (For developers / team tasks)
-title: "[Task] "
+name: Task & Proposal (功能開發與技術提案)
+description: Propose a new feature, refactoring, or track a developer task
+title: "[Task/Proposal] "
 labels: []
 body:
   - type: markdown
     attributes:
       value: |
-        填寫此任務單以利追蹤功能開發或技術修補進度。
+        Please fill out this form to track new feature development, refactoring, optimization, or developer tasks.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 1. Category (類別)
+      options:
+        - New Feature Proposal
+        - Technical Modification / Refactoring
+        - Performance / Security Optimization
+        - General Development Task
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: 2. Affected Components (影響範圍)
+      description: Select the components affected by this task.
+      options:
+        - label: Frontend (Next.js)
+        - label: Backend (Express / Socket.IO)
+        - label: Database (PostgreSQL / Migrations)
+        - label: Shared (Types & Models)
+        - label: Docs / DevOps / Docker
+    validations:
+      required: true
 
   - type: textarea
     id: background
     attributes:
-      label: 1. 任務背景與目標 (Background & Goal)
-      description: 說明此任務的目的與需要解決的核心問題。
-      placeholder: 例如：因應新版 DB 設計，需要將 API response 中的舊欄位做對應的轉換與適配...
+      label: 3. Background & Motivation (背景與動機)
+      description: Explain the goal of this task and the core problem it solves.
+      placeholder: e.g., In order to support the new database design, we need to adapt and map old fields in the API response...
     validations:
       required: true
-
-  - type: textarea
-    id: current_status
-    attributes:
-      label: 2. 目前狀態 (Current Status)
-      description: 簡述現有程式碼、DB schema 的現況（選填）。
-      placeholder: backend/src/controllers/ 仍在使用舊屬性。
-    validations:
-      required: false
 
   - type: textarea
     id: work_items
     attributes:
-      label: 3. 具體工作項目 (Work Items)
-      description: 列出待完成的子任務（可用 - [ ] 格式）。
+      label: 4. Work Items & Proposed Implementation (工作項目與建議實作方式)
+      description: List the subtasks to be completed or describe the proposed implementation steps (optional).
       placeholder: |
-        - [ ] 修改 backend controller 邏輯
-        - [ ] 更新單元測試與整合測試
+        - [ ] Refactor backend controller logic
+        - [ ] Update unit and integration tests
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: acceptance_criteria
     attributes:
-      label: 4. 驗收標準 (Acceptance Criteria)
-      description: 清晰的完成指標（選填）。
-      placeholder: 所有測試皆通過，API response 與前端規格對齊。
+      label: 5. Acceptance Criteria (驗收標準)
+      description: Define the clear conditions of satisfaction (optional).
+      placeholder: e.g., All tests pass, API response matches the frontend schema.
     validations:
       required: false
 
-  - type: dropdown
-    id: priority
+  - type: checkboxes
+    id: checks
     attributes:
-      label: 5. 優先度 (Priority)
+      label: 6. Checks (確認事項)
       options:
-        - P0 — Blocker / 需優先處理
-        - P1 — 本 Sprint 必須完成
-        - P2 — 本 Sprint 盡量完成
-        - P3 — Backlog
-    validations:
-      required: true
+        - label: I confirm this is a task or enhancement proposal, not a bug report.
+          required: true
+        - label: I have searched existing issues to ensure this is not a duplicate.
+          required: true
 
   - type: input
     id: related_issues
     attributes:
-      label: 6. 相關 Issue / PR
-      description: 關聯的編號（選填）。
+      label: 7. Related Issues / PRs (相關 Issue 或 PR)
+      description: Link any relevant issues or pull requests (optional).
       placeholder: "#123"
