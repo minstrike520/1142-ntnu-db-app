@@ -237,7 +237,7 @@ export function ChatBubble({
   };
 
   const menuItemClass =
-    "w-full px-3 py-2 text-left text-xs hover:bg-surface-muted disabled:cursor-not-allowed disabled:text-text-muted disabled:hover:bg-transparent";
+    "w-full px-3 py-2 text-left text-xs hover:bg-surface-muted";
 
   return (
     <div
@@ -418,28 +418,30 @@ export function ChatBubble({
               >
                 {t("chatroom.replyMessage")}
               </button>
-              <button
-                type="button"
-                className={menuItemClass}
-                disabled={!canEdit}
-                onClick={() => {
-                  onEdit?.();
-                  setMenuPosition(null);
-                }}
-              >
-                {t("chatroom.editMessage")}
-              </button>
-              <button
-                type="button"
-                className={menuItemClass}
-                disabled={!canRecall}
-                onClick={() => {
-                  onRecall?.();
-                  setMenuPosition(null);
-                }}
-              >
-                {t("chatroom.recallMessage")}
-              </button>
+              {canEdit && (
+                <button
+                  type="button"
+                  className={menuItemClass}
+                  onClick={() => {
+                    onEdit?.();
+                    setMenuPosition(null);
+                  }}
+                >
+                  {t("chatroom.editMessage")}
+                </button>
+              )}
+              {canRecall && (
+                <button
+                  type="button"
+                  className={menuItemClass}
+                  onClick={() => {
+                    onRecall?.();
+                    setMenuPosition(null);
+                  }}
+                >
+                  {t("chatroom.recallMessage")}
+                </button>
+              )}
               <button type="button" className={menuItemClass} onClick={handleCopy}>
                 {t("chatroom.copyText")}
               </button>
