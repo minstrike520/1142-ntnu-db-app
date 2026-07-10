@@ -25,7 +25,7 @@ function mapRowToMessage(row: any): Message {
     isRecalled: row.is_recalled,
     sentAt: row.sent_at,
   };
-  if (row.attachments && row.attachments.length > 0) {
+  if (!row.is_recalled && row.attachments && row.attachments.length > 0) {
     msg.attachments = row.attachments.filter(Boolean);
   }
   return msg;

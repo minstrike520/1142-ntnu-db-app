@@ -90,4 +90,28 @@ describe('Attachment E2E', () => {
 
     expect(getRes.status).toBe(404);
   });
+
+  it('should return 404 for an attachment whose message has been recalled', async () => {
+    const uploadRes = await request(app)
+      .post('/api/v1/attachments')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', Buffer.from('dummy file content'), 'test.txt');
+
+    const attachmentId = uploadRes.body.attachmentId;
+
+    await testPool.query(
+      'UPDATE attachments SET message_id = $1 WHERE attachment_id = $2',
+      [messageId, attachmentId],
+    );
+    await testPool.query(
+      'UPDATE messages SET is_recalled = true WHERE message_id = $1',
+      [messageId],
+    );
+
+    const getRes = await request(app)
+      .get(`/api/v1/attachments/${attachmentId}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(getRes.status).toBe(404);
+  });
 });

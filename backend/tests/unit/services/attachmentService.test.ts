@@ -34,4 +34,42 @@ describe('AttachmentService', () => {
       }),
     );
   });
+
+  it('getAttachment returns null when the parent message has been recalled', async () => {
+    attachmentRepo.findById.mockResolvedValue({
+      attachment_id: 'att-1',
+      message_id: 'msg-1',
+      message_is_recalled: true,
+    });
+
+    await expect(service.getAttachment('att-1')).resolves.toBeNull();
+  });
+
+  it('getAttachment returns the attachment when the parent message has not been recalled', async () => {
+    const attachment = {
+      attachment_id: 'att-1',
+      message_id: 'msg-1',
+      message_is_recalled: false,
+    };
+    attachmentRepo.findById.mockResolvedValue(attachment);
+
+    await expect(service.getAttachment('att-1')).resolves.toEqual(attachment);
+  });
+
+  it('getAttachment returns the attachment when it is not yet linked to any message', async () => {
+    const attachment = {
+      attachment_id: 'att-1',
+      message_id: null,
+      message_is_recalled: null,
+    };
+    attachmentRepo.findById.mockResolvedValue(attachment);
+
+    await expect(service.getAttachment('att-1')).resolves.toEqual(attachment);
+  });
+
+  it('getAttachment returns null when the attachment does not exist', async () => {
+    attachmentRepo.findById.mockResolvedValue(null);
+
+    await expect(service.getAttachment('missing')).resolves.toBeNull();
+  });
 });
