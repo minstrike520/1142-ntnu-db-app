@@ -3,7 +3,7 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./Avatar";
 import ProfilePopover from "../chat/ProfilePopover";
-import { downloadAttachment } from "@/lib/api";
+import { downloadAttachment, fetchAttachmentBlobUrl } from "@/lib/api";
 import { useChat } from "@/context/ChatContext";
 
 export interface Attachment {
@@ -81,6 +81,109 @@ const renderMentionContent = (
     ),
   );
 };
+
+function ImageAttachmentPreview({
+  file,
+  isOutgoing,
+  isHighEmphasis,
+  onDownload,
+  isDownloading,
+}: {
+  file: Attachment;
+  isOutgoing: boolean;
+  isHighEmphasis: boolean;
+  onDownload: () => void;
+  isDownloading: boolean;
+}) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(!!file.url);
+  const [hasError, setHasError] = useState(false);
+  const [prevUrl, setPrevUrl] = useState(file.url);
+
+  if (file.url !== prevUrl) {
+    setPrevUrl(file.url);
+    setBlobUrl(null);
+    setIsLoading(!!file.url);
+    setHasError(false);
+  }
+
+  useEffect(() => {
+    if (!file.url) {
+      return;
+    }
+    let objectUrl: string | null = null;
+    fetchAttachmentBlobUrl(file.url)
+      .then((url) => {
+        objectUrl = url;
+        setBlobUrl(url);
+      })
+      .catch(() => setHasError(true))
+      .finally(() => setIsLoading(false));
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [file.url]);
+
+  const fallbackClassName = cn(
+    "flex w-full items-center gap-2.5 p-2 border rounded-sm text-xs cursor-pointer select-none transition-colors text-left disabled:cursor-wait disabled:opacity-70",
+    isOutgoing && isHighEmphasis
+      ? "bg-white/10 border-white/20 hover:bg-white/20 text-white"
+      : "bg-surface-card border-border-secondary hover:border-border-primary text-foreground",
+  );
+  const labelClass = cn(
+    "text-[9px] uppercase tracking-wider font-mono mt-0.5 truncate",
+    isOutgoing && isHighEmphasis ? "text-white/60" : "text-text-muted",
+  );
+  const clipIcon = (
+    <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+    </svg>
+  );
+
+  if (isLoading) {
+    return (
+      <div
+        className={cn(
+          "rounded-sm w-48 h-32 animate-pulse",
+          isOutgoing && isHighEmphasis ? "bg-white/20" : "bg-surface-muted",
+        )}
+      />
+    );
+  }
+
+  if (hasError || !blobUrl) {
+    return (
+      <button
+        type="button"
+        onClick={onDownload}
+        disabled={isDownloading}
+        className={fallbackClassName}
+        title={isDownloading ? "Downloading attachment" : "Download attachment"}
+      >
+        {clipIcon}
+        <div className="flex-1 min-w-0">
+          <p className="font-medium truncate leading-tight">{file.filename}</p>
+          <p className={labelClass}>{file.filetype}</p>
+        </div>
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <img
+        src={blobUrl}
+        alt={file.filename}
+        className="max-w-full max-h-64 rounded-sm object-contain cursor-pointer"
+        onClick={onDownload}
+        title="Click to download"
+      />
+      <p className={cn("text-[9px] font-mono truncate", isOutgoing && isHighEmphasis ? "text-white/60" : "text-text-muted")}>
+        {file.filename}
+      </p>
+    </div>
+  );
+}
 
 export function ChatBubble({
   content,
@@ -280,6 +383,21 @@ export function ChatBubble({
             {attachments.length > 0 && (
               <div className="flex flex-col gap-1.5 mt-1 border-t border-border-secondary/40 pt-2">
                 {attachments.map((file, idx) => {
+                  const isImage = file.filetype?.startsWith("image/");
+
+                  if (isImage) {
+                    return (
+                      <ImageAttachmentPreview
+                        key={idx}
+                        file={file}
+                        isOutgoing={isOutgoing}
+                        isHighEmphasis={isHighEmphasis}
+                        onDownload={() => void handleDownloadAttachment(file)}
+                        isDownloading={downloadingUrl === file.url}
+                      />
+                    );
+                  }
+
                   const fileContent = (
                     <>
                       <svg

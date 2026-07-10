@@ -582,6 +582,11 @@ export const downloadAttachment = async (fileUrl: string, filename: string): Pro
   window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
 };
 
+export const fetchAttachmentBlobUrl = async (fileUrl: string): Promise<string> => {
+  const response = await request(fileUrl);
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+};
 
 export const listEmergencyContacts = (token: string): Promise<EmergencyContactResponse[]> =>
   requestJson<EmergencyContactResponse[]>('/users/me/emergency-contacts', {}, { token });
