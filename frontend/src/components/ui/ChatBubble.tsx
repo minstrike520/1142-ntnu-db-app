@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./Avatar";
@@ -58,6 +58,9 @@ const highlightText = (text: string, query: string): React.ReactNode => {
   return <>{nodes}</>;
 };
 
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
+
 const renderMentionContent = (
   content: string,
   isOutgoing: boolean,
@@ -110,6 +113,53 @@ export function ChatBubble({
 
   const { activeProfilePopover, setActiveProfilePopover } = useChat();
   const showPopover = messageId ? activeProfilePopover?.instanceId === messageId : false;
+
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchStartPoint = useRef<{ x: number; y: number } | null>(null);
+  const longPressFired = useRef(false);
+
+  const cancelLongPress = () => {
+    if (longPressTimer.current !== null) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+    touchStartPoint.current = null;
+  };
+
+  useEffect(() => cancelLongPress, []);
+
+  const handleTouchStart = (event: React.TouchEvent) => {
+    cancelLongPress();
+    if (isRecalled || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    touchStartPoint.current = { x: touch.clientX, y: touch.clientY };
+    longPressFired.current = false;
+    longPressTimer.current = setTimeout(() => {
+      longPressTimer.current = null;
+      longPressFired.current = true;
+      setMenuPosition({ x: touch.clientX, y: touch.clientY });
+    }, LONG_PRESS_MS);
+  };
+
+  const handleTouchMove = (event: React.TouchEvent) => {
+    if (!touchStartPoint.current) return;
+    const touch = event.touches[0];
+    if (
+      Math.abs(touch.clientX - touchStartPoint.current.x) > LONG_PRESS_MOVE_TOLERANCE_PX ||
+      Math.abs(touch.clientY - touchStartPoint.current.y) > LONG_PRESS_MOVE_TOLERANCE_PX
+    ) {
+      cancelLongPress();
+    }
+  };
+
+  const handleTouchEnd = (event: React.TouchEvent) => {
+    cancelLongPress();
+    if (longPressFired.current) {
+      // Stop the browser from synthesizing a click after the long press,
+      // which would immediately trigger the window "click" close listener.
+      event.preventDefault();
+    }
+  };
 
   useEffect(() => {
     if (!menuPosition) return;
@@ -245,8 +295,15 @@ export function ChatBubble({
                 setMenuPosition({ x: event.clientX, y: event.clientY });
               }
             }}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={cancelLongPress}
             className={cn(
               "border rounded-sm p-3 relative flex flex-col gap-2 max-w-md md:max-w-lg",
+              // Long-press opens the action menu on touch devices; keep the
+              // native text-selection callout from hijacking the gesture.
+              "[-webkit-touch-callout:none] pointer-coarse:select-none",
               isOutgoing
                 ? isHighEmphasis
                   ? "bg-primary border-primary text-white"
