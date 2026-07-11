@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./Avatar";
@@ -214,18 +214,78 @@ export function ChatBubble({
   const { activeProfilePopover, setActiveProfilePopover } = useChat();
   const showPopover = messageId ? activeProfilePopover?.instanceId === messageId : false;
 
+  const menuOpenedAtRef = useRef(0);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressTriggeredRef = useRef(false);
+
   useEffect(() => {
     if (!menuPosition) return;
-    const close = () => setMenuPosition(null);
-    window.addEventListener("click", close);
-    window.addEventListener("keydown", close);
-    window.addEventListener("scroll", close, true);
+    // Mobile browsers fire a synthetic "click" shortly after the touchend that
+    // triggered a long-press open; ignore clicks right after opening so the
+    // menu doesn't close itself immediately.
+    const closeOnClick = () => {
+      if (Date.now() - menuOpenedAtRef.current < 300) return;
+      setMenuPosition(null);
+    };
+    const closeImmediately = () => setMenuPosition(null);
+    window.addEventListener("click", closeOnClick);
+    window.addEventListener("keydown", closeImmediately);
+    window.addEventListener("scroll", closeImmediately, true);
     return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("keydown", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("click", closeOnClick);
+      window.removeEventListener("keydown", closeImmediately);
+      window.removeEventListener("scroll", closeImmediately, true);
     };
   }, [menuPosition]);
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    };
+  }, []);
+
+  const openMenuAt = (x: number, y: number) => {
+    const menuWidth = 160;
+    const menuHeight = 170;
+    const clampedX = Math.min(Math.max(x, 8), window.innerWidth - menuWidth - 8);
+    const clampedY = Math.min(Math.max(y, 8), window.innerHeight - menuHeight - 8);
+    menuOpenedAtRef.current = Date.now();
+    setMenuPosition({ x: clampedX, y: clampedY });
+  };
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleTouchStart = (event: React.TouchEvent) => {
+    if (isRecalled) return;
+    const touch = event.touches[0];
+    touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+    longPressTriggeredRef.current = false;
+    clearLongPressTimer();
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      openMenuAt(touch.clientX, touch.clientY);
+    }, 500);
+  };
+
+  const handleTouchMove = (event: React.TouchEvent) => {
+    if (!touchStartPosRef.current) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - touchStartPosRef.current.x;
+    const dy = touch.clientY - touchStartPosRef.current.y;
+    if (Math.hypot(dx, dy) > 10) {
+      clearLongPressTimer();
+    }
+  };
+
+  const handleTouchEnd = () => {
+    clearLongPressTimer();
+  };
 
   const handleTogglePopover = (event: React.MouseEvent) => {
     if (!senderId) {
@@ -344,12 +404,21 @@ export function ChatBubble({
           <div
             onContextMenu={(event) => {
               event.preventDefault();
-              if (!isRecalled) {
-                setMenuPosition({ x: event.clientX, y: event.clientY });
+              if (isRecalled) return;
+              // Some Android browsers also fire contextmenu after a long-press;
+              // skip it so it doesn't reposition the menu we already opened.
+              if (longPressTriggeredRef.current) {
+                longPressTriggeredRef.current = false;
+                return;
               }
+              openMenuAt(event.clientX, event.clientY);
             }}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
             className={cn(
-              "border rounded-sm p-3 relative flex flex-col gap-2 max-w-md md:max-w-lg",
+              "border rounded-sm p-3 relative flex flex-col gap-2 max-w-md md:max-w-lg touch-pan-y",
               isOutgoing
                 ? isHighEmphasis
                   ? "bg-primary border-primary text-white"
