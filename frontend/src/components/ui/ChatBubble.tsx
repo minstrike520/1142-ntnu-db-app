@@ -371,17 +371,24 @@ export function ChatBubble({
               </div>
             )}
 
-            <div
-              className={cn(
-                "text-sm break-words whitespace-pre-wrap",
-                isRecalled && "italic text-text-muted/70",
-              )}
-            >
-              {isRecalled ? t("chatroom.messageRecalled") : renderMentionContent(content, isOutgoing, isHighEmphasis, searchHighlight)}
-            </div>
+            {(isRecalled || content) && (
+              <div
+                className={cn(
+                  "text-sm break-words whitespace-pre-wrap",
+                  isRecalled && "italic text-text-muted/70",
+                )}
+              >
+                {isRecalled ? t("chatroom.messageRecalled") : renderMentionContent(content, isOutgoing, isHighEmphasis, searchHighlight)}
+              </div>
+            )}
 
             {!isRecalled && attachments.length > 0 && (
-              <div className="flex flex-col gap-1.5 mt-1 border-t border-border-secondary/40 pt-2">
+              <div
+                className={cn(
+                  "flex flex-col gap-1.5",
+                  content && "mt-1 border-t border-border-secondary/40 pt-2",
+                )}
+              >
                 {attachments.map((file, idx) => {
                   const isImage = file.filetype?.startsWith("image/");
 
