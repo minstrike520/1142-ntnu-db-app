@@ -1,165 +1,4 @@
-import { describe, it, test, beforeAll, beforeEach, afterAll, afterEach } from 'bun:test';
-
-// Bun-compatibility helper for Vitest/Jest APIs
-import { mock, spyOn, afterAll, expect as originalExpect, jest } from 'bun:test';
-let mockedModules: any[] = [];
-afterAll(() => {
-  for (const m of mockedModules) {
-    if (m && m.path) {
-      mock.module(m.path, () => m.original);
-    }
-  }
-  mockedModules = [];
-});
-function createVitestMockProxy(f: any) {
-  const extensions = {
-    mockResolvedValue(val: any) {
-      f.mockImplementation(() => Promise.resolve(val));
-      return proxy;
-    },
-    mockRejectedValue(val: any) {
-      f.mockImplementation(() => Promise.reject(val));
-      return proxy;
-    },
-    mockResolvedValueOnce(val: any) {
-      if (typeof f.mockImplementationOnce === "function") {
-        f.mockImplementationOnce(() => Promise.resolve(val));
-      } else {
-        f.mockImplementation(() => Promise.resolve(val));
-      }
-      return proxy;
-    },
-    mockRejectedValueOnce(val: any) {
-      if (typeof f.mockImplementationOnce === "function") {
-        f.mockImplementationOnce(() => Promise.reject(val));
-      } else {
-        f.mockImplementation(() => Promise.reject(val));
-      }
-      return proxy;
-    },
-    mockReset() {
-      f.mockClear();
-      f.mockImplementation(() => {});
-      return proxy;
-    }
-  };
-  const proxy = new Proxy(f, {
-    get(target, prop, receiver) {
-      if (prop === "__is_vitest_mock_proxy__") return true;
-      if (prop === "__original_target__") return target;
-      if (prop in extensions) return (extensions as any)[prop];
-      const val = Reflect.get(target, prop);
-      if (typeof val === "function") return val.bind(target);
-      return val;
-    },
-    set(target, prop, value, receiver) {
-      return Reflect.set(target, prop, value);
-    }
-  });
-  return proxy;
-}
-const vi = {
-  fn: (impl?: any) => createVitestMockProxy(mock(impl)),
-  spyOn: (obj: any, method: string) => createVitestMockProxy(spyOn(obj, method as any)),
-  mock: (path: string, factory?: any) => {
-    let original: any = null;
-    try {
-      original = require(path);
-    } catch (e) {}
-    mockedModules.push({ path, original });
-    return mock.module(path, factory || (() => ({})));
-  },
-  mocked: <T>(obj: T) => obj as any,
-  restoreAllMocks: () => {
-    jest.restoreAllMocks();
-    for (const m of mockedModules) {
-      if (m && m.path) {
-        mock.module(m.path, () => m.original);
-      }
-    }
-    mockedModules = [];
-  },
-  resetAllMocks: () => {
-    jest.resetAllMocks();
-  },
-  clearAllMocks: () => {
-    jest.clearAllMocks();
-  },
-  stubEnv: (name: string, value: string) => {
-    if (!globalThis.__envStubs) globalThis.__envStubs = {};
-    if (!(name in globalThis.__envStubs)) globalThis.__envStubs[name] = process.env[name];
-    process.env[name] = value;
-  },
-  unstubAllEnvs: () => {
-    if (globalThis.__envStubs) {
-      for (const name in globalThis.__envStubs) {
-        const val = globalThis.__envStubs[name];
-        if (val === undefined) delete process.env[name];
-        else process.env[name] = val;
-      }
-      globalThis.__envStubs = null;
-    }
-  },
-  useFakeTimers: () => {
-    globalThis.__activeIntervals = [];
-    globalThis.__originalSetInterval = globalThis.setInterval;
-    globalThis.__originalClearInterval = globalThis.clearInterval;
-    globalThis.setInterval = (callback: any, delay?: number, ...args: any[]) => {
-      const id = Math.random();
-      globalThis.__activeIntervals.push({ callback: () => callback(...args), delay: delay || 0, id });
-      return id as any;
-    };
-    globalThis.clearInterval = (id: any) => {
-      globalThis.__activeIntervals = globalThis.__activeIntervals.filter((item: any) => item.id !== id);
-    };
-  },
-  useRealTimers: () => {
-    if (globalThis.__originalSetInterval) {
-      globalThis.setInterval = globalThis.__originalSetInterval;
-      globalThis.clearInterval = globalThis.__originalClearInterval;
-    }
-    globalThis.__activeIntervals = [];
-  },
-  advanceTimersByTime: (ms: number) => {
-    if (globalThis.__activeIntervals) {
-      for (const item of globalThis.__activeIntervals) {
-        item.callback();
-      }
-    }
-  },
-  advanceTimersByTimeAsync: async (ms: number) => {
-    if (globalThis.__activeIntervals) {
-      const promises = globalThis.__activeIntervals.map((item: any) => item.callback());
-      await Promise.all(promises);
-    }
-  },
-  waitFor: async (callback: () => any, options?: { timeout?: number; interval?: number }) => {
-    const timeout = options?.timeout || 5000;
-    const interval = options?.interval || 50;
-    const startTime = Date.now();
-    while (true) {
-      try {
-        await callback();
-        return;
-      } catch (err) {
-        if (Date.now() - startTime > timeout) {
-          throw err;
-        }
-        await new Promise(resolve => setTimeout(resolve, interval));
-      }
-    }
-  }
-};
-const expect = (actual: any) => {
-  if (actual && typeof actual === 'function' && actual.__is_vitest_mock_proxy__) {
-    actual = actual.__original_target__;
-  }
-  return originalExpect(actual);
-};
-Object.setPrototypeOf(expect, originalExpect);
-Object.defineProperties(expect, Object.getOwnPropertyDescriptors(originalExpect));
-
-
+import { describe, it, expect, beforeEach, afterAll, mock, type Mock } from 'bun:test';
 import { makeRoomService } from '../../../src/services/roomService';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../../src/errors/AppError';
 import type { IRoomRepository } from '../../../src/repositories/IRoomRepository';
@@ -167,14 +6,23 @@ import type { IRoomMemberRepository } from '../../../src/repositories/IRoomMembe
 import type { Room, RoomMember } from '../../../../shared/types';
 import { saveAvatarUpload, removeManagedAvatar } from '../../../src/lib/avatarUpload';
 
-vi.mock('../../../src/lib/avatarUpload', () => ({
-  saveAvatarUpload: vi.fn(),
-  removeManagedAvatar: vi.fn(),
+mock.module('../../../src/lib/avatarUpload', () => ({
+  saveAvatarUpload: mock(),
+  removeManagedAvatar: mock(),
 }));
 
-vi.mock('../../../src/realtime/presence', () => ({
-  isUserOnline: vi.fn().mockReturnValue(false),
+mock.module('../../../src/realtime/presence', () => ({
+  isUserOnline: mock().mockReturnValue(false),
 }));
+
+afterAll(() => {
+  mock.module('../../../src/realtime/presence', () => require('../../../src/realtime/presence?original'));
+  mock.module('../../../src/lib/avatarUpload', () => require('../../../src/lib/avatarUpload?original'));
+});
+
+type Mocked<T> = {
+  [P in keyof T]: T[P] extends Function ? Mock<any> : T[P];
+};
 
 describe('roomService', () => {
   let mockRepo: Mocked<IRoomRepository>;
@@ -202,21 +50,21 @@ describe('roomService', () => {
 
   beforeEach(() => {
     mockRepo = {
-      findById: vi.fn(),
-      findByInviteCode: vi.fn(),
-      findPrivateRoomByMembers: vi.fn(),
-      findByMember: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      delete: vi.fn(),
+      findById: mock(),
+      findByInviteCode: mock(),
+      findPrivateRoomByMembers: mock(),
+      findByMember: mock(),
+      create: mock(),
+      update: mock(),
+      delete: mock(),
     };
     mockMemberRepo = {
-      findMember: vi.fn(),
-      findByRoom: vi.fn(),
-      add: vi.fn(),
-      update: vi.fn(),
-      remove: vi.fn(),
-      resolveMentions: vi.fn(),
+      findMember: mock(),
+      findByRoom: mock(),
+      add: mock(),
+      update: mock(),
+      remove: mock(),
+      resolveMentions: mock(),
     };
     roomService = makeRoomService(mockRepo, mockMemberRepo);
   });
@@ -258,7 +106,7 @@ describe('roomService', () => {
     const result = await roomService.list('user-1');
 
     expect(mockRepo.findByMember).toHaveBeenCalledWith('user-1');
-    expect(result).toEqual([room]);
+    expect(result as any).toEqual([room]);
   });
 
   it('update validates payload and throws NotFoundError for missing rooms', async () => {
@@ -289,8 +137,8 @@ describe('roomService', () => {
 
   it('createPrivate returns an existing private room for accepted friends', async () => {
     const socialRepo = {
-      isBlocked: vi.fn().mockResolvedValue(false),
-      areFriends: vi.fn().mockResolvedValue(true),
+      isBlocked: mock().mockResolvedValue(false),
+      areFriends: mock().mockResolvedValue(true),
     };
     const privateRoom = { ...room, type: 'private' as const };
     mockRepo.findPrivateRoomByMembers.mockResolvedValue(privateRoom);
@@ -304,8 +152,8 @@ describe('roomService', () => {
 
   it('createPrivate reopens a readonly private room instead of creating a duplicate', async () => {
     const socialRepo = {
-      isBlocked: vi.fn().mockResolvedValue(false),
-      areFriends: vi.fn().mockResolvedValue(true),
+      isBlocked: mock().mockResolvedValue(false),
+      areFriends: mock().mockResolvedValue(true),
     };
     const archivedPrivate = {
       ...room,
@@ -328,8 +176,8 @@ describe('roomService', () => {
 
   it('createPrivate rejects non-friends', async () => {
     const socialRepo = {
-      isBlocked: vi.fn().mockResolvedValue(false),
-      areFriends: vi.fn().mockResolvedValue(false),
+      isBlocked: mock().mockResolvedValue(false),
+      areFriends: mock().mockResolvedValue(false),
     };
     roomService = makeRoomService(mockRepo, mockMemberRepo, undefined, socialRepo);
 
@@ -402,7 +250,7 @@ describe('roomService', () => {
   describe('kickMember', () => {
     it('allows owner to kick member', async () => {
       mockRepo.findById.mockResolvedValue(room);
-      mockMemberRepo.findMember.mockImplementation(async (roomId, userId) => {
+      mockMemberRepo.findMember.mockImplementation(async (roomId: string, userId: string) => {
         if (userId === 'user-1') return ownerMember;
         if (userId === 'user-2') return { role: 'member' } as RoomMember;
         return null;
@@ -412,7 +260,7 @@ describe('roomService', () => {
     });
     it('prevents kicking the owner', async () => {
       mockRepo.findById.mockResolvedValue(room);
-      mockMemberRepo.findMember.mockImplementation(async (roomId, userId) => {
+      mockMemberRepo.findMember.mockImplementation(async (roomId: string, userId: string) => {
         if (userId === 'user-1') return { role: 'admin' } as RoomMember;
         if (userId === 'user-2') return ownerMember;
         return null;
@@ -428,12 +276,12 @@ describe('roomService', () => {
 
     beforeEach(() => {
       mockUserRepo = {
-        findById: vi.fn().mockResolvedValue({ userId: 'user-2', name: 'Bob' }),
+        findById: mock().mockResolvedValue({ userId: 'user-2', name: 'Bob' }),
       };
       mockMessageRepo = {
-        create: vi.fn().mockResolvedValue({ messageId: 'msg-sys', content: '[System] Bob已加入' }),
+        create: mock().mockResolvedValue({ messageId: 'msg-sys', content: '[System] Bob已加入' }),
       };
-      mockEmit = vi.fn();
+      mockEmit = mock();
     });
 
     it('creates system message on direct joinByCode', async () => {
@@ -471,7 +319,7 @@ describe('roomService', () => {
       );
 
       mockRepo.findById.mockResolvedValue(room);
-      mockMemberRepo.findMember.mockImplementation(async (roomId, userId) => {
+      mockMemberRepo.findMember.mockImplementation(async (roomId: string, userId: string) => {
         if (userId === 'user-1') return ownerMember; // caller (owner)
         if (userId === 'user-2') return { role: 'pending' } as RoomMember; // target
         return null;
@@ -502,10 +350,10 @@ describe('roomService', () => {
         originalname: 'avatar.png',
       } as any;
 
-      vi.mocked(saveAvatarUpload).mockReset();
-      vi.mocked(removeManagedAvatar).mockReset();
+      ((saveAvatarUpload as any) as Mock<any>).mockClear();
+      ((removeManagedAvatar as any) as Mock<any>).mockClear();
       
-      vi.mocked(saveAvatarUpload).mockResolvedValue('/uploads/avatars/new-avatar.png');
+      ((saveAvatarUpload as any) as Mock<any>).mockResolvedValue('/uploads/avatars/new-avatar.png');
     });
 
     it('updates room avatar successfully by owner', async () => {
@@ -597,8 +445,8 @@ describe('roomService', () => {
   describe('createPrivate (new room path)', () => {
     it('creates a new private room and adds both members when none exists', async () => {
       const socialRepo = {
-        isBlocked: vi.fn().mockResolvedValue(false),
-        areFriends: vi.fn().mockResolvedValue(true),
+        isBlocked: mock().mockResolvedValue(false),
+        areFriends: mock().mockResolvedValue(true),
       };
       const serviceWithSocial = makeRoomService(mockRepo, mockMemberRepo, undefined, socialRepo);
       const newRoom = { ...room, type: 'private' as const };
@@ -616,8 +464,8 @@ describe('roomService', () => {
 
     it('skips add in ensureMember when member already exists', async () => {
       const socialRepo = {
-        isBlocked: vi.fn().mockResolvedValue(false),
-        areFriends: vi.fn().mockResolvedValue(true),
+        isBlocked: mock().mockResolvedValue(false),
+        areFriends: mock().mockResolvedValue(true),
       };
       const serviceWithSocial = makeRoomService(mockRepo, mockMemberRepo, undefined, socialRepo);
       const newRoom = { ...room, type: 'private' as const };
@@ -656,7 +504,7 @@ describe('roomService', () => {
 
   describe('update with emitRoomEvent', () => {
     it('emits ROOM_SETTINGS_UPDATED when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = vi.fn();
+      const emitRoomEvent = mock();
       const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
       const updated = { ...room, name: 'New Name' };
       mockRepo.findById.mockResolvedValue(room);
@@ -671,7 +519,7 @@ describe('roomService', () => {
 
   describe('leave with emitRoomEvent and system message', () => {
     it('emits MEMBER_LEFT when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = vi.fn();
+      const emitRoomEvent = mock();
       const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue({ ...ownerMember, role: 'member' } as RoomMember);
@@ -682,9 +530,9 @@ describe('roomService', () => {
     });
 
     it('creates system message and emits new_message when userRepo and messageRepo are provided', async () => {
-      const emitRoomEvent = vi.fn();
-      const userRepo = { findById: vi.fn().mockResolvedValue({ userId: 'user-2', name: 'Bob' }) };
-      const messageRepo = { create: vi.fn().mockResolvedValue({ messageId: 'msg-1' }) };
+      const emitRoomEvent = mock();
+      const userRepo = { findById: mock().mockResolvedValue({ userId: 'user-2', name: 'Bob' }) };
+      const messageRepo = { create: mock().mockResolvedValue({ messageId: 'msg-1' }) };
       const serviceWithAll = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent, undefined, userRepo as any, messageRepo as any);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue({ ...ownerMember, role: 'member' } as RoomMember);
@@ -749,7 +597,7 @@ describe('roomService', () => {
     });
 
     it('emits OWNERSHIP_TRANSFERRED event when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = vi.fn();
+      const emitRoomEvent = mock();
       const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember
@@ -768,7 +616,7 @@ describe('roomService', () => {
 
   describe('deleteGroup with emitRoomEvent', () => {
     it('emits ROOM_DELETED event when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = vi.fn();
+      const emitRoomEvent = mock();
       const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue(ownerMember);
@@ -846,7 +694,7 @@ describe('roomService', () => {
     });
 
     it('owner can update another member and emits MEMBER_UPDATED event', async () => {
-      const emitRoomEvent = vi.fn();
+      const emitRoomEvent = mock();
       const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember
@@ -866,7 +714,7 @@ describe('roomService', () => {
 
   describe('kickMember with emitRoomEvent and system message', () => {
     it('emits MEMBER_KICKED when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = vi.fn();
+      const emitRoomEvent = mock();
       const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember
@@ -879,9 +727,9 @@ describe('roomService', () => {
     });
 
     it('creates system message when userRepo and messageRepo are provided', async () => {
-      const emitRoomEvent = vi.fn();
-      const userRepo = { findById: vi.fn().mockResolvedValue({ userId: 'user-2', name: 'Bob' }) };
-      const messageRepo = { create: vi.fn().mockResolvedValue({ messageId: 'msg-1' }) };
+      const emitRoomEvent = mock();
+      const userRepo = { findById: mock().mockResolvedValue({ userId: 'user-2', name: 'Bob' }) };
+      const messageRepo = { create: mock().mockResolvedValue({ messageId: 'msg-1' }) };
       const serviceWithAll = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent, undefined, userRepo as any, messageRepo as any);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember
@@ -896,9 +744,9 @@ describe('roomService', () => {
 
   describe('uploadAvatar with emitRoomEvent', () => {
     it('emits ROOM_AVATAR_UPDATED event when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = vi.fn();
+      const emitRoomEvent = mock();
       const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
-      vi.mocked(saveAvatarUpload).mockResolvedValue('/uploads/avatars/new.png');
+      ((saveAvatarUpload as any) as Mock<any>).mockResolvedValue('/uploads/avatars/new.png');
       const updated = { ...room, avatarUrl: '/uploads/avatars/new.png' };
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue(ownerMember);
@@ -924,8 +772,8 @@ describe('roomService', () => {
 
     it('throws ForbiddenError when socialRepo.isBlocked returns true', async () => {
       const socialRepo = {
-        isBlocked: vi.fn().mockResolvedValue(true),
-        areFriends: vi.fn().mockResolvedValue(true),
+        isBlocked: mock().mockResolvedValue(true),
+        areFriends: mock().mockResolvedValue(true),
       };
       const serviceWithSocial = makeRoomService(mockRepo, mockMemberRepo, undefined, socialRepo);
       await expect(serviceWithSocial.createPrivate('user-1', 'user-2')).rejects.toThrow(ForbiddenError);
