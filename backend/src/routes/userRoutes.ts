@@ -3,6 +3,7 @@ import multer from 'multer';
 import { ValidationError } from '../errors/AppError';
 import { ALLOWED_AVATAR_MIME_TYPES, AVATAR_UPLOAD_MAX_BYTES } from '../lib/avatarUpload';
 import { authMiddleware } from '../middlewares/authMiddleware';
+import { testOnlyMiddleware } from '../middlewares/securityMiddleware';
 import type { makeUserController } from '../controllers/userController';
 
 const avatarUpload = multer({
@@ -35,7 +36,11 @@ export const makeUserRoutes = (ctrl: ReturnType<typeof makeUserController>): Rou
   router.get('/me/emergency-contacts', ctrl.getEmergencyContacts.bind(ctrl));
   router.post('/me/emergency-contacts', ctrl.addEmergencyContact.bind(ctrl));
   router.delete('/me/emergency-contacts/:contactId', ctrl.deleteEmergencyContact.bind(ctrl));
-  router.post('/me/emergency-alert/check-inactivity', ctrl.checkEmergencyInactivity.bind(ctrl));
+  router.post(
+    '/me/emergency-alert/check-inactivity',
+    testOnlyMiddleware,
+    ctrl.checkEmergencyInactivity.bind(ctrl),
+  );
 
   return router;
 };

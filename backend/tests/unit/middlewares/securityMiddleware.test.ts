@@ -5,6 +5,7 @@ import {
   makeAuthRateLimiter,
   makeGlobalRateLimiter,
   securityHeaders,
+  testOnlyMiddleware,
 } from '../../../src/middlewares/securityMiddleware';
 
 describe('security middleware', () => {
@@ -88,5 +89,26 @@ describe('security middleware', () => {
     const limited = await request(app).post('/api/v1/auth/login').expect(429);
 
     expect(limited.body.message).toBe('Too many authentication attempts, please try again later');
+  });
+
+  it('blocks test-only routes outside of the test environment', async () => {
+    process.env.NODE_ENV = 'production';
+    const app = express();
+    app.post('/api/v1/test-only', testOnlyMiddleware, (_req, res) => res.json({ ok: true }));
+    app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      res.status(err.statusCode ?? 500).json({ message: err.message, code: err.code });
+    });
+
+    const res = await request(app).post('/api/v1/test-only').expect(404);
+
+    expect(res.body).toEqual({ message: 'Not Found', code: 'NOT_FOUND' });
+  });
+
+  it('allows test-only routes when NODE_ENV=test', async () => {
+    process.env.NODE_ENV = 'test';
+    const app = express();
+    app.post('/api/v1/test-only', testOnlyMiddleware, (_req, res) => res.json({ ok: true }));
+
+    await request(app).post('/api/v1/test-only').expect(200, { ok: true });
   });
 });

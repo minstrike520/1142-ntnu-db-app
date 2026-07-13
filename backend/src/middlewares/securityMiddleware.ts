@@ -2,6 +2,7 @@ import rateLimit, { type Options } from 'express-rate-limit';
 import helmet from 'helmet';
 import type { RequestHandler } from 'express';
 import { parsePositiveInt } from '../utils/parsePositiveInt';
+import { AppError } from '../errors/AppError';
 
 const rateLimitDisabled = (): boolean =>
   process.env.NODE_ENV === 'test' || process.env.RATE_LIMIT_DISABLED === 'true';
@@ -10,6 +11,13 @@ const defaultSecurityHeaders = helmet();
 const avatarSecurityHeaders = helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 });
+
+export const testOnlyMiddleware: RequestHandler = (_req, _res, next) => {
+  if (process.env.NODE_ENV !== 'test') {
+    return next(new AppError(404, 'Not Found', 'NOT_FOUND'));
+  }
+  next();
+};
 
 export const securityHeaders: RequestHandler = (req, res, next) => {
   if (req.path === '/uploads/avatars' || req.path.startsWith('/uploads/avatars/')) {
