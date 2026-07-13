@@ -48,7 +48,6 @@
 | **緊急聯絡** | `GET` | [`/users/me/emergency-contacts`](#get-usersmeemergency-contacts) | 需驗證 | 取得緊急聯絡人列表 |
 | | `POST` | [`/users/me/emergency-contacts`](#post-usersmeemergency-contacts) | 需驗證 | 新增或更新緊急聯絡人設定 |
 | | `DELETE` | [`/users/me/emergency-contacts/:contactId`](#delete-usersmeemergency-contactscontactid) | 需驗證 | 刪除緊急聯絡人設定 |
-| | `POST` | [`/users/me/emergency-alert`](#post-usersmeemergency-alert) | 需驗證 | 立即向所有緊急聯絡人發送警報 |
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | 需驗證 | 檢查不活躍狀態以判定是否發送警報 |
 
 ### Socket.io 即時通訊
@@ -1313,24 +1312,6 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
     "success": true
   }
   ```
-
----
-
-#### `POST /users/me/emergency-alert`
-- **說明**: 立即手動觸發緊急警報，並向設定的所有緊急聯絡人發送警報訊息。
-- **驗證與權限**: 需驗證。
-- **請求主體**:
-  | 欄位 | 型別 | 必填 | 說明 |
-  | :--- | :--- | :---: | :--- |
-  | `message` | 字串 | 否 | 用於覆蓋預設警報的自訂訊息內容 |
-- **請求範例**:
-  ```json
-  {
-    "message": "This is a manually triggered instant emergency alert!"
-  }
-  ```
-- **回應**:
-  - `202 Accepted`: 警報發送請求已被接受，於背景處理。
 
 ---
 
