@@ -2,12 +2,17 @@ import { z } from 'zod';
 
 const idSchema = z.string().trim().min(1, 'Id cannot be empty');
 
-export const sendMessageSchema = z.object({
-  roomId: idSchema,
-  content: z.string().trim().min(1, 'Message content cannot be empty'),
-  replyToId: idSchema.optional(),
-  attachmentIds: z.array(z.string().uuid()).optional(),
-});
+export const sendMessageSchema = z
+  .object({
+    roomId: idSchema,
+    content: z.string().trim(),
+    replyToId: idSchema.optional(),
+    attachmentIds: z.array(z.string().uuid()).optional(),
+  })
+  .refine((data) => data.content.length > 0 || (data.attachmentIds?.length ?? 0) > 0, {
+    message: 'Message content cannot be empty',
+    path: ['content'],
+  });
 
 export const listMessagesSchema = z.object({
   roomId: idSchema,

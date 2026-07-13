@@ -435,7 +435,9 @@ const hydrateReplyTargets = (items: Message[]): Message[] => {
 
     const nextReplyTo = {
       senderName: replyTarget.senderName,
-      content: replyTarget.isRecalled ? "" : replyTarget.content,
+      content: replyTarget.isRecalled
+        ? ""
+        : replyTarget.content || replyTarget.attachments?.[0]?.filename || "",
     };
 
     if (
@@ -529,13 +531,6 @@ const mapFolders = (apiFolders: ApiFolder[], currentFolders: Folder[]): Folder[]
 
 const normalizeLanguage = (language?: string): UiLanguage =>
   language === "zh-TW" || language === "en" ? language : "en";
-
-const formatUploadedAttachmentsMessage = (language: UiLanguage, fileNames: string[]) => {
-  if (fileNames.length === 1) {
-    return language === "zh-TW" ? `已上傳附件：${fileNames[0]}` : `Shared attachment: ${fileNames[0]}`;
-  }
-  return language === "zh-TW" ? `已上傳了 ${fileNames.length} 個附件` : `Shared ${fileNames.length} attachments`;
-};
 
 const mapFriend = (item: FriendResponse, emergencyContactIds: Set<string>): Friend => ({
   id: item.friend.userId,
@@ -1309,10 +1304,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     );
     const attachmentIds = uploadedResults.map((res) => res.attachmentId);
 
-    const fileNames = files.map((file) => file.name);
-    const content = options?.content?.trim()
-      ? options.content.trim()
-      : formatUploadedAttachmentsMessage(uiLanguage, fileNames);
+    const content = options?.content?.trim() ?? "";
 
     sendMessage(socketRef.current, {
       roomId,

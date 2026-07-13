@@ -254,6 +254,22 @@ describe('messageService', () => {
     });
   });
 
+  it('sendMessage allows empty content when attachmentIds are provided', async () => {
+    const attachmentId = '550e8400-e29b-41d4-a716-446655440000';
+    roomRepo.findById.mockResolvedValue(room);
+    roomMemberRepo.findMember.mockResolvedValue(member);
+    messageRepo.create.mockResolvedValue({ ...messageWithSender, content: '' });
+
+    await messageService.sendMessage('user-1', 'room-1', '', { attachmentIds: [attachmentId] });
+
+    expect(messageRepo.create).toHaveBeenCalledWith({
+      roomId: 'room-1',
+      senderId: 'user-1',
+      content: '',
+      attachmentIds: [attachmentId],
+    });
+  });
+
   it('listForRoom applies join time when room history is hidden', async () => {
     const hiddenHistoryRoom = { ...room, viewHistory: false };
     roomRepo.findById.mockResolvedValue(hiddenHistoryRoom);
