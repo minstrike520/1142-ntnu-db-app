@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./Avatar";
@@ -214,18 +214,83 @@ export function ChatBubble({
   const { activeProfilePopover, setActiveProfilePopover } = useChat();
   const showPopover = messageId ? activeProfilePopover?.instanceId === messageId : false;
 
+  const menuOpenedAtRef = useRef(0);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressTriggeredRef = useRef(false);
+
   useEffect(() => {
     if (!menuPosition) return;
-    const close = () => setMenuPosition(null);
-    window.addEventListener("click", close);
-    window.addEventListener("keydown", close);
-    window.addEventListener("scroll", close, true);
+    const closeOnClick = () => {
+      if (Date.now() - menuOpenedAtRef.current < 300) return;
+      setMenuPosition(null);
+    };
+    const closeImmediately = () => setMenuPosition(null);
+    window.addEventListener("click", closeOnClick);
+    window.addEventListener("keydown", closeImmediately);
+    window.addEventListener("scroll", closeImmediately, true);
     return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("keydown", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("click", closeOnClick);
+      window.removeEventListener("keydown", closeImmediately);
+      window.removeEventListener("scroll", closeImmediately, true);
     };
   }, [menuPosition]);
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    };
+  }, []);
+
+  const openMenuAt = (x: number, y: number) => {
+    const menuWidth = 160;
+    const menuHeight = 170;
+    const clampedX = Math.min(Math.max(x, 8), window.innerWidth - menuWidth - 8);
+    const clampedY = Math.min(Math.max(y, 8), window.innerHeight - menuHeight - 8);
+    menuOpenedAtRef.current = Date.now();
+    setMenuPosition({ x: clampedX, y: clampedY });
+  };
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    touchStartPosRef.current = null;
+  };
+
+  const handleTouchStart = (event: React.TouchEvent) => {
+    if (isRecalled || event.touches.length !== 1) {
+      clearLongPressTimer();
+      return;
+    }
+    clearLongPressTimer();
+    const touch = event.touches[0];
+    touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+    longPressTriggeredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      openMenuAt(touch.clientX, touch.clientY);
+    }, 500);
+  };
+
+  const handleTouchMove = (event: React.TouchEvent) => {
+    if (event.touches.length !== 1) {
+      clearLongPressTimer();
+      return;
+    }
+    if (!touchStartPosRef.current) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - touchStartPosRef.current.x;
+    const dy = touch.clientY - touchStartPosRef.current.y;
+    if (Math.hypot(dx, dy) > 10) {
+      clearLongPressTimer();
+    }
+  };
+
+  const handleTouchEnd = () => {
+    clearLongPressTimer();
+  };
 
   const handleTogglePopover = (event: React.MouseEvent) => {
     if (!senderId) {
@@ -290,7 +355,7 @@ export function ChatBubble({
   };
 
   const menuItemClass =
-    "w-full px-3 py-2 text-left text-xs hover:bg-surface-muted disabled:cursor-not-allowed disabled:text-text-muted disabled:hover:bg-transparent";
+    "w-full px-3 py-2 text-left text-xs hover:bg-surface-muted";
 
   return (
     <div
@@ -344,12 +409,19 @@ export function ChatBubble({
           <div
             onContextMenu={(event) => {
               event.preventDefault();
-              if (!isRecalled) {
-                setMenuPosition({ x: event.clientX, y: event.clientY });
+              if (isRecalled) return;
+              if (longPressTriggeredRef.current) {
+                longPressTriggeredRef.current = false;
+                return;
               }
+              openMenuAt(event.clientX, event.clientY);
             }}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
             className={cn(
-              "border rounded-sm p-3 relative flex flex-col gap-2 max-w-md md:max-w-lg",
+              "border rounded-sm p-3 relative flex flex-col gap-2 max-w-md md:max-w-lg touch-pan-y",
               isOutgoing
                 ? isHighEmphasis
                   ? "bg-primary border-primary text-white"
@@ -486,28 +558,30 @@ export function ChatBubble({
               >
                 {t("chatroom.replyMessage")}
               </button>
-              <button
-                type="button"
-                className={menuItemClass}
-                disabled={!canEdit}
-                onClick={() => {
-                  onEdit?.();
-                  setMenuPosition(null);
-                }}
-              >
-                {t("chatroom.editMessage")}
-              </button>
-              <button
-                type="button"
-                className={menuItemClass}
-                disabled={!canRecall}
-                onClick={() => {
-                  onRecall?.();
-                  setMenuPosition(null);
-                }}
-              >
-                {t("chatroom.recallMessage")}
-              </button>
+              {canEdit && (
+                <button
+                  type="button"
+                  className={menuItemClass}
+                  onClick={() => {
+                    onEdit?.();
+                    setMenuPosition(null);
+                  }}
+                >
+                  {t("chatroom.editMessage")}
+                </button>
+              )}
+              {canRecall && (
+                <button
+                  type="button"
+                  className={menuItemClass}
+                  onClick={() => {
+                    onRecall?.();
+                    setMenuPosition(null);
+                  }}
+                >
+                  {t("chatroom.recallMessage")}
+                </button>
+              )}
               <button type="button" className={menuItemClass} onClick={handleCopy}>
                 {t("chatroom.copyText")}
               </button>
