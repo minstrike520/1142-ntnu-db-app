@@ -260,11 +260,14 @@ export function ChatBubble({
   };
 
   const handleTouchStart = (event: React.TouchEvent) => {
-    if (isRecalled || event.touches.length !== 1) return;
+    if (isRecalled || event.touches.length !== 1) {
+      clearLongPressTimer();
+      return;
+    }
+    clearLongPressTimer();
     const touch = event.touches[0];
     touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
     longPressTriggeredRef.current = false;
-    clearLongPressTimer();
     longPressTimerRef.current = setTimeout(() => {
       longPressTriggeredRef.current = true;
       openMenuAt(touch.clientX, touch.clientY);
@@ -272,7 +275,11 @@ export function ChatBubble({
   };
 
   const handleTouchMove = (event: React.TouchEvent) => {
-    if (!touchStartPosRef.current || event.touches.length !== 1) return;
+    if (event.touches.length !== 1) {
+      clearLongPressTimer();
+      return;
+    }
+    if (!touchStartPosRef.current) return;
     const touch = event.touches[0];
     const dx = touch.clientX - touchStartPosRef.current.x;
     const dy = touch.clientY - touchStartPosRef.current.y;
