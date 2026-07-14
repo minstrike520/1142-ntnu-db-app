@@ -1,27 +1,27 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { makeAuthController } from '../../../src/controllers/authController';
 import { ValidationError } from '../../../src/errors/AppError';
 import type { Request, Response, NextFunction } from 'express';
 
 const mockRes = () => {
-  const res = { status: vi.fn(), json: vi.fn(), send: vi.fn(), cookie: vi.fn(), clearCookie: vi.fn() } as any;
+  const res = { status: mock(), json: mock(), send: mock(), cookie: mock(), clearCookie: mock() } as any;
   res.status.mockReturnValue(res);
   return res;
 };
 
 describe('authController', () => {
   const authResult = { token: 'tok', refreshToken: 'fake-refresh-token', user: { userId: 'u1', email: 'alice@example.com', name: 'Alice' } };
-  const service = { register: vi.fn(), login: vi.fn(), refresh: vi.fn(), revokeToken: vi.fn() };
+  const service = { register: mock(), login: mock(), refresh: mock(), revokeToken: mock() };
   const ctrl = makeAuthController(service);
 
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => mock.clearAllMocks());
 
   describe('register', () => {
     it('returns 201 on valid input', async () => {
       service.register.mockResolvedValue(authResult);
       const req = { body: { email: 'alice@example.com', name: 'Alice', password: 'password123' } } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.register(req, res, next);
 
@@ -41,7 +41,7 @@ describe('authController', () => {
     it('calls next with ValidationError on invalid body', async () => {
       const req = { body: { email: 'not-an-email', name: 'Alice', password: 'short' } } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.register(req, res, next);
 
@@ -54,7 +54,7 @@ describe('authController', () => {
       service.register.mockRejectedValue(err);
       const req = { body: { email: 'alice@example.com', name: 'Alice', password: 'password123' } } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.register(req, res, next);
 
@@ -67,7 +67,7 @@ describe('authController', () => {
       service.login.mockResolvedValue(authResult);
       const req = { body: { email: 'alice@example.com', password: 'password123' } } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.login(req, res, next);
 
@@ -87,7 +87,7 @@ describe('authController', () => {
     it('calls next with ValidationError on missing fields', async () => {
       const req = { body: {} } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.login(req, res, next);
 
@@ -99,7 +99,7 @@ describe('authController', () => {
       service.login.mockRejectedValue(err);
       const req = { body: { email: 'alice@example.com', password: 'password123' } } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.login(req, res, next);
 
@@ -111,7 +111,7 @@ describe('authController', () => {
     it('returns 204', async () => {
       const req = { headers: { cookie: 'refresh_token=fake-refresh-token' } } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.logout(req, res, next);
 
@@ -127,7 +127,7 @@ describe('authController', () => {
     it('skips revokeToken but still clears cookie and sends 204 when no cookie is present', async () => {
       const req = { headers: {} } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.logout(req, res, next);
 
@@ -145,7 +145,7 @@ describe('authController', () => {
       service.revokeToken.mockRejectedValue(err);
       const req = { headers: { cookie: 'refresh_token=some-token' } } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.logout(req, res, next);
 
@@ -163,7 +163,7 @@ describe('authController', () => {
       });
       const req = { headers: { cookie: 'refresh_token=old-refresh-token' } } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.refresh(req, res, next);
 
@@ -183,7 +183,7 @@ describe('authController', () => {
     it('calls next with ValidationError when cookie is missing', async () => {
       const req = { headers: {} } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.refresh(req, res, next);
 
@@ -196,7 +196,7 @@ describe('authController', () => {
       service.refresh.mockRejectedValue(err);
       const req = { headers: { cookie: 'refresh_token=bad-token' } } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.refresh(req, res, next);
 
@@ -212,7 +212,7 @@ describe('authController', () => {
       service.refresh.mockRejectedValue(err);
       const req = { headers: { cookie: 'refresh_token=valid-token' } } as Request;
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.refresh(req, res, next);
 

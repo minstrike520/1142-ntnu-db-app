@@ -1,0 +1,13 @@
+# Bun test-runner configuration for the backend.
+#
+# Replaces the three vitest config files. Bun natively:
+#   - resolves the "@shared/*" path alias from tsconfig.base.json,
+#   - loads .env.test automatically when NODE_ENV=test (set by `bun test`),
+#   - runs test files serially in a single process (the old
+#     `fileParallelism: false`), which the integration/e2e DB suites rely on.
+#
+# The preload maps DATABASE_URL onto the dedicated test database URL so app
+# code that reads DATABASE_URL targets the test DB. It replaces the deleted
+# vitest setupFiles hook (tests/helpers/setup.ts).
+[test]
+preload = ["./tests/preload.ts"]

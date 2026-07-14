@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import { RoomRepository } from '../../../src/repositories/roomRepository';
 import { testPool } from '../../helpers/testPool';
 import { resetDb } from '../../helpers/resetDb';

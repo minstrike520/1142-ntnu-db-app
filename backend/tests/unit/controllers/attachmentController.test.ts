@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { makeAttachmentController } from '../../../src/controllers/attachmentController';
 import { ValidationError } from '../../../src/errors/AppError';
 
@@ -11,17 +11,17 @@ describe('AttachmentController', () => {
 
   beforeEach(() => {
     mockService = {
-      uploadAttachment: vi.fn(),
-      getAttachment: vi.fn(),
+      uploadAttachment: mock(),
+      getAttachment: mock(),
     };
     controller = makeAttachmentController(mockService);
     req = { body: {}, file: null, params: {} };
     res = {
-      status: vi.fn().mockReturnThis(),
-      json: vi.fn(),
-      download: vi.fn(),
+      status: mock().mockReturnThis(),
+      json: mock(),
+      download: mock(),
     };
-    next = vi.fn();
+    next = mock();
   });
 
   describe('upload', () => {

@@ -1,5 +1,9 @@
 import bcrypt from 'bcryptjs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn, type Mock } from 'bun:test';
+
+
+
+
 import { ConflictError, NotFoundError, ValidationError } from '../../../src/errors/AppError';
 import type { IEmergencyContactRepository } from '../../../src/repositories/IEmergencyContactRepository';
 import type { IUserRepository } from '../../../src/repositories/IUserRepository';
@@ -7,18 +11,17 @@ import { makeUserService } from '../../../src/services/userService';
 import { loginSchema, registerSchema } from '../../../src/validators/userSchemas';
 import type { User } from '../../../../shared/types';
 import { saveAvatarUpload, removeManagedAvatar } from '../../../src/lib/avatarUpload';
+import * as avatarUploadMod from '../../../src/lib/avatarUpload';
 
-vi.mock('../../../src/lib/avatarUpload', () => ({
-  saveAvatarUpload: vi.fn(),
-  removeManagedAvatar: vi.fn().mockResolvedValue(undefined),
-}));
+let saveAvatarUploadSpy: any;
+let removeManagedAvatarSpy: any;
 
 describe('userService', () => {
-  let mockRepo: import('vitest').Mocked<IUserRepository>;
-  let emergencyContactRepo: import('vitest').Mocked<IEmergencyContactRepository>;
-  let mockRefreshTokenRepo: import('vitest').Mocked<any>;
-  let mockJwt: { signToken: import('vitest').Mock; generateRefreshToken: import('vitest').Mock; hashToken: import('vitest').Mock };
-  let notifyEmergencyContact: import('vitest').Mock;
+  let mockRepo: any;
+  let emergencyContactRepo: any;
+  let mockRefreshTokenRepo: any;
+  let mockJwt: { signToken: Mock; generateRefreshToken: Mock; hashToken: Mock };
+  let notifyEmergencyContact: Mock;
   let userService: ReturnType<typeof makeUserService>;
 
   const baseUser = (): User => ({
@@ -39,28 +42,34 @@ describe('userService', () => {
     deletedAt: null,
   });
 
+    afterEach(() => {
+    if (saveAvatarUploadSpy) saveAvatarUploadSpy.mockRestore();
+    if (removeManagedAvatarSpy) removeManagedAvatarSpy.mockRestore();
+  });
   beforeEach(() => {
+    saveAvatarUploadSpy = spyOn(avatarUploadMod, 'saveAvatarUpload').mockImplementation(mock() as any);
+    removeManagedAvatarSpy = spyOn(avatarUploadMod, 'removeManagedAvatar').mockResolvedValue(undefined as any);
     mockRepo = {
-      findById: vi.fn(),
-      findByEmail: vi.fn(),
-      search: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      delete: vi.fn(),
-      findAllWarningEnabled: vi.fn(),
+      findById: mock(),
+      findByEmail: mock(),
+      search: mock(),
+      create: mock(),
+      update: mock(),
+      delete: mock(),
+      findAllWarningEnabled: mock(),
     };
     emergencyContactRepo = {
-      findByUserId: vi.fn(),
-      upsert: vi.fn(),
-      delete: vi.fn(),
-      recordAlertIfNew: vi.fn(),
+      findByUserId: mock(),
+      upsert: mock(),
+      delete: mock(),
+      recordAlertIfNew: mock(),
     };
     mockRefreshTokenRepo = {
-      create: vi.fn(),
-      findByHash: vi.fn(),
-      revoke: vi.fn(),
-      revokeAllForUser: vi.fn(),
-      rotate: vi.fn(),
+      create: mock(),
+      findByHash: mock(),
+      revoke: mock(),
+      revokeAllForUser: mock(),
+      rotate: mock(),
     };
     mockRefreshTokenRepo.create.mockResolvedValue({
       tokenId: 'new-rt-id',
@@ -81,13 +90,13 @@ describe('userService', () => {
       replacedBy: null,
     });
     mockJwt = {
-      signToken: vi.fn(),
-      generateRefreshToken: vi.fn(),
-      hashToken: vi.fn(),
+      signToken: mock(),
+      generateRefreshToken: mock(),
+      hashToken: mock(),
     };
     mockJwt.generateRefreshToken.mockReturnValue('fake-refresh-token');
     mockJwt.hashToken.mockImplementation((t: string) => `hashed-${t}`);
-    notifyEmergencyContact = vi.fn();
+    notifyEmergencyContact = mock();
     userService = makeUserService(
       mockRepo,
       emergencyContactRepo,
@@ -409,7 +418,7 @@ describe('userService', () => {
 
     it('searches user friends when currentUserId is provided', async () => {
       const mockFriendRepo = {
-        getFriends: vi.fn().mockResolvedValue([
+        getFriends: mock().mockResolvedValue([
           {
             friend: {
               userId: 'friend-1',
@@ -715,9 +724,9 @@ describe('userService', () => {
     const fakeFile = { originalname: 'avatar.png', buffer: Buffer.from('data') } as Express.Multer.File;
 
     beforeEach(() => {
-      vi.mocked(saveAvatarUpload).mockReset();
-      vi.mocked(removeManagedAvatar).mockReset();
-      vi.mocked(removeManagedAvatar).mockResolvedValue(undefined);
+      (saveAvatarUpload as Mock).mockReset();
+      (removeManagedAvatar as Mock).mockReset();
+      (removeManagedAvatar as Mock).mockResolvedValue(undefined);
     });
 
     it('throws NotFoundError when user does not exist', async () => {
@@ -730,7 +739,7 @@ describe('userService', () => {
       const user = { ...baseUser(), avatarUrl: undefined };
       const newUrl = '/uploads/avatars/u1-new.png';
       mockRepo.findById.mockResolvedValue(user);
-      vi.mocked(saveAvatarUpload).mockResolvedValue(newUrl);
+      (saveAvatarUpload as Mock).mockResolvedValue(newUrl);
       mockRepo.update.mockResolvedValue({ ...user, avatarUrl: newUrl });
       await userService.uploadAvatar('u1', fakeFile);
       expect(removeManagedAvatar).not.toHaveBeenCalledWith(undefined, 'u1');
@@ -740,7 +749,7 @@ describe('userService', () => {
       const user = { ...baseUser(), avatarUrl: '/old-avatar.png' };
       const newUrl = '/uploads/avatars/u1-new.png';
       mockRepo.findById.mockResolvedValue(user);
-      vi.mocked(saveAvatarUpload).mockResolvedValue(newUrl);
+      (saveAvatarUpload as Mock).mockResolvedValue(newUrl);
       mockRepo.update.mockRejectedValue(new Error('DB failure'));
       await expect(userService.uploadAvatar('u1', fakeFile)).rejects.toThrow('DB failure');
       expect(removeManagedAvatar).toHaveBeenCalledWith(newUrl, 'u1');
@@ -751,7 +760,7 @@ describe('userService', () => {
     let friendRepo: any;
 
     beforeEach(() => {
-      friendRepo = { getFriends: vi.fn() };
+      friendRepo = { getFriends: mock() };
       userService = makeUserService(mockRepo, emergencyContactRepo, mockRefreshTokenRepo, mockJwt, notifyEmergencyContact, friendRepo);
       friendRepo.getFriends.mockResolvedValue([
         { friend: { userId: 'friend-1', name: 'Alice', email: 'alice@example.com', avatarUrl: null } },
@@ -808,7 +817,7 @@ describe('userService', () => {
 
   describe('updateMe with onUserUpdated callback', () => {
     it('calls onUserUpdated after successful update', async () => {
-      const onUserUpdated = vi.fn();
+      const onUserUpdated = mock();
       const serviceWithCb = makeUserService(
         mockRepo, emergencyContactRepo, mockRefreshTokenRepo, mockJwt,
         undefined, undefined, onUserUpdated,
@@ -824,13 +833,13 @@ describe('userService', () => {
     const fakeFile = { originalname: 'avatar.png', buffer: Buffer.from('data') } as Express.Multer.File;
 
     beforeEach(() => {
-      vi.mocked(saveAvatarUpload).mockReset();
-      vi.mocked(removeManagedAvatar).mockReset();
-      vi.mocked(removeManagedAvatar).mockResolvedValue(undefined);
+      (saveAvatarUpload as Mock).mockReset();
+      (removeManagedAvatar as Mock).mockReset();
+      (removeManagedAvatar as Mock).mockResolvedValue(undefined);
     });
 
     it('calls onUserUpdated callback on successful upload', async () => {
-      const onUserUpdated = vi.fn();
+      const onUserUpdated = mock();
       const serviceWithCb = makeUserService(
         mockRepo, emergencyContactRepo, mockRefreshTokenRepo, mockJwt,
         undefined, undefined, onUserUpdated,
@@ -838,7 +847,7 @@ describe('userService', () => {
       const user = { ...baseUser(), avatarUrl: undefined };
       const newUrl = '/uploads/avatars/u1-new.png';
       mockRepo.findById.mockResolvedValue(user);
-      vi.mocked(saveAvatarUpload).mockResolvedValue(newUrl);
+      (saveAvatarUpload as Mock).mockResolvedValue(newUrl);
       mockRepo.update.mockResolvedValue({ ...user, avatarUrl: newUrl });
       await serviceWithCb.uploadAvatar('u1', fakeFile);
       expect(onUserUpdated).toHaveBeenCalledWith('u1', expect.objectContaining({ avatarUrl: newUrl }));
@@ -849,7 +858,7 @@ describe('userService', () => {
       const newUrl = '/uploads/avatars/new.png';
       const user = { ...baseUser(), avatarUrl: oldUrl };
       mockRepo.findById.mockResolvedValue(user);
-      vi.mocked(saveAvatarUpload).mockResolvedValue(newUrl);
+      (saveAvatarUpload as Mock).mockResolvedValue(newUrl);
       mockRepo.update.mockResolvedValue({ ...user, avatarUrl: newUrl });
       await userService.uploadAvatar('u1', fakeFile);
       expect(removeManagedAvatar).toHaveBeenCalledWith(oldUrl, 'u1');
@@ -957,7 +966,7 @@ describe('userService', () => {
 
   describe('search default mode null email friend', () => {
     it('handles null email in default-mode search without error', async () => {
-      const fr = { getFriends: vi.fn() };
+      const fr = { getFriends: mock() };
       const svc = makeUserService(mockRepo, emergencyContactRepo, mockRefreshTokenRepo, mockJwt, undefined, fr);
       fr.getFriends.mockResolvedValue([
         { friend: { userId: 'f1', name: 'Nullemail', email: null, avatarUrl: null } },

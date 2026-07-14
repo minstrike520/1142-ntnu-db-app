@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'bun:test';
 import { testPool } from '../helpers/testPool';
 
 describe('test DB connection', () => {

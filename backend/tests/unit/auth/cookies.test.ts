@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, mock } from 'bun:test';
 import type { Response } from 'express';
 import {
   REFRESH_COOKIE_NAME,
@@ -8,7 +8,7 @@ import {
 } from '../../../src/auth/cookies';
 
 const makeRes = () =>
-  ({ cookie: vi.fn(), clearCookie: vi.fn() }) as unknown as Response;
+  ({ cookie: mock(), clearCookie: mock() }) as unknown as Response;
 
 describe('cookies', () => {
   describe('setRefreshCookie', () => {
@@ -35,7 +35,7 @@ describe('cookies', () => {
       try {
         const res = makeRes();
         setRefreshCookie(res, 'token-123');
-        const options = (res.cookie as ReturnType<typeof vi.fn>).mock.calls[0][2];
+        const options = (res.cookie as ReturnType<typeof mock>).mock.calls[0][2];
         expect(options.maxAge).toBe(14 * 24 * 60 * 60 * 1000);
       } finally {
         if (originalMaxAge !== undefined) process.env.REFRESH_COOKIE_MAX_AGE_MS = originalMaxAge;

@@ -1,14 +1,9 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, mock, spyOn, beforeEach, afterEach, type Mock } from 'bun:test';
 import { ForbiddenError, NotFoundError } from '../../../src/errors/AppError';
 import { attachSockets } from '../../../src/realtime/socketServer';
 import type { ChatServer } from '../../../src/realtime/authSocket';
 import type { MessageWithSender } from '../../../../shared/types';
-import { trackUserConnection, trackUserDisconnection } from '../../../src/realtime/presence';
-
-vi.mock('../../../src/realtime/presence', () => ({
-  trackUserConnection: vi.fn().mockResolvedValue(undefined),
-  trackUserDisconnection: vi.fn().mockResolvedValue(undefined),
-}));
+import * as presence from '../../../src/realtime/presence';
 
 const message: MessageWithSender = {
   messageId: 'msg-1',
@@ -24,43 +19,52 @@ describe('attachSockets', () => {
   let connectionHandler: any;
   let handlers: Record<string, any>;
   let socket: any;
-  let roomEmit: ReturnType<typeof vi.fn>;
+  let roomEmit: Mock;
   let service: {
-    sendMessage: ReturnType<typeof vi.fn>;
-    recallMessage: ReturnType<typeof vi.fn>;
+    sendMessage: Mock;
+    recallMessage: Mock;
   };
-  let repo: { findById: ReturnType<typeof vi.fn> };
-  let roomMemberRepo: { update: ReturnType<typeof vi.fn> };
+  let repo: { findById: Mock };
+  let roomMemberRepo: { update: Mock; findMember: Mock };
 
   beforeEach(() => {
+    spyOn(presence, 'trackUserConnection').mockResolvedValue(undefined);
+    spyOn(presence, 'trackUserDisconnection').mockResolvedValue(undefined);
+
     handlers = {};
-    roomEmit = vi.fn();
+    roomEmit = mock();
     socket = {
       data: { user: { userId: 'user-1', name: 'Alice' } },
-      join: vi.fn(),
-      leave: vi.fn(),
-      emit: vi.fn(),
-      to: vi.fn(() => ({ emit: roomEmit })),
-      on: vi.fn((event, handler) => {
+      join: mock(),
+      leave: mock(),
+      emit: mock(),
+      to: mock(() => ({ emit: roomEmit })),
+      on: mock((event, handler) => {
         handlers[event] = handler;
       }),
     };
     service = {
-      sendMessage: vi.fn(),
-      recallMessage: vi.fn(),
+      sendMessage: mock(),
+      recallMessage: mock(),
     };
-    repo = { findById: vi.fn() };
-    roomMemberRepo = { update: vi.fn(), findMember: vi.fn() };
+    repo = { findById: mock() };
+    roomMemberRepo = { update: mock(), findMember: mock() };
 
     const io = {
-      on: vi.fn((event, handler) => {
+      on: mock((event, handler) => {
         if (event === 'connection') connectionHandler = handler;
       }),
-      to: vi.fn(() => ({ emit: roomEmit })),
+      to: mock(() => ({ emit: roomEmit })),
     } as unknown as ChatServer;
 
-    attachSockets(io, { messageService: service, messageRepository: repo, roomMemberRepository: roomMemberRepo });
+    attachSockets(io, { messageService: service as any, messageRepository: repo as any, roomMemberRepository: roomMemberRepo as any });
     connectionHandler(socket);
+  });
+
+  
+  afterEach(() => {
+    (presence.trackUserConnection as any).mockRestore();
+    (presence.trackUserDisconnection as any).mockRestore();
   });
 
   it('handles join_room for members and leave_room', async () => {
@@ -139,7 +143,7 @@ describe('attachSockets', () => {
   });
 
   it('broadcasts typing and read receipts', async () => {
-    const socketRoomEmit = vi.fn();
+    const socketRoomEmit = mock();
     socket.to.mockReturnValue({ emit: socketRoomEmit });
     repo.findById.mockResolvedValue(message); // msg-1 in room-1
 
@@ -188,47 +192,47 @@ describe('attachSockets', () => {
   describe('with friendRepository', () => {
     let frHandlers: Record<string, any>;
     let frSocket: any;
-    const friendRepo = { getFriends: vi.fn() };
+    const friendRepo = { getFriends: mock() };
 
     beforeEach(() => {
-      vi.mocked(trackUserConnection).mockClear();
-      vi.mocked(trackUserDisconnection).mockClear();
+      (presence.trackUserConnection as Mock).mockClear();
+      (presence.trackUserDisconnection as Mock).mockClear();
 
       frHandlers = {};
       frSocket = {
         id: 'socket-fr-1',
         data: { user: { userId: 'user-1', name: 'Alice' } },
-        join: vi.fn(),
-        leave: vi.fn(),
-        emit: vi.fn(),
-        to: vi.fn(() => ({ emit: vi.fn() })),
-        on: vi.fn((event, handler) => { frHandlers[event] = handler; }),
+        join: mock(),
+        leave: mock(),
+        emit: mock(),
+        to: mock(() => ({ emit: mock() })),
+        on: mock((event, handler) => { frHandlers[event] = handler; }),
       };
 
       let frConnectionHandler: any;
       const frIo = {
-        on: vi.fn((event, handler) => { if (event === 'connection') frConnectionHandler = handler; }),
-        to: vi.fn(() => ({ emit: vi.fn() })),
+        on: mock((event, handler) => { if (event === 'connection') frConnectionHandler = handler; }),
+        to: mock(() => ({ emit: mock() })),
       } as unknown as ChatServer;
 
       attachSockets(frIo, {
-        messageService: service,
-        messageRepository: repo,
-        roomMemberRepository: roomMemberRepo,
-        friendRepository: friendRepo,
+        messageService: service as any,
+        messageRepository: repo as any,
+        roomMemberRepository: roomMemberRepo as any,
+        friendRepository: friendRepo as any,
       });
       frConnectionHandler(frSocket);
     });
 
     it('calls trackUserConnection on connect when friendRepository is provided', () => {
-      expect(trackUserConnection).toHaveBeenCalledWith(
+      expect(presence.trackUserConnection).toHaveBeenCalledWith(
         expect.anything(), 'user-1', 'socket-fr-1', friendRepo,
       );
     });
 
     it('calls trackUserDisconnection on disconnect when friendRepository is provided', () => {
       frHandlers.disconnect();
-      expect(trackUserDisconnection).toHaveBeenCalledWith(
+      expect(presence.trackUserDisconnection).toHaveBeenCalledWith(
         expect.anything(), 'user-1', 'socket-fr-1', friendRepo,
       );
     });

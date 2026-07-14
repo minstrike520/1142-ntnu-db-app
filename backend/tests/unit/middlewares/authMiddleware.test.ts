@@ -1,13 +1,14 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
+
+mock.module('../../../src/db', () => ({
+  default: { query: mock() },
+}));
+
 import { Request, Response, NextFunction } from 'express';
 import { authMiddleware } from '../../../src/middlewares/authMiddleware';
 import * as jwtHelper from '../../../src/auth/jwt';
 import { AppError } from '../../../src/errors/AppError';
 import pool from '../../../src/db';
-
-vi.mock('../../../src/db', () => ({
-  default: { query: vi.fn() },
-}));
 
 describe('authMiddleware', () => {
   let mockRequest: Partial<Request>;
@@ -19,19 +20,19 @@ describe('authMiddleware', () => {
       headers: {},
     };
     mockResponse = {};
-    nextFunction = vi.fn();
-    // vi.restoreAllMocks() resets vi.fn() implementations, so re-apply after each test
-    vi.mocked(pool.query).mockResolvedValue({ rows: [{}] } as any);
+    nextFunction = mock();
+    // mock.restore() resets mock() implementations, so re-apply after each test
+    (pool.query as Mock).mockResolvedValue({ rows: [{}] } as any);
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    mock.restore();
   });
 
   it('calls next with 401 when auth token is missing', async () => {
     await authMiddleware(mockRequest as Request, mockResponse as Response, nextFunction);
     expect(nextFunction).toHaveBeenCalledOnce();
-    const arg = vi.mocked(nextFunction).mock.calls[0][0] as AppError;
+    const arg = (nextFunction as Mock).mock.calls[0][0] as AppError;
     expect(arg).toBeInstanceOf(AppError);
     expect(arg.statusCode).toBe(401);
     expect(arg.message).toMatch(/Missing authentication token/);
@@ -41,7 +42,7 @@ describe('authMiddleware', () => {
     mockRequest.headers = { authorization: 'Basic sometoken' };
     await authMiddleware(mockRequest as Request, mockResponse as Response, nextFunction);
     expect(nextFunction).toHaveBeenCalledOnce();
-    const arg = vi.mocked(nextFunction).mock.calls[0][0] as AppError;
+    const arg = (nextFunction as Mock).mock.calls[0][0] as AppError;
     expect(arg).toBeInstanceOf(AppError);
     expect(arg.statusCode).toBe(401);
     expect(arg.message).toMatch(/Missing authentication token/);
@@ -49,13 +50,13 @@ describe('authMiddleware', () => {
 
   it('calls next with 401 when token is invalid', async () => {
     mockRequest.headers = { authorization: 'Bearer invalid-token' };
-    vi.spyOn(jwtHelper, 'verifyToken').mockImplementation(() => {
+    spyOn(jwtHelper, 'verifyToken').mockImplementation(() => {
       throw new Error('Invalid token');
     });
 
     await authMiddleware(mockRequest as Request, mockResponse as Response, nextFunction);
     expect(nextFunction).toHaveBeenCalledOnce();
-    const arg = vi.mocked(nextFunction).mock.calls[0][0] as AppError;
+    const arg = (nextFunction as Mock).mock.calls[0][0] as AppError;
     expect(arg).toBeInstanceOf(AppError);
     expect(arg.statusCode).toBe(401);
     expect(arg.message).toMatch(/Invalid token/);
@@ -65,7 +66,7 @@ describe('authMiddleware', () => {
     mockRequest.headers = { authorization: 'Bearer valid-token' };
     const mockPayload = { userId: '1', name: 'Test User' };
     
-    vi.spyOn(jwtHelper, 'verifyToken').mockReturnValue(mockPayload);
+    spyOn(jwtHelper, 'verifyToken').mockReturnValue(mockPayload);
 
     await authMiddleware(mockRequest as Request, mockResponse as Response, nextFunction);
 
@@ -81,7 +82,7 @@ describe('authMiddleware', () => {
     };
     const mockPayload = { userId: '1', name: 'Test User' };
 
-    vi.spyOn(jwtHelper, 'verifyToken').mockReturnValue(mockPayload);
+    spyOn(jwtHelper, 'verifyToken').mockReturnValue(mockPayload);
 
     await authMiddleware(mockRequest as Request, mockResponse as Response, nextFunction);
 
@@ -93,10 +94,10 @@ describe('authMiddleware', () => {
 
   it('calls next with 401 when user is not found in the database', async () => {
     mockRequest.headers = { authorization: 'Bearer valid-token' };
-    vi.spyOn(jwtHelper, 'verifyToken').mockReturnValue({ userId: '1', name: 'Test User' });
-    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [] } as any);
+    spyOn(jwtHelper, 'verifyToken').mockReturnValue({ userId: '1', name: 'Test User' });
+    (pool.query as Mock).mockResolvedValueOnce({ rows: [] } as any);
     await authMiddleware(mockRequest as Request, mockResponse as Response, nextFunction);
-    const arg = vi.mocked(nextFunction).mock.calls[0][0] as AppError;
+    const arg = (nextFunction as Mock).mock.calls[0][0] as AppError;
     expect(arg).toBeInstanceOf(AppError);
     expect(arg.statusCode).toBe(401);
     expect(arg.message).toMatch(/not found or deleted/);
@@ -105,7 +106,7 @@ describe('authMiddleware', () => {
   it('calls next with the original AppError when verifyToken throws an AppError', async () => {
     mockRequest.headers = { authorization: 'Bearer valid-token' };
     const customErr = new AppError(403, 'Custom forbidden');
-    vi.spyOn(jwtHelper, 'verifyToken').mockImplementation(() => { throw customErr; });
+    spyOn(jwtHelper, 'verifyToken').mockImplementation(() => { throw customErr; });
     await authMiddleware(mockRequest as Request, mockResponse as Response, nextFunction);
     expect(nextFunction).toHaveBeenCalledWith(customErr);
   });

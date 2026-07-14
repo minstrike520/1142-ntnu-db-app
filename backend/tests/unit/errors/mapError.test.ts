@@ -1,9 +1,16 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, spyOn, beforeEach, afterEach } from 'bun:test';
 import multer from 'multer';
 import { mapErrorToApiShape } from '../../../src/errors/mapError';
 import { AppError, ValidationError, ForbiddenError, NotFoundError, ConflictError } from '../../../src/errors/AppError';
 
 describe('mapErrorToApiShape', () => {
+  let envBackup: NodeJS.ProcessEnv;
+  beforeEach(() => {
+    envBackup = { ...process.env };
+  });
+  afterEach(() => {
+    process.env = envBackup;
+  });
   it('maps ValidationError (400)', () => {
     const err = new ValidationError('bad request');
     expect(mapErrorToApiShape(err)).toEqual({
@@ -59,14 +66,13 @@ describe('mapErrorToApiShape', () => {
   });
 
   it('logs unknown errors outside the test environment', () => {
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.stubEnv('NODE_ENV', 'development');
+    const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+    process.env.NODE_ENV = 'development';
     try {
       const err = new Error('unexpected');
       expect(mapErrorToApiShape(err).statusCode).toBe(500);
       expect(consoleSpy).toHaveBeenCalledWith('APP ERROR:', err);
     } finally {
-      vi.unstubAllEnvs();
       consoleSpy.mockRestore();
     }
   });

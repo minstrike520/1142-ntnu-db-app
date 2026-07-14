@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach, type Mocked } from 'vitest';
+import { describe, it, expect, beforeEach, mock, spyOn, type Mock } from 'bun:test';
+
+
 import { makeMessageService } from '../../../src/services/messageService';
 import { ForbiddenError, NotFoundError, ValidationError } from '../../../src/errors/AppError';
 import type { IMessageRepository } from '../../../src/repositories/IMessageRepository';
@@ -7,9 +9,9 @@ import type { IRoomRepository } from '../../../src/repositories/IRoomRepository'
 import type { Message, MessageWithSender, Room, RoomMember } from '../../../../shared/types';
 
 describe('messageService', () => {
-  let messageRepo: Mocked<IMessageRepository>;
-  let roomRepo: Mocked<IRoomRepository>;
-  let roomMemberRepo: Mocked<IRoomMemberRepository>;
+  let messageRepo: any;
+  let roomRepo: any;
+  let roomMemberRepo: any;
   let messageService: ReturnType<typeof makeMessageService>;
 
   const room: Room = {
@@ -50,26 +52,26 @@ describe('messageService', () => {
 
   beforeEach(() => {
     messageRepo = {
-      findById: vi.fn(),
-      findByRoom: vi.fn(),
-      create: vi.fn(),
-      markRecalled: vi.fn(),
+      findById: mock(),
+      findByRoom: mock(),
+      create: mock(),
+      markRecalled: mock(),
     };
     roomRepo = {
-      findById: vi.fn(),
-      findByInviteCode: vi.fn(),
-      findByMember: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      delete: vi.fn(),
+      findById: mock(),
+      findByInviteCode: mock(),
+      findByMember: mock(),
+      create: mock(),
+      update: mock(),
+      delete: mock(),
     };
     roomMemberRepo = {
-      findMember: vi.fn(),
-      findByRoom: vi.fn(),
-      add: vi.fn(),
-      update: vi.fn(),
-      remove: vi.fn(),
-      resolveMentions: vi.fn(),
+      findMember: mock(),
+      findByRoom: mock(),
+      add: mock(),
+      update: mock(),
+      remove: mock(),
+      resolveMentions: mock(),
     };
     messageService = makeMessageService(messageRepo, roomRepo, roomMemberRepo);
   });

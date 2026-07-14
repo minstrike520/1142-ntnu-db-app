@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, mock, spyOn } from 'bun:test';
 import { trackUserConnection, trackUserDisconnection, isUserOnline, getOnlineUsers, clearPresence } from '../../../src/realtime/presence';
 import type { ChatServer } from '../../../src/realtime/authSocket';
 
@@ -9,13 +9,13 @@ describe('presence tracker', () => {
 
   beforeEach(() => {
     clearPresence();
-    roomEmit = vi.fn();
+    roomEmit = mock();
     io = {
-      to: vi.fn(() => ({ emit: roomEmit })),
+      to: mock(() => ({ emit: roomEmit })),
     } as unknown as ChatServer;
 
     friendRepo = {
-      getFriends: vi.fn().mockResolvedValue([
+      getFriends: mock().mockResolvedValue([
         { friend: { userId: 'friend-1' } },
         { friend: { userId: 'friend-2' } }
       ])
@@ -48,8 +48,8 @@ describe('presence tracker', () => {
   });
 
   it('suppresses and logs errors from getFriends during trackUserConnection', async () => {
-    const errorRepo = { getFriends: vi.fn().mockRejectedValue(new Error('DB down')) };
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errorRepo = { getFriends: mock().mockRejectedValue(new Error('DB down')) };
+    const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
 
     await expect(trackUserConnection(io, 'user-x', 'socket-1', errorRepo)).resolves.toBeUndefined();
 
@@ -61,8 +61,8 @@ describe('presence tracker', () => {
   it('suppresses and logs errors from getFriends during trackUserDisconnection', async () => {
     await trackUserConnection(io, 'user-y', 'socket-1', friendRepo);
 
-    const errorRepo = { getFriends: vi.fn().mockRejectedValue(new Error('DB down')) };
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errorRepo = { getFriends: mock().mockRejectedValue(new Error('DB down')) };
+    const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
 
     await expect(trackUserDisconnection(io, 'user-y', 'socket-1', errorRepo)).resolves.toBeUndefined();
 

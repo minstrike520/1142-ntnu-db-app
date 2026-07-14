@@ -1,14 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { makeAttachmentService } from '../../../src/services/attachmentService';
 
 describe('AttachmentService', () => {
-  let attachmentRepo: { create: ReturnType<typeof vi.fn>; findById: ReturnType<typeof vi.fn> };
+  let attachmentRepo: { create: ReturnType<typeof mock>; findById: ReturnType<typeof mock> };
   let service: ReturnType<typeof makeAttachmentService>;
 
   beforeEach(() => {
     attachmentRepo = {
-      create: vi.fn(),
-      findById: vi.fn(),
+      create: mock(),
+      findById: mock(),
     };
     service = makeAttachmentService(attachmentRepo as any);
   });

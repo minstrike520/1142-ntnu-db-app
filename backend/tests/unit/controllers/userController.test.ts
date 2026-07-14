@@ -1,10 +1,10 @@
 import type { NextFunction, Request, Response } from 'express';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { makeUserController } from '../../../src/controllers/userController';
 import { ValidationError } from '../../../src/errors/AppError';
 
 const mockRes = () => {
-  const res = { status: vi.fn(), json: vi.fn(), send: vi.fn() } as any;
+  const res = { status: mock(), json: mock(), send: mock() } as any;
   res.status.mockReturnValue(res);
   return res;
 };
@@ -40,27 +40,27 @@ describe('userController', () => {
     notifySound: false,
   };
   const service = {
-    getMe: vi.fn(),
-    getUserProfile: vi.fn(),
-    updateMe: vi.fn(),
-    uploadAvatar: vi.fn(),
-    getMySettings: vi.fn(),
-    updateMySettings: vi.fn(),
-    deleteMe: vi.fn(),
-    search: vi.fn(),
-    getEmergencyContacts: vi.fn(),
-    upsertEmergencyContact: vi.fn(),
-    deleteEmergencyContact: vi.fn(),
-    checkInactivity: vi.fn(),
+    getMe: mock(),
+    getUserProfile: mock(),
+    updateMe: mock(),
+    uploadAvatar: mock(),
+    getMySettings: mock(),
+    updateMySettings: mock(),
+    deleteMe: mock(),
+    search: mock(),
+    getEmergencyContacts: mock(),
+    upsertEmergencyContact: mock(),
+    deleteEmergencyContact: mock(),
+    checkInactivity: mock(),
   } as any;
   const ctrl = makeUserController(service);
 
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => mock.clearAllMocks());
 
   it('returns my profile for getMe', async () => {
     service.getMe.mockResolvedValue(myProfile);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.getMe(authedReq(), res, next);
 
@@ -72,7 +72,7 @@ describe('userController', () => {
   it('returns another user profile for getUserProfile', async () => {
     service.getUserProfile.mockResolvedValue(publicProfile);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.getUserProfile(authedReq({ params: { id: 'user-2' } }), res, next);
 
@@ -84,7 +84,7 @@ describe('userController', () => {
     const updated = { ...myProfile, name: 'Alice 2' };
     service.updateMe.mockResolvedValue(updated);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.updateMe(authedReq({ body: { name: 'Alice 2' } }), res, next);
 
@@ -95,7 +95,7 @@ describe('userController', () => {
 
   it('rejects empty profile payloads', async () => {
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.updateMe(authedReq({ body: {} }), res, next);
 
@@ -106,7 +106,7 @@ describe('userController', () => {
     const updated = { ...myProfile, avatarUrl: '/uploads/avatars/user-1.png' };
     service.uploadAvatar.mockResolvedValue(updated);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
     const file = {
       fieldname: 'file',
       originalname: 'avatar.png',
@@ -125,7 +125,7 @@ describe('userController', () => {
 
   it('rejects avatar uploads without a file', async () => {
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.uploadAvatar(authedReq(), res, next);
 
@@ -135,7 +135,7 @@ describe('userController', () => {
   it('returns my settings', async () => {
     service.getMySettings.mockResolvedValue(settings);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.getMySettings(authedReq(), res, next);
 
@@ -146,7 +146,7 @@ describe('userController', () => {
   it('updates my settings', async () => {
     service.updateMySettings.mockResolvedValue(settings);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.updateMySettings(
       authedReq({
@@ -169,7 +169,7 @@ describe('userController', () => {
 
   it('rejects invalid settings payloads', async () => {
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.updateMySettings(authedReq({ body: { warningDays: -1 } }), res, next);
 
@@ -179,7 +179,7 @@ describe('userController', () => {
   it('searches users', async () => {
     service.search.mockResolvedValue([{ userId: 'user-2', name: 'Bob', email: 'bob@example.com', avatarUrl: undefined }]);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.search(authedReq({ query: { q: 'bob' } }), res, next);
 
@@ -190,7 +190,7 @@ describe('userController', () => {
   it('searches users with mode', async () => {
     service.search.mockResolvedValue([{ userId: 'user-2', name: 'Bob', email: 'bob@example.com', avatarUrl: undefined }]);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.search(authedReq({ query: { q: 'bob', mode: 'email' } }), res, next);
 
@@ -200,7 +200,7 @@ describe('userController', () => {
 
   it('rejects invalid mode value', async () => {
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.search(authedReq({ query: { q: 'bob', mode: 'invalid' } }), res, next);
 
@@ -210,7 +210,7 @@ describe('userController', () => {
 
   it('soft deletes the current user', async () => {
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.deleteMe(authedReq(), res, next);
 
@@ -221,7 +221,7 @@ describe('userController', () => {
   it('returns emergency contacts', async () => {
     service.getEmergencyContacts.mockResolvedValue([{ id: 'c1' }]);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.getEmergencyContacts(authedReq(), res, next);
 
@@ -232,7 +232,7 @@ describe('userController', () => {
     const contact = { contactId: '550e8400-e29b-41d4-a716-446655440000', message: 'msg' };
     service.upsertEmergencyContact.mockResolvedValue({ contact, isUpdate: false });
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.addEmergencyContact(
       authedReq({ body: { contactId: contact.contactId, message: 'msg' } }),
@@ -246,7 +246,7 @@ describe('userController', () => {
 
   it('deletes emergency contacts', async () => {
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.deleteEmergencyContact(authedReq({ params: { contactId: 'c1' } }), res, next);
 
@@ -259,7 +259,7 @@ describe('userController', () => {
   it('checks inactivity alerts', async () => {
     service.checkInactivity.mockResolvedValue({ alerted: true });
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
 
     await ctrl.checkEmergencyInactivity(
       authedReq({ body: { now: new Date().toISOString() } }),
@@ -275,7 +275,7 @@ describe('userController', () => {
     const err = new Error('db error');
     service.getMe.mockRejectedValue(err);
     const res = mockRes();
-    const next: NextFunction = vi.fn();
+    const next: NextFunction = mock();
 
     await ctrl.getMe(authedReq(), res as Response, next);
 
@@ -308,7 +308,7 @@ describe('userController', () => {
         : 'updateMe';
       (service as any)[key].mockRejectedValue(err);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
       await getMethod(ctrl)(req, res, next);
       expect(next).toHaveBeenCalledWith(err);
     });
@@ -318,7 +318,7 @@ describe('userController', () => {
     const err = new Error('upsert failed');
     service.upsertEmergencyContact.mockRejectedValue(err);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
     await ctrl.addEmergencyContact(authedReq({ body: { contactId: '550e8400-e29b-41d4-a716-446655440000', message: 'help' } }), res, next);
     expect(next).toHaveBeenCalledWith(err);
   });
@@ -327,7 +327,7 @@ describe('userController', () => {
     const err = new Error('delete failed');
     service.deleteEmergencyContact.mockRejectedValue(err);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
     await ctrl.deleteEmergencyContact(authedReq({ params: { contactId: 'c1' } }), res, next);
     expect(next).toHaveBeenCalledWith(err);
   });
@@ -336,7 +336,7 @@ describe('userController', () => {
 
   it('passes ValidationError to next when checkEmergencyInactivity receives invalid date string', async () => {
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
     await ctrl.checkEmergencyInactivity(authedReq({ body: { now: 'not-a-date' } }), res, next);
     expect(next).toHaveBeenCalledWith(expect.any(ValidationError));
   });
@@ -344,7 +344,7 @@ describe('userController', () => {
   it('calls search without currentUserId when friendsOnly is not set', async () => {
     service.search.mockResolvedValue([]);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
     await ctrl.search(authedReq({ query: { q: 'alice' } }), res, next);
     expect(service.search).toHaveBeenCalledWith('alice', undefined);
   });
@@ -352,7 +352,7 @@ describe('userController', () => {
   it('calls search with currentUserId when friendsOnly is set', async () => {
     service.search.mockResolvedValue([]);
     const res = mockRes();
-    const next = vi.fn();
+    const next = mock();
     await ctrl.search(authedReq({ query: { q: 'alice', friendsOnly: 'true' } }), res, next);
     expect(service.search).toHaveBeenCalledWith('alice', undefined, 'user-1');
   });

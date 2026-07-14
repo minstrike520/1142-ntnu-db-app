@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { makeRoomController } from '../../../src/controllers/roomController';
 import { ValidationError } from '../../../src/errors/AppError';
 import type { Request, Response, NextFunction } from 'express';
 
 const mockRes = () => {
-  const res = { status: vi.fn(), json: vi.fn(), send: vi.fn() } as any;
+  const res = { status: mock(), json: mock(), send: mock() } as any;
   res.status.mockReturnValue(res);
   return res;
 };
@@ -29,30 +29,30 @@ describe('roomController', () => {
   };
 
   const service = {
-    list: vi.fn(),
-    create: vi.fn(),
-    createPrivate: vi.fn(),
-    getById: vi.fn(),
-    listMembers: vi.fn(),
-    update: vi.fn(),
-    deleteGroup: vi.fn(),
-    joinByCode: vi.fn(),
-    leave: vi.fn(),
-    approveMember: vi.fn(),
-    updateMember: vi.fn(),
-    kickMember: vi.fn(),
-    transferOwnership: vi.fn(),
-    uploadAvatar: vi.fn(),
+    list: mock(),
+    create: mock(),
+    createPrivate: mock(),
+    getById: mock(),
+    listMembers: mock(),
+    update: mock(),
+    deleteGroup: mock(),
+    joinByCode: mock(),
+    leave: mock(),
+    approveMember: mock(),
+    updateMember: mock(),
+    kickMember: mock(),
+    transferOwnership: mock(),
+    uploadAvatar: mock(),
   };
   const ctrl = makeRoomController(service);
 
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => mock.clearAllMocks());
 
   describe('list', () => {
     it('returns 200 with rooms', async () => {
       service.list.mockResolvedValue([room]);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.list(authedReq(), res, next);
 
@@ -64,7 +64,7 @@ describe('roomController', () => {
     it('calls next with error when service throws', async () => {
       service.list.mockRejectedValue(new Error('db error'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.list(authedReq(), res, next);
 
@@ -76,7 +76,7 @@ describe('roomController', () => {
     it('returns 201 with room on valid name', async () => {
       service.create.mockResolvedValue(room);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.create(authedReq({ body: { type: 'group', name: 'Study Room' } }), res, next);
 
@@ -93,7 +93,7 @@ describe('roomController', () => {
 
     it('calls next with ValidationError when name is empty', async () => {
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.create(authedReq({ body: { type: 'group', name: '   ' } }), res, next);
 
@@ -103,7 +103,7 @@ describe('roomController', () => {
 
     it('calls next with ValidationError when name is missing', async () => {
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.create(authedReq({ body: { type: 'group' } }), res, next);
 
@@ -113,7 +113,7 @@ describe('roomController', () => {
     it('calls next with error when service throws', async () => {
       service.create.mockRejectedValue(new Error('db error'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.create(authedReq({ body: { type: 'group', name: 'Study Room' } }), res, next);
 
@@ -125,7 +125,7 @@ describe('roomController', () => {
     it('returns 200 with room', async () => {
       service.getById.mockResolvedValue(room);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.getById(authedReq({ params: { id: 'room-1' } }), res, next);
 
@@ -137,7 +137,7 @@ describe('roomController', () => {
     it('calls next with error when service throws', async () => {
       service.getById.mockRejectedValue(new Error('not found'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.getById(authedReq({ params: { id: 'room-1' } }), res, next);
 
@@ -150,7 +150,7 @@ describe('roomController', () => {
       const privateRoom = { ...room, type: 'private' as const, name: undefined };
       service.createPrivate.mockResolvedValue({ room: privateRoom, created: true });
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.create(authedReq({ body: { type: 'private', targetUserId: 'user-2' } }), res, next);
 
@@ -163,7 +163,7 @@ describe('roomController', () => {
       const privateRoom = { ...room, type: 'private' as const, name: undefined };
       service.createPrivate.mockResolvedValue({ room: privateRoom, created: false });
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.create(authedReq({ body: { type: 'private', targetUserId: 'user-2' } }), res, next);
 
@@ -177,7 +177,7 @@ describe('roomController', () => {
       const updated = { ...room, name: 'New Name' };
       service.update.mockResolvedValue(updated);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.update(authedReq({ params: { id: 'room-1' }, body: { name: 'New Name' } }), res, next);
 
@@ -189,7 +189,7 @@ describe('roomController', () => {
     it('calls next with error when service throws', async () => {
       service.update.mockRejectedValue(new Error('forbidden'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.update(authedReq({ params: { id: 'room-1' }, body: { name: 'X' } }), res, next);
 
@@ -201,7 +201,7 @@ describe('roomController', () => {
     it('returns 200 with room', async () => {
       service.joinByCode.mockResolvedValue(room);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.join(authedReq({ body: { inviteCode: 'ABC123' } }), res, next);
 
@@ -213,7 +213,7 @@ describe('roomController', () => {
     it('calls next with error when service throws', async () => {
       service.joinByCode.mockRejectedValue(new Error('invalid code'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.join(authedReq({ body: { inviteCode: 'BAD' } }), res, next);
 
@@ -225,7 +225,7 @@ describe('roomController', () => {
     it('returns 204', async () => {
       service.leave.mockResolvedValue(undefined);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.leave(authedReq({ params: { id: 'room-1' } }), res, next);
 
@@ -237,7 +237,7 @@ describe('roomController', () => {
     it('calls next with error when service throws', async () => {
       service.leave.mockRejectedValue(new Error('forbidden'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.leave(authedReq({ params: { id: 'room-1' } }), res, next);
 
@@ -249,7 +249,7 @@ describe('roomController', () => {
     it('returns 204', async () => {
       service.deleteGroup.mockResolvedValue(undefined);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.deleteGroup(authedReq({ params: { id: 'room-1' } }), res, next);
 
@@ -261,7 +261,7 @@ describe('roomController', () => {
     it('calls next with error when service throws', async () => {
       service.deleteGroup.mockRejectedValue(new Error('forbidden'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.deleteGroup(authedReq({ params: { id: 'room-1' } }), res, next);
 
@@ -272,7 +272,7 @@ describe('roomController', () => {
   describe('create (private type branches)', () => {
     it('returns ValidationError when private type missing targetUserId', async () => {
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.create(authedReq({ body: { type: 'private' } }), res, next);
 
@@ -281,7 +281,7 @@ describe('roomController', () => {
 
     it('returns ValidationError for unknown room type', async () => {
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.create(authedReq({ body: { type: 'unknown' } }), res, next);
 
@@ -291,7 +291,7 @@ describe('roomController', () => {
     it('creates private room and returns 201 when new', async () => {
       service.createPrivate.mockResolvedValue({ room, created: true });
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.create(authedReq({ body: { type: 'private', targetUserId: 'user-2' } }), res, next);
 
@@ -302,7 +302,7 @@ describe('roomController', () => {
     it('creates private room and returns 200 when existing', async () => {
       service.createPrivate.mockResolvedValue({ room, created: false });
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.create(authedReq({ body: { type: 'private', targetUserId: 'user-2' } }), res, next);
 
@@ -315,7 +315,7 @@ describe('roomController', () => {
       const members = [{ userId: 'user-1', role: 'owner' }];
       service.listMembers.mockResolvedValue(members);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.listMembers(authedReq({ params: { id: 'room-1' } }), res, next);
 
@@ -327,7 +327,7 @@ describe('roomController', () => {
     it('passes errors to next', async () => {
       service.listMembers.mockRejectedValue(new Error('forbidden'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.listMembers(authedReq({ params: { id: 'room-1' } }), res, next);
 
@@ -339,7 +339,7 @@ describe('roomController', () => {
     it('delegates to transferOwnership when ownerId is present in body', async () => {
       service.transferOwnership.mockResolvedValue(undefined);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.update(authedReq({ params: { id: 'room-1' }, body: { ownerId: 'user-2' } }), res, next);
 
@@ -353,7 +353,7 @@ describe('roomController', () => {
     it('returns 200 on success', async () => {
       service.transferOwnership.mockResolvedValue(undefined);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.transferOwnership(authedReq({ params: { id: 'room-1' }, body: { targetUserId: 'user-2' } }), res, next);
 
@@ -363,7 +363,7 @@ describe('roomController', () => {
 
     it('passes ValidationError to next when targetUserId is missing', async () => {
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.transferOwnership(authedReq({ params: { id: 'room-1' }, body: {} }), res, next);
 
@@ -373,7 +373,7 @@ describe('roomController', () => {
     it('passes service errors to next', async () => {
       service.transferOwnership.mockRejectedValue(new Error('forbidden'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.transferOwnership(authedReq({ params: { id: 'room-1' }, body: { targetUserId: 'user-2' } }), res, next);
 
@@ -385,7 +385,7 @@ describe('roomController', () => {
     it('returns 200 on success', async () => {
       service.approveMember.mockResolvedValue(undefined);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.approveMember(authedReq({ params: { id: 'room-1', userId: 'user-2' } }), res, next);
 
@@ -397,7 +397,7 @@ describe('roomController', () => {
     it('passes service errors to next', async () => {
       service.approveMember.mockRejectedValue(new Error('forbidden'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.approveMember(authedReq({ params: { id: 'room-1', userId: 'user-2' } }), res, next);
 
@@ -409,7 +409,7 @@ describe('roomController', () => {
     it('delegates to approveMember and returns 200 when status is approved', async () => {
       service.approveMember.mockResolvedValue(undefined);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.updateMember(
         authedReq({ params: { id: 'room-1', userId: 'user-2' }, body: { status: 'approved' } }),
@@ -425,7 +425,7 @@ describe('roomController', () => {
     it('delegates to updateMember and returns 200 when status is not approved', async () => {
       service.updateMember.mockResolvedValue(undefined);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.updateMember(
         authedReq({ params: { id: 'room-1', userId: 'user-2' }, body: { nickname: 'Bob' } }),
@@ -441,7 +441,7 @@ describe('roomController', () => {
     it('passes service errors to next', async () => {
       service.updateMember.mockRejectedValue(new Error('forbidden'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.updateMember(
         authedReq({ params: { id: 'room-1', userId: 'user-2' }, body: {} }),
@@ -457,7 +457,7 @@ describe('roomController', () => {
     it('returns 204 on success', async () => {
       service.kickMember.mockResolvedValue(undefined);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.kickMember(authedReq({ params: { id: 'room-1', userId: 'user-2' } }), res, next);
 
@@ -469,7 +469,7 @@ describe('roomController', () => {
     it('passes service errors to next', async () => {
       service.kickMember.mockRejectedValue(new Error('forbidden'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.kickMember(authedReq({ params: { id: 'room-1', userId: 'user-2' } }), res, next);
 
@@ -482,7 +482,7 @@ describe('roomController', () => {
       const updatedRoom = { ...room, avatarUrl: '/uploads/avatars/room-1.png' };
       service.uploadAvatar.mockResolvedValue(updatedRoom);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
       const file = { originalname: 'room.png', buffer: Buffer.from([]) } as Express.Multer.File;
 
       await ctrl.uploadAvatar(authedReq({ params: { id: 'room-1' }, file }), res, next);
@@ -494,7 +494,7 @@ describe('roomController', () => {
 
     it('passes ValidationError to next when no file is provided', async () => {
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.uploadAvatar(authedReq({ params: { id: 'room-1' } }), res, next);
 
@@ -505,7 +505,7 @@ describe('roomController', () => {
     it('passes service errors to next', async () => {
       service.uploadAvatar.mockRejectedValue(new Error('storage error'));
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
       const file = { originalname: 'room.png', buffer: Buffer.from([]) } as Express.Multer.File;
 
       await ctrl.uploadAvatar(authedReq({ params: { id: 'room-1' }, file }), res, next);

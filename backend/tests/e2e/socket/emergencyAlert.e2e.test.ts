@@ -1,7 +1,7 @@
 import { AddressInfo } from 'net';
 import request from 'supertest';
 import { io as createClient, type Socket as ClientSocket } from 'socket.io-client';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { app, server } from '../../../src/index';
 import { resetDb } from '../../helpers/resetDb';
 import type { ClientToServerEvents, ServerToClientEvents, Room, Message } from '../../../../shared/types';

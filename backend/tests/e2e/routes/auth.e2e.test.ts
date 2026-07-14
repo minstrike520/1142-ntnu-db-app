@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll } from 'bun:test';
 import request from 'supertest';
 let app: any;
 import { resetDb } from '../../helpers/resetDb';

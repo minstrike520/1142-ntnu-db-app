@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { makeMessageController } from '../../../src/controllers/messageController';
 import { ValidationError } from '../../../src/errors/AppError';
 import type { Request, Response, NextFunction } from 'express';
 
 const mockRes = () => {
-  const res = { status: vi.fn(), json: vi.fn(), send: vi.fn() } as any;
+  const res = { status: mock(), json: mock(), send: mock() } as any;
   res.status.mockReturnValue(res);
   return res;
 };
@@ -19,16 +19,16 @@ const authedReq = (overrides: Partial<Request> = {}): any => ({
 
 describe('messageController', () => {
   const messages = [{ messageId: 'msg-1', content: 'Hello', sender: { userId: 'user-1', name: 'Alice' } }];
-  const service = { listForRoom: vi.fn() };
+  const service = { listForRoom: mock() };
   const ctrl = makeMessageController(service);
 
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => mock.clearAllMocks());
 
   describe('listForRoom', () => {
     it('returns 200 with messages using default limit', async () => {
       service.listForRoom.mockResolvedValue(messages);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.listForRoom(authedReq(), res, next);
 
@@ -41,7 +41,7 @@ describe('messageController', () => {
     it('passes before_id and limit to service', async () => {
       service.listForRoom.mockResolvedValue(messages);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.listForRoom(authedReq({ query: { before_id: 'msg-5', limit: '20' } }), res, next);
 
@@ -51,7 +51,7 @@ describe('messageController', () => {
 
     it('calls next with ValidationError when limit is not a number', async () => {
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.listForRoom(authedReq({ query: { limit: 'abc' } }), res, next);
 
@@ -61,7 +61,7 @@ describe('messageController', () => {
 
     it('calls next with ValidationError when limit is out of range', async () => {
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.listForRoom(authedReq({ query: { limit: '200' } }), res, next);
 
@@ -72,7 +72,7 @@ describe('messageController', () => {
       const err = new Error('forbidden');
       service.listForRoom.mockRejectedValue(err);
       const res = mockRes();
-      const next = vi.fn();
+      const next = mock();
 
       await ctrl.listForRoom(authedReq(), res, next);
 

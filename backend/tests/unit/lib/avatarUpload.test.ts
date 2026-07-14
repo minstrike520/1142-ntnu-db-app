@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'bun:test';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
@@ -77,7 +77,7 @@ describe('removeManagedAvatar', () => {
     await removeManagedAvatar(victimUrl, attackerId);
 
     // Victim's file must still exist.
-    await expect(fs.access(fullPath)).resolves.toBeUndefined();
+    await expect(fs.access(fullPath)).resolves.toBeNull();
   });
 
   it('ignores non-managed urls', async () => {
