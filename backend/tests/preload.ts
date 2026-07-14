@@ -8,3 +8,9 @@
 if (process.env.DATABASE_URL_TEST) {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
 }
+
+// src/index.ts reads CORS_ORIGINS once at module-eval time. Bun shares one
+// module registry across all test files, so the app is evaluated only once —
+// its CORS allow-list must therefore be set before the first e2e file imports
+// src/index. Setting it here makes it deterministic regardless of file order.
+process.env.CORS_ORIGINS = process.env.CORS_ORIGINS ?? 'http://allowed.example,http://localhost:3005';

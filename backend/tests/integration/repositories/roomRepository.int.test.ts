@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
+import { describe, it, expect, beforeEach } from 'bun:test';
 import { RoomRepository } from '../../../src/repositories/roomRepository';
 import { testPool } from '../../helpers/testPool';
 import { resetDb } from '../../helpers/resetDb';
@@ -8,10 +8,6 @@ describe('RoomRepository (pg)', () => {
 
   beforeEach(async () => {
     await resetDb();
-  });
-
-  afterAll(async () => {
-    await testPool.end();
   });
 
   it('create → findById → findByMember → update → delete', async () => {

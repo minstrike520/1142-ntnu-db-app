@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
+import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
 import request from 'supertest';
 let app: any;
 import { resetDb } from '../../helpers/resetDb';
@@ -40,10 +40,6 @@ describe('Attachment E2E', () => {
       [roomId, userId]
     );
     messageId = msgRes.rows[0].message_id;
-  });
-
-  afterAll(async () => {
-    await testPool.end();
   });
 
   it('should upload an attachment successfully', async () => {
