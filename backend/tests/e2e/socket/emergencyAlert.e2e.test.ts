@@ -77,7 +77,7 @@ describe('Emergency alert Socket.IO E2E', () => {
       .set('Authorization', `Bearer ${userRes.body.token}`)
       .send({ type: 'private', targetUserId: contactRes.body.user.userId });
     
-    expect(roomRes.status).to.be.oneOf([200, 201]);
+    expect([200, 201]).toContain(roomRes.status);
     const privateRoomId = roomRes.body.roomId;
 
     // Set up emergency contact and enable warning settings
