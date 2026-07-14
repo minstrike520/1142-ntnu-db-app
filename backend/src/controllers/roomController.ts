@@ -10,6 +10,7 @@ interface RoomService {
   getById(roomId: string, callerId: string): Promise<Room>;
   listMembers(roomId: string, callerId: string): Promise<RoomMember[]>;
   update(roomId: string, callerId: string, data: UpdateRoomInput): Promise<Room>;
+  setHidden(userId: string, roomId: string, hidden: unknown): Promise<void>;
   transferOwnership(roomId: string, callerId: string, targetUserId: string): Promise<void>;
   deleteGroup(roomId: string, callerId: string): Promise<void>;
   joinByCode(userId: string, inviteCode: string): Promise<Room>;
@@ -83,6 +84,15 @@ export const makeRoomController = (service: RoomService) => ({
       }
       const room = await service.update(req.params.id, req.user!.userId, req.body);
       res.status(200).json(room);
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  async setHidden(req: Request<{ id: string }>, res: Response, next: NextFunction): Promise<void> {
+    try {
+      await service.setHidden(req.user!.userId, req.params.id, req.body.hidden);
+      res.status(204).send();
     } catch (err) {
       next(err);
     }

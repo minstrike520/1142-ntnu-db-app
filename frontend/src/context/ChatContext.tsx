@@ -39,6 +39,7 @@ import {
   getUserProfile,
   kickRoomMember,
   leaveRoom as leaveRoomApi,
+  setRoomHidden as setRoomHiddenApi,
   listEmergencyContacts,
   listFolders,
   listFriendRequests,
@@ -109,6 +110,7 @@ export interface ChatRoom {
   members?: Member[];
   isArchived?: boolean;
   isReadonly?: boolean;
+  isHidden?: boolean;
   unreadCount?: number;
   lastMessagePreview?: string;
   lastMessageAt?: string;
@@ -291,6 +293,7 @@ interface ChatContextType {
   handleCategorizeRoom: (roomId: string, folderId: string | null) => Promise<void>;
   handleModifyNickname: (roomId: string, nickname: string) => Promise<void>;
   handleLeaveOrBlock: (roomId: string) => Promise<{ isDeleted: boolean; newActiveId?: string }>;
+  setRoomHidden: (roomId: string, hidden: boolean) => Promise<void>;
   handleDeleteAccount: () => Promise<void>;
   loadGroupMembers: (roomId: string) => Promise<Member[]>;
   saveGroupSettings: (roomId: string, settings: GroupSettingsInput) => Promise<void>;
@@ -504,6 +507,7 @@ const mapRooms = (
       viewHistory: room.viewHistory,
       isArchived: room.isArchived,
       isReadonly: room.isReadonly,
+      isHidden: room.isHidden ?? currentRoom?.isHidden ?? false,
       isOnline: room.isOnline ?? currentRoom?.isOnline,
       otherMemberId: room.otherMemberId ?? currentRoom?.otherMemberId,
       members: currentRoom?.members ?? (room.type === "group" ? [] : undefined),
@@ -1577,6 +1581,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     return { isDeleted: false };
   };
 
+  const setRoomHidden = async (roomId: string, hidden: boolean) => {
+    if (!token) return;
+    await setRoomHiddenApi(token, roomId, hidden);
+    setRooms((current) =>
+      current.map((room) => (room.id === roomId ? { ...room, isHidden: hidden } : room)),
+    );
+  };
+
   const handleDeleteAccount = async () => {
     if (!token) throw new Error("Not authenticated");
     await deleteMeApi(token);
@@ -2028,6 +2040,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         handleCategorizeRoom,
         handleModifyNickname,
         handleLeaveOrBlock,
+        setRoomHidden,
         handleDeleteAccount,
         loadGroupMembers,
         saveGroupSettings,

@@ -39,7 +39,10 @@
     "createGroupDesc": "Create a new group chat room",
     "joinGroupDesc": "Join an existing group with invite code",
     "createFolderDesc": "Create a folder to categorize chat rooms",
-    "back": "Back"
+    "back": "Back",
+    "hiddenChats": "Hidden chats",
+    "hideChat": "Hide chat",
+    "unhideChat": "Unhide"
   },
   "emergencyPage": {
     "title": "Emergency settings"

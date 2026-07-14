@@ -35,6 +35,7 @@ describe('roomController', () => {
     getById: vi.fn(),
     listMembers: vi.fn(),
     update: vi.fn(),
+    setHidden: vi.fn(),
     deleteGroup: vi.fn(),
     joinByCode: vi.fn(),
     leave: vi.fn(),
@@ -192,6 +193,30 @@ describe('roomController', () => {
       const next = vi.fn();
 
       await ctrl.update(authedReq({ params: { id: 'room-1' }, body: { name: 'X' } }), res, next);
+
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+    });
+  });
+
+  describe('setHidden', () => {
+    it('returns 204 on success', async () => {
+      service.setHidden.mockResolvedValue(undefined);
+      const res = mockRes();
+      const next = vi.fn();
+
+      await ctrl.setHidden(authedReq({ params: { id: 'room-1' }, body: { hidden: true } }), res, next);
+
+      expect(service.setHidden).toHaveBeenCalledWith('user-1', 'room-1', true);
+      expect(res.status).toHaveBeenCalledWith(204);
+      expect(res.send).toHaveBeenCalled();
+    });
+
+    it('calls next with error when service throws', async () => {
+      service.setHidden.mockRejectedValue(new Error('forbidden'));
+      const res = mockRes();
+      const next = vi.fn();
+
+      await ctrl.setHidden(authedReq({ params: { id: 'room-1' }, body: { hidden: true } }), res, next);
 
       expect(next).toHaveBeenCalledWith(expect.any(Error));
     });

@@ -9,6 +9,7 @@ function mapRowToRoomMember(row: any): RoomMember {
     role: row.role,
     nickname: row.nickname ?? undefined,
     isMuted: row.is_muted,
+    isHidden: row.is_hidden,
     lastReadId: row.last_read_id ?? undefined,
     joinTime: row.join_time,
   };
@@ -46,7 +47,7 @@ export class RoomMemberRepository implements IRoomMemberRepository {
   async update(
     roomId: string,
     userId: string,
-    data: Partial<Pick<RoomMember, 'role' | 'nickname' | 'isMuted' | 'lastReadId'>>,
+    data: Partial<Pick<RoomMember, 'role' | 'nickname' | 'isMuted' | 'isHidden' | 'lastReadId'>>,
   ): Promise<RoomMember> {
     const fields: string[] = [];
     const values: any[] = [];
@@ -55,6 +56,7 @@ export class RoomMemberRepository implements IRoomMemberRepository {
     if (data.role !== undefined) { fields.push(`role = $${idx++}`); values.push(data.role); }
     if (data.nickname !== undefined) { fields.push(`nickname = $${idx++}`); values.push(data.nickname); }
     if (data.isMuted !== undefined) { fields.push(`is_muted = $${idx++}`); values.push(data.isMuted); }
+    if (data.isHidden !== undefined) { fields.push(`is_hidden = $${idx++}`); values.push(data.isHidden); }
     if (data.lastReadId !== undefined) { fields.push(`last_read_id = $${idx++}`); values.push(data.lastReadId); }
 
     if (fields.length === 0) {

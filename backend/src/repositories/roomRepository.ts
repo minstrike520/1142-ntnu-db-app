@@ -24,6 +24,7 @@ function mapRowToRoomSummary(row: any): RoomSummary {
     otherMemberId: row.other_member_id ?? undefined,
     lastReadId: row.last_read_id ?? undefined,
     role: row.role ?? undefined,
+    isHidden: row.is_hidden ?? false,
   };
 
   if (row.latest_message_id) {
@@ -50,6 +51,7 @@ interface MemberRoomRow {
   is_readonly?: boolean | null;
   created_at: Date;
   join_time: Date;
+  is_hidden: boolean;
   last_read_id?: string | null;
   last_read_sent_at?: Date | null;
   latest_message_id?: string | null;
@@ -109,6 +111,7 @@ export class RoomRepository implements IRoomRepository {
          rm.join_time,
          rm.last_read_id,
          rm.role,
+         rm.is_hidden,
          last_read.sent_at AS last_read_sent_at,
          latest.message_id AS latest_message_id,
          latest.sender_id AS latest_sender_id,
