@@ -311,7 +311,9 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     setIsMultiLine(inputText.includes("\n") || textarea.scrollHeight > 48);
   }, [inputText]);
   const pendingAttachmentsRef = useRef(pendingAttachments);
-  pendingAttachmentsRef.current = pendingAttachments;
+  useEffect(() => {
+    pendingAttachmentsRef.current = pendingAttachments;
+  }, [pendingAttachments]);
   useEffect(() => {
     return () => revokePendingAttachments(pendingAttachmentsRef.current);
   }, []);
