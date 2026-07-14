@@ -32,6 +32,17 @@ interface MentionCandidate {
   detail: string;
 }
 
+interface PendingAttachment {
+  file: File;
+  previewUrl: string | null;
+}
+
+const revokePendingAttachments = (attachments: PendingAttachment[]) => {
+  attachments.forEach((attachment) => {
+    if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+  });
+};
+
 const EVERYONE_MENTION = "everyone";
 
 const formatFileSize = (bytes: number) => {
@@ -86,7 +97,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [isModifyNickOpen, setIsModifyNickOpen] = useState(false);
   const [nickInputValue, setNickInputValue] = useState("");
-  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [msgSearchQuery, setMsgSearchQuery] = useState("");
@@ -150,6 +161,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     setPrevRoomId(roomId);
     setIsSearchOpen(false);
     setMsgSearchQuery("");
+    revokePendingAttachments(pendingAttachments);
     setPendingAttachments([]);
     setIsUploadingAttachment(false);
     setInputText("");
@@ -298,6 +310,12 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     }
     setIsMultiLine(inputText.includes("\n") || textarea.scrollHeight > 48);
   }, [inputText]);
+  const pendingAttachmentsRef = useRef(pendingAttachments);
+  pendingAttachmentsRef.current = pendingAttachments;
+  useEffect(() => {
+    return () => revokePendingAttachments(pendingAttachmentsRef.current);
+  }, []);
+
   const handleToggleSearch = () => {
     if (isSearchOpen) {
       setIsSearchOpen(false);
@@ -336,10 +354,12 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     try {
       if (pendingAttachments.length > 0) {
         setIsUploadingAttachment(true);
-        await handleUploadAttachments(activeRoom.id, pendingAttachments, {
-          content: inputText,
-          replyTarget,
-        });
+        await handleUploadAttachments(
+          activeRoom.id,
+          pendingAttachments.map((p) => p.file),
+          { content: inputText, replyTarget },
+        );
+        revokePendingAttachments(pendingAttachments);
         setPendingAttachments([]);
       } else {
         handleSendMessage(activeRoom.id, inputText, replyTarget);
@@ -364,12 +384,20 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     const files = event.target.files ? Array.from(event.target.files) : [];
     event.target.value = "";
     if (files.length === 0) return;
-    setPendingAttachments((prev) => [...prev, ...files]);
+    const newAttachments: PendingAttachment[] = files.map((file) => ({
+      file,
+      previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+    }));
+    setPendingAttachments((prev) => [...prev, ...newAttachments]);
   };
 
   const handleRemovePendingAttachment = (index: number) => {
     if (isUploadingAttachment) return;
-    setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
+    setPendingAttachments((prev) => {
+      const removed = prev[index];
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter((_, i) => i !== index);
+    });
   };
 
   const handleModifyNick = () => {
@@ -829,8 +857,18 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
                   {t("chatroom.attachmentPreview")} ({pendingAttachments.length})
                 </span>
                 <div className="flex flex-col gap-2.5 max-h-40 overflow-y-auto pr-1">
-                  {pendingAttachments.map((file, idx) => (
+                  {pendingAttachments.map(({ file, previewUrl }, idx) => (
                     <div key={idx} className="flex items-center gap-3 text-xs border-l-2 border-primary pl-2.5 py-0.5">
+                      <div className="h-10 w-10 shrink-0 rounded-sm border border-border-secondary bg-surface-card overflow-hidden flex items-center justify-center">
+                        {previewUrl ? (
+                          /* eslint-disable-next-line @next/next/no-img-element */
+                          <img src={previewUrl} alt={file.name} className="h-full w-full object-cover" />
+                        ) : (
+                          <svg className="h-4 w-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                          </svg>
+                        )}
+                      </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-foreground truncate font-semibold">{file.name}</p>
                         <p className="text-text-muted text-[10px] font-mono truncate mt-0.5">
