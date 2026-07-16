@@ -12,6 +12,10 @@ import { cn } from "@/lib/utils";
 import FeedbackMessage, { SettingsFeedback } from "@/components/settings/FeedbackMessage";
 import SectionTitle from "@/components/settings/SectionTitle";
 import { useTranslation } from "@/hooks/useTranslation";
+import {
+  NotificationBridge,
+  type BridgeNotificationPermission,
+} from "@/lib/notificationBridge";
 
 const ACCEPTED_AVATAR_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
@@ -26,6 +30,8 @@ export default function ProfileSettings() {
   const [personalAvatarFile, setPersonalAvatarFile] = useState<File | null>(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [personalBio, setPersonalBio] = useState("");
+  const [notificationPermission, setNotificationPermission] =
+    useState<BridgeNotificationPermission>("unsupported");
   const bioError = (() => {
     if (personalBio.length > 100) {
       return t("profile.bioTooLong");
@@ -65,6 +71,7 @@ export default function ProfileSettings() {
       setPersonalAvatar(user.avatar);
       setPersonalBio(user.bio || "");
     }
+    setNotificationPermission(NotificationBridge.getPermission());
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [user]);
 
@@ -142,6 +149,18 @@ export default function ProfileSettings() {
     } catch (error) {
       console.error("Failed to update preferences:", error);
     }
+  };
+
+  const handleDesktopNotificationChange = async (enabled: boolean) => {
+    let nextEnabled = enabled;
+
+    if (enabled) {
+      const permission = await NotificationBridge.requestPermission();
+      setNotificationPermission(permission);
+      nextEnabled = permission === "granted";
+    }
+
+    await updatePreference({ notifyDesktop: nextEnabled });
   };
 
   const handlePersonalAvatarChange = () => {
@@ -345,8 +364,8 @@ export default function ProfileSettings() {
         <div className="flex flex-col gap-3">
           <Checkbox 
             label={t("profile.desktopNotifications")} 
-            checked={currentNotifyDesktop} 
-            onChange={(event) => void updatePreference({ notifyDesktop: event.target.checked })} 
+            checked={currentNotifyDesktop && notificationPermission === "granted"}
+            onChange={(event) => void handleDesktopNotificationChange(event.target.checked)}
           />
           <Checkbox 
             label={t("profile.messageSounds")} 

@@ -567,24 +567,13 @@ export const uploadAttachment = async (
 export const attachmentDownloadUrl = (fileUrl: string): string =>
   resolveRequestUrl(fileUrl);
 
-export const downloadAttachment = async (fileUrl: string, filename: string): Promise<void> => {
+export const fetchAttachmentBlob = async (fileUrl: string): Promise<Blob> => {
   const response = await request(fileUrl);
-  const blob = await response.blob();
-  const downloadUrl = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-
-  link.href = downloadUrl;
-  link.download = filename;
-  link.style.display = 'none';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+  return response.blob();
 };
 
 export const fetchAttachmentBlobUrl = async (fileUrl: string): Promise<string> => {
-  const response = await request(fileUrl);
-  const blob = await response.blob();
+  const blob = await fetchAttachmentBlob(fileUrl);
   return URL.createObjectURL(blob);
 };
 

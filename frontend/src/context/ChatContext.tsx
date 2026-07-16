@@ -3,6 +3,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { resolveAssetUrl } from "@/lib/assets";
+import { NotificationBridge } from "@/lib/notificationBridge";
 import type {
   Attachment as ApiAttachment,
   EmergencyContactResponse,
@@ -621,6 +622,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const socialDataRefreshResolversRef = useRef<Array<() => void>>([]);
   const tokenRef = useRef<string | null>(null);
   const activeRoomIdRef = useRef<string | null>(null);
+  const notifyDesktopRef = useRef(true);
 
   const [isMounted, setIsMounted] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -657,6 +659,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     activeRoomIdRef.current = activeRoomId;
   }, [activeRoomId]);
+
+  useEffect(() => {
+    notifyDesktopRef.current = user.notifyDesktop ?? true;
+  }, [user.notifyDesktop]);
 
 
   const loadGroupMembers = async (roomId: string): Promise<Member[]> => {
@@ -971,6 +977,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     const cleanupNewMessage = onNewMessage(socket, (payload) => {
       const incoming = mapMessage(payload, currentUserId);
+      const incomingRoom = roomsRef.current.find((room) => room.id === incoming.roomId);
+
+      if (
+        document.visibilityState !== "visible" &&
+        incoming.senderId !== currentUserId &&
+        notifyDesktopRef.current
+      ) {
+        const notificationBody =
+          incoming.content.trim() || incoming.attachments?.[0]?.filename || "";
+        const notificationIcon = resolveAssetUrl(
+          payload.sender?.avatarUrl ?? incomingRoom?.avatarUrl,
+        );
+        void NotificationBridge.send({
+          title: payload.sender?.name ?? incomingRoom?.name ?? "Near Chat",
+          body: notificationBody,
+          icon: notificationIcon,
+          tag: `room-${incoming.roomId}`,
+          url: `/chat/${incoming.roomId}`,
+        });
+      }
+
       setMessages((current) => {
         const withoutDuplicate = current.filter((message) => message.id !== incoming.id);
         return hydrateReplyTargets(sortMessages([...withoutDuplicate, incoming]));
@@ -1416,6 +1443,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const handleUpdatePreferences = async (preferences: PreferencesInput) => {
     const nextWarningEnabled = preferences.warningEnabled ?? user.warningEnabled ?? false;
     const nextWarningDays = preferences.warningDays ?? user.warningDays ?? 0;
+
+    if (preferences.notifyDesktop && user.notifyDesktop === false) {
+      await NotificationBridge.requestPermission();
+    }
     
     let nextUser: StoredUser = {
       ...user,
