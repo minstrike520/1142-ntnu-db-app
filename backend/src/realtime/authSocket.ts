@@ -2,6 +2,7 @@ import type { Server } from 'socket.io';
 import type { ClientToServerEvents, JwtPayload, ServerToClientEvents } from '@shared/types';
 import { verifyToken } from '../auth/jwt';
 import pool from '../db';
+import { UserRepository } from '../repositories/userRepository';
 
 type SocketData = {
   user: JwtPayload;
@@ -18,12 +19,10 @@ export const attachSocketAuth = (io: ChatServer): void => {
     }
 
     try {
-      const payload = verifyToken(token);
-      const result = await pool.query(
-        'SELECT 1 FROM users WHERE user_id = $1 AND deleted_at IS NULL',
-        [payload.userId]
-      );
-      if (result.rows.length === 0) {
+      const payload = await verifyToken(token);
+      const userRepo = new UserRepository(pool);
+      const user = await userRepo.findById(payload.userId);
+      if (!user) {
         next(new Error('Authentication error'));
         return;
       }

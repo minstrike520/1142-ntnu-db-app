@@ -3,8 +3,6 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
-import bcrypt from 'bcryptjs';
-
 async function seed() {
   const { default: pool } = await import('../db');
   console.log('Starting database seed...');
@@ -27,8 +25,8 @@ async function seed() {
 
     // 2. Create Users
     console.log('Inserting users...');
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash('password123', salt);
+    // ponytail: Using Bun's native password hashing for seeding
+    const passwordHash = await Bun.password.hash('password123');
 
     const usersData = [
       { id: '11111111-1111-4111-a111-111111111111', name: 'Alice', email: 'alice@test.com' },

@@ -18,31 +18,31 @@ describe('jwt', () => {
     process.env.NODE_ENV = originalNodeEnv;
   });
 
-  it('signs and verifies a token with an explicit JWT_SECRET', () => {
+  it('signs and verifies a token with an explicit JWT_SECRET', async () => {
     process.env.JWT_SECRET = 'unit-test-secret';
-    const token = signToken(payload);
-    const decoded = verifyToken(token);
+    const token = await signToken(payload);
+    const decoded = await verifyToken(token);
     expect(decoded.userId).toBe('u1');
   });
 
-  it('falls back to the dev secret when JWT_SECRET is unset outside production', () => {
+  it('falls back to the dev secret when JWT_SECRET is unset outside production', async () => {
     process.env.JWT_SECRET = '';
     process.env.NODE_ENV = 'test';
-    const token = signToken(payload);
-    expect(verifyToken(token).userId).toBe('u1');
+    const token = await signToken(payload);
+    expect((await verifyToken(token)).userId).toBe('u1');
   });
 
-  it('throws when JWT_SECRET is unset in production', () => {
+  it('throws when JWT_SECRET is unset in production', async () => {
     process.env.JWT_SECRET = '';
     process.env.NODE_ENV = 'production';
-    expect(() => signToken(payload)).toThrow('JWT_SECRET is not defined');
+    await expect(signToken(payload)).rejects.toThrow('JWT_SECRET is not defined');
   });
 
-  it('rejects a token signed with a different secret', () => {
+  it('rejects a token signed with a different secret', async () => {
     process.env.JWT_SECRET = 'secret-a';
-    const token = signToken(payload);
+    const token = await signToken(payload);
     process.env.JWT_SECRET = 'secret-b';
-    expect(() => verifyToken(token)).toThrow();
+    await expect(verifyToken(token)).rejects.toThrow();
   });
 
   it('generateRefreshToken returns an 80-char hex string', () => {

@@ -62,8 +62,9 @@ describe('Socket.IO chat events E2E', () => {
     findMember: any;
   };
 
-  const connectClient = (userId: string, token = signToken({ userId, name: userId })): Promise<TestClient> =>
-    new Promise((resolve, reject) => {
+  const connectClient = async (userId: string, tokenInput?: string | Promise<string>): Promise<TestClient> => {
+    const token = await (tokenInput !== undefined ? tokenInput : signToken({ userId, name: userId }));
+    return new Promise((resolve, reject) => {
       const socket: TestClient = createClient(url, {
         auth: token ? { token } : {},
         forceNew: true,
@@ -73,6 +74,7 @@ describe('Socket.IO chat events E2E', () => {
       socket.once('connect', () => resolve(socket));
       socket.once('connect_error', reject);
     });
+  };
 
   beforeEach(async () => {
     httpServer = createServer();

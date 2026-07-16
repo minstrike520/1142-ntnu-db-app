@@ -33,7 +33,7 @@ describe('attachSocketAuth', () => {
     let middleware: any;
     const io = { use: mock((fn) => { middleware = fn; }) } as unknown as ChatServer;
     attachSocketAuth(io);
-    const socket = { handshake: { auth: { token: signToken({ userId: 'ghost', name: 'Ghost' }) } }, data: {} };
+    const socket = { handshake: { auth: { token: await signToken({ userId: 'ghost', name: 'Ghost' }) } }, data: {} };
     const next = mock();
     await middleware(socket, next);
     expect(next).toHaveBeenCalledWith(expect.any(Error));
@@ -52,7 +52,7 @@ describe('attachSocketAuth', () => {
     let middleware: any;
     const io = { use: mock((fn) => { middleware = fn; }) } as unknown as ChatServer;
     const socket = {
-      handshake: { auth: { token: signToken({ userId: 'user-1', name: 'Alice' }) } },
+      handshake: { auth: { token: await signToken({ userId: 'user-1', name: 'Alice' }) } },
       data: {},
     };
     attachSocketAuth(io);

@@ -1,4 +1,3 @@
-import bcrypt from 'bcryptjs';
 import type { IUserRepository } from '../repositories/IUserRepository';
 import type { IEmergencyContactRepository, EmergencyContact } from '../repositories/IEmergencyContactRepository';
 import type {
@@ -28,7 +27,7 @@ import { getRefreshTokenTtlMs } from '../auth/refreshTokenTtl';
 import type { IRefreshTokenRepository } from '../repositories/IRefreshTokenRepository';
 
 interface JwtHelper {
-  signToken(payload: JwtPayload): string;
+  signToken(payload: JwtPayload): Promise<string>;
   generateRefreshToken(): string;
   hashToken(token: string): string;
 }
@@ -122,8 +121,8 @@ export const makeUserService = (
         throw new ConflictError('Email already in use');
       }
 
-      const salt = await bcrypt.genSalt(10);
-      const passwordHash = await bcrypt.hash(data.password, salt);
+      // ponytail: Using Bun's native high-performance password hashing
+      const passwordHash = await Bun.password.hash(data.password);
 
       const user = await repo.create({
         email: data.email,
@@ -131,7 +130,7 @@ export const makeUserService = (
         passwordHash
       });
 
-      const token = jwt.signToken({
+      const token = await jwt.signToken({
         userId: user.userId,
         name: user.name
       });
@@ -151,14 +150,20 @@ export const makeUserService = (
         throw new ValidationError('Invalid email or password');
       }
 
-      const isMatch = await bcrypt.compare(data.password, user.passwordHash);
+      // ponytail: Using Bun's native password verification with robust safety catch
+      let isMatch = false;
+      try {
+        isMatch = await Bun.password.verify(data.password, user.passwordHash);
+      } catch {
+        isMatch = false;
+      }
       if (!isMatch) {
         throw new ValidationError('Invalid email or password');
       }
 
       await repo.update(user.userId, { lastActivity: new Date() });
 
-      const token = jwt.signToken({
+      const token = await jwt.signToken({
         userId: user.userId,
         name: user.name
       });
@@ -211,13 +216,19 @@ export const makeUserService = (
         const currentUser = await repo.findById(userId);
         if (!currentUser) throw new NotFoundError('user', userId);
 
-        const isMatch = await bcrypt.compare(parsed.data.currentPassword, currentUser.passwordHash);
+        // ponytail: Using Bun's native password verification with robust safety catch
+        let isMatch = false;
+        try {
+          isMatch = await Bun.password.verify(parsed.data.currentPassword, currentUser.passwordHash);
+        } catch {
+          isMatch = false;
+        }
         if (!isMatch) {
           throw new ValidationError('Incorrect current password');
         }
 
-        const salt = await bcrypt.genSalt(10);
-        updateData.passwordHash = await bcrypt.hash(parsed.data.password, salt);
+        // ponytail: Using Bun's native high-performance password hashing
+        updateData.passwordHash = await Bun.password.hash(parsed.data.password);
       }
 
       const updated = await repo.update(userId, updateData);
@@ -407,7 +418,7 @@ export const makeUserService = (
         throw new ValidationError('User not found or deleted');
       }
 
-      const newAccessToken = jwt.signToken({
+      const newAccessToken = await jwt.signToken({
         userId: user.userId,
         name: user.name,
       });

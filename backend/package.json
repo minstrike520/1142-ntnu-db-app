@@ -30,6 +30,8 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
+    "hono": "^4.12.30",
+    "hono-rate-limiter": "^0.5.3",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0",
     "node-pg-migrate": "^8.0.4",

@@ -1,5 +1,5 @@
-import jwt from 'jsonwebtoken';
-import crypto from 'crypto';
+import { sign, verify } from 'hono/jwt';
+import { createHash, randomBytes } from 'crypto';
 import type { JwtPayload } from '@shared/types';
 
 const getJwtSecret = (): string => {
@@ -13,21 +13,23 @@ const getJwtSecret = (): string => {
   return secret;
 };
 
-export const signToken = (payload: JwtPayload): string => {
+export const signToken = async (payload: JwtPayload): Promise<string> => {
   const secret = getJwtSecret();
-  const expiresIn = (process.env.JWT_EXPIRES_IN ?? '15m') as jwt.SignOptions['expiresIn'];
-  return jwt.sign(payload, secret, { expiresIn });
+  // ponytail: Hono JWT requires 'exp' inside the payload as a UNIX timestamp in seconds
+  const minutes = 15;
+  const exp = Math.floor(Date.now() / 1000) + (minutes * 60);
+  return await sign({ ...payload, exp }, secret, 'HS256');
 };
 
-export const verifyToken = (token: string): JwtPayload => {
+export const verifyToken = async (token: string): Promise<JwtPayload> => {
   const secret = getJwtSecret();
-  return jwt.verify(token, secret) as JwtPayload;
+  return await verify(token, secret, 'HS256') as unknown as JwtPayload;
 };
 
 export const generateRefreshToken = (): string => {
-  return crypto.randomBytes(40).toString('hex');
+  return randomBytes(40).toString('hex');
 };
 
 export const hashToken = (token: string): string => {
-  return crypto.createHash('sha256').update(token).digest('hex');
+  return createHash('sha256').update(token).digest('hex');
 };

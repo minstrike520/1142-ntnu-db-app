@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, mock, type Mock } from 'bun:test';
-import bcrypt from 'bcryptjs';
+
 import { ConflictError, NotFoundError, ValidationError } from '../../../src/errors/AppError';
 import type { IEmergencyContactRepository } from '../../../src/repositories/IEmergencyContactRepository';
 import type { IUserRepository } from '../../../src/repositories/IUserRepository';
@@ -119,7 +119,7 @@ describe('userService', () => {
       expect(createCall.name).toBe('Test User');
       expect(createCall.email).toBe('test@example.com');
       expect(createCall.passwordHash).not.toBe('password123');
-      expect(await bcrypt.compare('password123', createCall.passwordHash)).toBe(true);
+      expect(await Bun.password.verify('password123', createCall.passwordHash)).toBe(true);
       expect(result).toEqual({
         token: 'fake-jwt-token',
         refreshToken: 'fake-refresh-token',
@@ -147,7 +147,7 @@ describe('userService', () => {
   describe('login', () => {
     it('logs in a valid user', async () => {
       const user = baseUser();
-      user.passwordHash = await bcrypt.hash('password123', 10);
+      user.passwordHash = await Bun.password.hash('password123');
       mockRepo.findByEmail.mockResolvedValue(user);
       mockJwt.signToken.mockReturnValue('fake-jwt-token');
 
@@ -178,7 +178,7 @@ describe('userService', () => {
 
     it('rejects wrong passwords', async () => {
       const user = baseUser();
-      user.passwordHash = await bcrypt.hash('correctpassword', 10);
+      user.passwordHash = await Bun.password.hash('correctpassword');
       mockRepo.findByEmail.mockResolvedValue(user);
       await expect(
         userService.login({
@@ -232,7 +232,7 @@ describe('userService', () => {
     });
 
     it('updates email and password through my profile', async () => {
-      const passwordHash = await bcrypt.hash('oldpassword123', 10);
+      const passwordHash = await Bun.password.hash('oldpassword123');
       mockRepo.findById.mockResolvedValue({ ...baseUser(), passwordHash });
       const updatedUser = { ...baseUser(), email: 'new@example.com' };
       mockRepo.findByEmail.mockResolvedValue(null);
@@ -249,7 +249,7 @@ describe('userService', () => {
       const updateCall = mockRepo.update.mock.calls[0][1];
       expect(updateCall.email).toBe('new@example.com');
       expect(updateCall.passwordHash).not.toBe('newpassword123');
-      expect(await bcrypt.compare('newpassword123', updateCall.passwordHash!)).toBe(true);
+      expect(await Bun.password.verify('newpassword123', updateCall.passwordHash!)).toBe(true);
       expect(result.email).toBe('new@example.com');
     });
 
