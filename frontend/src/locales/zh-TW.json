@@ -133,6 +133,8 @@
     "notifications": "通知",
     "desktopNotifications": "桌面通知",
     "notificationsBlocked": "桌面通知已被瀏覽器封鎖，請在瀏覽器設定中解除封鎖後重新開啟。",
+    "notificationsDefaultTip": "（此帳號已啟用通知，但本瀏覽器尚未授權）",
+    "notificationsAllowButton": "點此授權",
     "messageSounds": "訊息音效",
     "appearance": "外觀",
     "light": "淺色",

@@ -1,5 +1,12 @@
 "use client";
 /* eslint-disable react-compiler/react-compiler */
+/* 
+ * NOTE: The React Compiler is disabled for this file because ChatProvider contains 
+ * multiple useEffect hooks that intentionally disable react-hooks/exhaustive-deps 
+ * (specifically for post-mount session hydration, socket connection management, 
+ * and active room member synchronization). The compiler skips optimizing components 
+ * where hook dependencies are suppressed, and would otherwise emit compile-time warnings.
+ */
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";

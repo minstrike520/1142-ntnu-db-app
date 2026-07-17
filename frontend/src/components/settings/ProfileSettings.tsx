@@ -73,12 +73,6 @@ export default function ProfileSettings() {
     }
     const currentPerm = NotificationBridge.getPermission();
     setNotificationPermission(currentPerm);
-
-    if ((user.notifyDesktop ?? true) && currentPerm === "default") {
-      void NotificationBridge.requestPermission().then((newPerm) => {
-        setNotificationPermission(newPerm);
-      });
-    }
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [user]);
 
@@ -379,6 +373,24 @@ export default function ProfileSettings() {
             {notificationPermission === "denied" && (
               <p className="text-xs text-red-500 font-sans select-none mt-1 pl-[30px]">
                 {t("profile.notificationsBlocked")}
+              </p>
+            )}
+            {notificationPermission === "default" && currentNotifyDesktop && (
+              <p className="text-xs text-amber-600 font-sans select-none mt-1 pl-[30px] flex items-center gap-1.5">
+                <span>{t("profile.notificationsDefaultTip")}</span>
+                <button
+                  type="button"
+                  className="text-primary hover:underline font-semibold cursor-pointer"
+                  onClick={async () => {
+                    const permission = await NotificationBridge.requestPermission();
+                    setNotificationPermission(permission);
+                    if (permission === "granted") {
+                      await updatePreference({ notifyDesktop: true });
+                    }
+                  }}
+                >
+                  {t("profile.notificationsAllowButton")}
+                </button>
               </p>
             )}
           </div>

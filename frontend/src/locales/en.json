@@ -141,6 +141,8 @@
     "notifications": "Notifications",
     "desktopNotifications": "Desktop notifications",
     "notificationsBlocked": "Desktop notifications are blocked by the browser. Please unblock in your browser settings and try again.",
+    "notificationsDefaultTip": "(Notifications enabled for this account, but this browser is not authorized yet)",
+    "notificationsAllowButton": "Authorize now",
     "messageSounds": "Message sounds",
     "appearance": "Appearance",
     "light": "Light",
