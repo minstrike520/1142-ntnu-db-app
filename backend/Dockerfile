@@ -1,7 +1,7 @@
-FROM node:lts-slim
+FROM node:24-slim
 
 RUN apt-get update -y && apt-get install -y openssl
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11 --activate
 
 WORKDIR /app
 

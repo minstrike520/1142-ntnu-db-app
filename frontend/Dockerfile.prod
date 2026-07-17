@@ -1,7 +1,7 @@
 # Stage 1: Install dependencies
-FROM node:lts-slim AS deps
+FROM node:24-slim AS deps
 ENV CI=true
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11 --activate
 WORKDIR /workspace
 
 # Copy global configs and shared files
@@ -15,11 +15,11 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
     pnpm install --store-dir /pnpm/store --no-frozen-lockfile --ignore-scripts
 
 # Stage 2: Build the frontend
-FROM node:lts-slim AS builder
+FROM node:24-slim AS builder
 ENV CI=true
 ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11 --activate
 WORKDIR /workspace
 
 # Copy global configs and shared files
@@ -39,7 +39,7 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN pnpm build
 
 # Stage 3: Runner
-FROM node:lts-slim AS runner
+FROM node:24-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
