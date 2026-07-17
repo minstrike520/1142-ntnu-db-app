@@ -71,7 +71,7 @@ To ensure consistent project communications:
 * **Database Migrations**:
   - Do not run arbitrary SQL directly on the database to make schema changes.
   - All schema modifications must be done by writing migrations under `backend/migrations/` using `node-pg-migrate`.
-  - Refer to [docs/database-design.md](file:///home/ray0520/Projects/DB/near-chat/docs/database-design.md) for actual column structures, constraints, and relationships.
+  - Refer to [docs/database-design.md](docs/database-design.md) for actual column structures, constraints, and relationships.
 * **Migration Commands** (Execute inside the backend container):
   - **Create migration**: `docker compose exec backend pnpm run migrate:create <name>`
   - **Run migrations**: `docker compose exec backend pnpm run migrate:up`
@@ -127,13 +127,13 @@ docker compose exec backend pnpm run db:seed
      pnpm -C backend run test:db:down
      ```
 
-For details, refer to [docs/DEVELOPMENT.md](file:///home/ray0520/Projects/DB/near-chat/docs/DEVELOPMENT.md).
+For details, refer to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ---
 
 ## 6. API & WebSocket Contract Verification
 
-* Any changes to Express controllers, backend routes, or Socket.IO events must strictly align with the payloads and models defined in [docs/api-documentation.md](file:///home/ray0520/Projects/DB/near-chat/docs/api-documentation.md).
+* Any changes to Express controllers, backend routes, or Socket.IO events must strictly align with the payloads and models defined in [docs/api-documentation.md](docs/api-documentation.md).
 * Breaking contracts will cause frontend-backend integration failures and fail CI builds.
 
 ---

@@ -71,7 +71,7 @@
 * **資料庫遷移 (Migrations)**：
   - 請勿直接在資料庫中手動執行 SQL 來變更 Schema。
   - 所有 Schema 的變更都必須透過在 `backend/migrations/` 底下使用 `node-pg-migrate` 撰寫遷移檔來完成。
-  - 欄位結構、預設值與外鍵條件請參考 [docs/database-design.md](file:///home/ray0520/Projects/DB/near-chat/docs/database-design.md)。
+  - 欄位結構、預設值與外鍵條件請參考 [docs/database-design.md](docs/database-design.md)。
 * **Migration 相關指令**（請於後端容器內執行）：
   - **建立遷移檔**：`docker compose exec backend pnpm run migrate:create <name>`
   - **執行資料庫遷移**：`docker compose exec backend pnpm run migrate:up`
@@ -127,13 +127,13 @@ docker compose exec backend pnpm run db:seed
      pnpm -C backend run test:db:down
      ```
 
-更多詳細資訊請參閱 [docs/ZH-TW/DEVELOPMENT.md](file:///home/ray0520/Projects/DB/near-chat/docs/ZH-TW/DEVELOPMENT.md)。
+更多詳細資訊請參閱 [docs/ZH-TW/DEVELOPMENT.md](docs/ZH-TW/DEVELOPMENT.md)。
 
 ---
 
 ## 6. API 與 WebSocket 協定驗證
 
-* 任何對 Express 控制器 (Controllers)、後端路由 (Routes) 或 Socket.IO 事件處理常式的修改，都必須精確對齊 [docs/api-documentation.md](file:///home/ray0520/Projects/DB/near-chat/docs/api-documentation.md) 中所定義的 Payload 與資料模型。
+* 任何對 Express 控制器 (Controllers)、後端路由 (Routes) 或 Socket.IO 事件處理常式的修改，都必須精確對齊 [docs/api-documentation.md](docs/api-documentation.md) 中所定義的 Payload 與資料模型。
 * 破壞協定契約將會導致前後端串接失敗，並使 CI 流程出錯。
 
 ---
