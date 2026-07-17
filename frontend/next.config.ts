@@ -1,5 +1,14 @@
 import type { NextConfig } from "next";
 import packageInfo from "../package.json";
+import { execSync } from "child_process";
+
+let buildVersion = packageInfo.version;
+try {
+  const gitSha = execSync("git rev-parse --short HEAD").toString().trim();
+  buildVersion = `${packageInfo.version}-${gitSha}`;
+} catch {
+  // Fallback to package.json version if git is not available
+}
 
 const allowedDevOrigins = process.env.ALLOWED_DEV_ORIGINS
   ? process.env.ALLOWED_DEV_ORIGINS.split(",").map((origin) => origin.trim())
@@ -11,7 +20,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   reactCompiler: true,
   env: {
-    NEXT_PUBLIC_APP_VERSION: packageInfo.version,
+    NEXT_PUBLIC_APP_VERSION: buildVersion,
   },
   async headers() {
     return [
