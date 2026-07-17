@@ -25,5 +25,20 @@ export default function manifest(): MetadataRoute.Manifest {
         purpose: "any",
       },
     ],
+    screenshots: [
+      {
+        src: "/screenshots/desktop-wide.png",
+        sizes: "1280x720",
+        type: "image/png",
+        form_factor: "wide",
+        label: "Near Chat 桌面版",
+      },
+      {
+        src: "/screenshots/mobile.png",
+        sizes: "780x1688",
+        type: "image/png",
+        label: "Near Chat 行動版",
+      },
+    ],
   };
 }
