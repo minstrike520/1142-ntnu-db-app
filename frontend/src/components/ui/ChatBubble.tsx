@@ -172,6 +172,7 @@ function ImageAttachmentPreview({
 
   return (
     <div className="flex flex-col gap-1">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={blobUrl}
         alt={file.filename}

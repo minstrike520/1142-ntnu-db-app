@@ -119,11 +119,28 @@ export const NotificationBridge = {
     if (!runtimeWindow || this.getPermission() !== "granted") return false;
     const notificationApi = getNotificationApi(runtimeWindow);
 
-    const notificationOptions = toWebNotificationOptions(options);
+    // Normalize and validate URL to same-origin
+    let safeUrl: string | undefined = undefined;
+    if (options.url) {
+      try {
+        const origin = runtimeWindow.location.origin;
+        const parsedUrl = new URL(options.url, origin);
+        safeUrl = parsedUrl.origin === origin ? parsedUrl.href : new URL("/", origin).href;
+      } catch {
+        safeUrl = new URL("/", runtimeWindow.location.origin).href;
+      }
+    }
+
+    const safeOptions = {
+      ...options,
+      url: safeUrl,
+    };
+
+    const notificationOptions = toWebNotificationOptions(safeOptions);
     const registration = await getServiceWorkerRegistration().catch(() => undefined);
     if (registration) {
       try {
-        await registration.showNotification(options.title, notificationOptions);
+        await registration.showNotification(safeOptions.title, notificationOptions);
         return true;
       } catch {
         // Some embedded runtimes expose Service Worker APIs without supporting
@@ -133,11 +150,11 @@ export const NotificationBridge = {
 
     try {
       if (!notificationApi) return false;
-      const notification = new notificationApi(options.title, notificationOptions);
-      if (options.url) {
+      const notification = new notificationApi(safeOptions.title, notificationOptions);
+      if (safeOptions.url) {
         notification.onclick = () => {
           runtimeWindow.focus();
-          runtimeWindow.location.assign(options.url!);
+          runtimeWindow.location.assign(safeOptions.url!);
           notification.close();
         };
       }

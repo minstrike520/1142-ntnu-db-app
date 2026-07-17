@@ -6,7 +6,28 @@ const CACHE_PREFIX = "near-chat-";
 
 const clearDevelopmentWorkerState = async () => {
   const registrations = await navigator.serviceWorker.getRegistrations();
-  await Promise.all(registrations.map((registration) => registration.unregister()));
+  await Promise.all(
+    registrations.map((registration) => {
+      const activeUrl = registration.active?.scriptURL;
+      const waitingUrl = registration.waiting?.scriptURL;
+      const installingUrl = registration.installing?.scriptURL;
+
+      const isOurWorker = [activeUrl, waitingUrl, installingUrl].some((urlStr) => {
+        if (!urlStr) return false;
+        try {
+          const url = new URL(urlStr);
+          return url.pathname === "/sw.js";
+        } catch {
+          return urlStr.includes("/sw.js");
+        }
+      });
+
+      if (isOurWorker) {
+        return registration.unregister();
+      }
+      return Promise.resolve(false);
+    }),
+  );
 
   if ("caches" in window) {
     const cacheNames = await caches.keys();
@@ -50,7 +71,8 @@ export function ServiceWorkerRegistration() {
 
     const register = async () => {
       try {
-        await navigator.serviceWorker.register("/sw.js", {
+        const version = process.env.NEXT_PUBLIC_APP_VERSION || "v1";
+        await navigator.serviceWorker.register(`/sw.js?v=${version}`, {
           scope: "/",
           updateViaCache: "none",
         });

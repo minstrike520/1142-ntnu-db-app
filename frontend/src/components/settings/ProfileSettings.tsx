@@ -71,7 +71,14 @@ export default function ProfileSettings() {
       setPersonalAvatar(user.avatar);
       setPersonalBio(user.bio || "");
     }
-    setNotificationPermission(NotificationBridge.getPermission());
+    const currentPerm = NotificationBridge.getPermission();
+    setNotificationPermission(currentPerm);
+
+    if ((user.notifyDesktop ?? true) && currentPerm === "default") {
+      void NotificationBridge.requestPermission().then((newPerm) => {
+        setNotificationPermission(newPerm);
+      });
+    }
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [user]);
 
@@ -152,15 +159,15 @@ export default function ProfileSettings() {
   };
 
   const handleDesktopNotificationChange = async (enabled: boolean) => {
-    let nextEnabled = enabled;
-
     if (enabled) {
       const permission = await NotificationBridge.requestPermission();
       setNotificationPermission(permission);
-      nextEnabled = permission === "granted";
+      if (permission === "granted") {
+        await updatePreference({ notifyDesktop: true });
+      }
+    } else {
+      await updatePreference({ notifyDesktop: false });
     }
-
-    await updatePreference({ notifyDesktop: nextEnabled });
   };
 
   const handlePersonalAvatarChange = () => {
@@ -362,11 +369,19 @@ export default function ProfileSettings() {
       <div className="flex flex-col gap-6 max-w-4xl mt-12">
         <SectionTitle title={t("profile.notifications")} />
         <div className="flex flex-col gap-3">
-          <Checkbox 
-            label={t("profile.desktopNotifications")} 
-            checked={currentNotifyDesktop && notificationPermission === "granted"}
-            onChange={(event) => void handleDesktopNotificationChange(event.target.checked)}
-          />
+          <div className="flex flex-col gap-1 w-full">
+            <Checkbox 
+              label={t("profile.desktopNotifications")} 
+              checked={notificationPermission === "denied" ? false : currentNotifyDesktop}
+              disabled={notificationPermission === "denied"}
+              onChange={(event) => void handleDesktopNotificationChange(event.target.checked)}
+            />
+            {notificationPermission === "denied" && (
+              <p className="text-xs text-red-500 font-sans select-none mt-1 pl-[30px]">
+                {t("profile.notificationsBlocked")}
+              </p>
+            )}
+          </div>
           <Checkbox 
             label={t("profile.messageSounds")} 
             checked={currentNotifySound} 

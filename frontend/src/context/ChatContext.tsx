@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable react-compiler/react-compiler */
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
@@ -737,6 +738,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setRooms([]);
     setFolders([]);
     setMessages([]);
+
+    if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: "CLEAR_PAGE_CACHE" });
+    }
+    if ("caches" in window) {
+      void caches.keys().then((keys) => {
+        return Promise.all(
+          keys
+            .filter((key) => key.startsWith("near-chat-pages-"))
+            .map((key) => caches.delete(key))
+        );
+      }).catch(console.error);
+    }
+
     socketRef.current?.disconnect();
     socketRef.current = null;
   };
@@ -1444,10 +1459,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const nextWarningEnabled = preferences.warningEnabled ?? user.warningEnabled ?? false;
     const nextWarningDays = preferences.warningDays ?? user.warningDays ?? 0;
 
-    if (preferences.notifyDesktop && user.notifyDesktop === false) {
-      await NotificationBridge.requestPermission();
-    }
-    
     let nextUser: StoredUser = {
       ...user,
       language: preferences.language,

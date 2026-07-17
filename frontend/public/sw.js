@@ -1,7 +1,9 @@
 const CACHE_PREFIX = "near-chat";
-const PRECACHE_NAME = `${CACHE_PREFIX}-precache-v1`;
-const STATIC_CACHE_NAME = `${CACHE_PREFIX}-static-v1`;
-const PAGE_CACHE_NAME = `${CACHE_PREFIX}-pages-v1`;
+const urlParams = new URL(self.location.href).searchParams;
+const VERSION = urlParams.get("v") || "v1";
+const PRECACHE_NAME = `${CACHE_PREFIX}-precache-${VERSION}`;
+const STATIC_CACHE_NAME = `${CACHE_PREFIX}-static-${VERSION}`;
+const PAGE_CACHE_NAME = `${CACHE_PREFIX}-pages-${VERSION}`;
 const PRECACHE_URLS = [
   "/offline.html",
   "/manifest.webmanifest",
@@ -44,6 +46,20 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+async function trimCache(cacheName, maxItems) {
+  try {
+    const cache = await caches.open(cacheName);
+    const keys = await cache.keys();
+    if (keys.length > maxItems) {
+      for (let i = 0; i < keys.length - maxItems; i++) {
+        await cache.delete(keys[i]);
+      }
+    }
+  } catch {
+    // Failure to trim cache should not crash the service worker
+  }
+}
+
 async function cacheSuccessfulResponse(cacheName, request, response) {
   if (
     response.ok &&
@@ -53,6 +69,8 @@ async function cacheSuccessfulResponse(cacheName, request, response) {
     try {
       const cache = await caches.open(cacheName);
       await cache.put(request, response.clone());
+      const limit = cacheName === PAGE_CACHE_NAME ? 30 : 150;
+      await trimCache(cacheName, limit);
     } catch {
       // A cache quota failure must not turn a successful network response into
       // a failed request.
@@ -68,7 +86,7 @@ async function networkFirstNavigation(request) {
     return await cacheSuccessfulResponse(PAGE_CACHE_NAME, request, response);
   } catch {
     const fallback =
-      (await caches.match(request)) ??
+      (await caches.match(request, { ignoreSearch: true })) ??
       (await caches.match("/offline.html", { ignoreSearch: true }));
 
     return (
@@ -111,6 +129,13 @@ function getSafeAppShellUrls(messageData) {
 }
 
 self.addEventListener("message", (event) => {
+  if (event.data?.type === "CLEAR_PAGE_CACHE") {
+    event.waitUntil(
+      caches.delete(PAGE_CACHE_NAME)
+    );
+    return;
+  }
+
   const appShellUrls = getSafeAppShellUrls(event.data);
   if (appShellUrls.length === 0) return;
 
@@ -125,7 +150,7 @@ self.addEventListener("message", (event) => {
             // being cached for offline use.
           }
         }),
-      ),
+      ).then(() => trimCache(STATIC_CACHE_NAME, 150)),
     ),
   );
 });

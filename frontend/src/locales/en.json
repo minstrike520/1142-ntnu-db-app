@@ -140,6 +140,7 @@
     "email": "Email",
     "notifications": "Notifications",
     "desktopNotifications": "Desktop notifications",
+    "notificationsBlocked": "Desktop notifications are blocked by the browser. Please unblock in your browser settings and try again.",
     "messageSounds": "Message sounds",
     "appearance": "Appearance",
     "light": "Light",
