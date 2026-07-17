@@ -33,8 +33,8 @@ Closes #
 ## 資料庫變更 (Database Changes)
 * 此變更是否包含資料庫 Schema 修改？ **[是 / 否]**
 * 若為是，請寫明 Migration 檔案名稱：`____________________`
-* 是否已確認遷移與 [docs/database-design.md](file:///home/ray0520/Projects/DB/1142-ntnu-db-app/docs/database-design.md) 設計一致？ **[是 / 否]**
+* 是否已確認遷移與 [docs/database-design.md](file:///home/ray0520/Projects/DB/near-chat/docs/database-design.md) 設計一致？ **[是 / 否]**
 
 ## API 與 WebSocket 協定一致性 (API & WebSocket Contract Check)
 * 此變更是否涉及 API 路由或 WebSocket 事件的資料結構變更？ **[是 / 否]**
-* 是否已確認與 [docs/api-documentation.md](file:///home/ray0520/Projects/DB/1142-ntnu-db-app/docs/api-documentation.md) 規範完全一致？ **[是 / 否]**
+* 是否已確認與 [docs/api-documentation.md](file:///home/ray0520/Projects/DB/near-chat/docs/api-documentation.md) 規範完全一致？ **[是 / 否]**
