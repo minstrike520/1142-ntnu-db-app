@@ -329,5 +329,15 @@
     "renameFailed": "修改資料夾名稱失敗",
     "deleteFailed": "刪除資料夾失敗",
     "confirmAction": "確定"
+  },
+  "chatFilter": {
+    "filterAll": "全部",
+    "filterDm": "私聊",
+    "filterGroup": "群組",
+    "filterUnread": "未讀",
+    "sortLabel": "排序",
+    "sortCustom": "自定義",
+    "sortUnread": "未讀優先",
+    "emptyResult": "沒有符合的聊天室"
   }
 }

@@ -15,6 +15,9 @@ interface ChatListProps {
   searchQuery: string;
 }
 
+type FilterMode = "all" | "dm" | "group" | "unread";
+type SortMode = "custom" | "unread";
+
 export default function ChatList({ searchQuery }: ChatListProps) {
   const router = useRouter();
   const params = useParams();
@@ -256,11 +259,137 @@ export default function ChatList({ searchQuery }: ChatListProps) {
     }
   };
 
+  // One-tap category filter (resets per session) and sort preset (persisted).
+  const [filterMode, setFilterMode] = React.useState<FilterMode>("all");
+  const [sortMode, setSortMode] = React.useState<SortMode>(() => {
+    try {
+      const saved = typeof window !== "undefined" ? localStorage.getItem("near:chatSort") : null;
+      if (saved === "custom" || saved === "unread") return saved;
+    } catch {}
+    return "custom";
+  });
+
+  const changeSortMode = (mode: SortMode) => {
+    setSortMode(mode);
+    try {
+      localStorage.setItem("near:chatSort", mode);
+    } catch {}
+  };
+
+  // The grouped folder view (with drag-and-drop custom ordering) is only meaningful
+  // for the default all + custom combination; any other preset renders a flat list.
+  const isFlatMode = filterMode !== "all" || sortMode !== "custom";
+
+  const resolveRoomAvatar = (room: ChatRoom): string | undefined => {
+    if (room.avatarUrl) {
+      return resolveAssetUrl(room.avatarUrl);
+    }
+    if (room.type === "msg") {
+      const otherMember = room.members?.find((m) => m.userId !== user.userId);
+      if (otherMember?.avatarUrl) {
+        return resolveAssetUrl(otherMember.avatarUrl);
+      }
+      const friend = friends.find((f) => f.id === room.otherMemberId || f.name === room.name);
+      if (friend?.avatarUrl) {
+        return resolveAssetUrl(friend.avatarUrl);
+      }
+    }
+    return getAvatarForUser(room.name, user.avatar, user.username);
+  };
+
+  const flatRooms = React.useMemo(() => {
+    if (!isFlatMode) return [];
+    const query = searchQuery.toLowerCase();
+    const matchesSearch = (room: ChatRoom) => room.name.toLowerCase().includes(query);
+    const matchesFilter = (room: ChatRoom) => {
+      switch (filterMode) {
+        case "dm":
+          return room.type === "msg";
+        case "group":
+          return room.type === "group";
+        case "unread":
+          return (room.unreadCount ?? 0) > 0;
+        default:
+          return true;
+      }
+    };
+    let list = rooms.filter((room) => matchesSearch(room) && matchesFilter(room));
+    if (sortMode === "unread") {
+      list = [...list].sort((a, b) => (b.unreadCount ?? 0) - (a.unreadCount ?? 0));
+    }
+    // Keep the currently open room visible even if the active filter would hide it.
+    if (activeRoomId && isChatPage) {
+      const active = rooms.find((room) => room.id === activeRoomId);
+      if (active && matchesSearch(active) && !list.some((room) => room.id === active.id)) {
+        list = [active, ...list];
+      }
+    }
+    return list;
+  }, [isFlatMode, rooms, searchQuery, filterMode, sortMode, activeRoomId, isChatPage]);
+
+  const filterOptions: { value: FilterMode; label: string }[] = [
+    { value: "all", label: t("chatFilter.filterAll") },
+    { value: "dm", label: t("chatFilter.filterDm") },
+    { value: "group", label: t("chatFilter.filterGroup") },
+    { value: "unread", label: t("chatFilter.filterUnread") },
+  ];
+
   return (
     <>
       <SectionLabel label={t("sidebar.chats")} />
 
-      {rootRooms.length > 0 && (
+      <div className="px-4 pb-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1 flex-wrap">
+          {filterOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setFilterMode(option.value)}
+              className={`px-2 py-0.5 rounded-sm text-[10px] font-semibold border transition-colors ${
+                filterMode === option.value
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border-secondary text-text-muted hover:text-foreground hover:border-border-primary"
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => changeSortMode(sortMode === "custom" ? "unread" : "custom")}
+          title={t("chatFilter.sortLabel")}
+          className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-semibold border border-border-secondary text-text-muted hover:text-foreground hover:border-border-primary transition-colors"
+        >
+          <span className="rotate-90 leading-none">{"⇅"}</span>
+          {sortMode === "unread" ? t("chatFilter.sortUnread") : t("chatFilter.sortCustom")}
+        </button>
+      </div>
+
+      {isFlatMode && (
+        flatRooms.length > 0 ? (
+          <div className="flex flex-col">
+            {flatRooms.map((room) => (
+              <RoomItem
+                key={room.id}
+                room={room}
+                isActive={room.id === activeRoomId && isChatPage}
+                draggable={false}
+                onClick={() => router.push(`/chat/${room.id}`)}
+                avatarSrc={resolveRoomAvatar(room)}
+                noMessagesText={t("sidebar.noMessages")}
+                isPending={room.myRole === "pending"}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="px-4 py-8 text-center text-[11px] text-text-muted">
+            {t("chatFilter.emptyResult")}
+          </div>
+        )
+      )}
+
+      {!isFlatMode && rootRooms.length > 0 && (
         <div>
           <button
             type="button"
@@ -370,7 +499,7 @@ export default function ChatList({ searchQuery }: ChatListProps) {
         </div>
       )}
 
-      {visibleFolders.length > 0 && (
+      {!isFlatMode && visibleFolders.length > 0 && (
         <div className="flex flex-col gap-0.5 pb-2">
           {visibleFolders.map((folder) => {
             const folderRooms = getFolderRooms(folder.id);
@@ -639,19 +768,21 @@ function RoomItem({
   avatarSrc,
   noMessagesText,
   isPending,
+  draggable = true,
 }: {
   room: ChatRoom;
   isActive: boolean;
   isDropTarget?: boolean;
   dropPlacement?: "above" | "below" | null;
   onClick: () => void;
-  onDragStart: (event: React.DragEvent<HTMLButtonElement>) => void;
-  onDragEnd: () => void;
+  onDragStart?: (event: React.DragEvent<HTMLButtonElement>) => void;
+  onDragEnd?: () => void;
   onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void;
   onDrop?: (event: React.DragEvent<HTMLDivElement>) => void;
   avatarSrc?: string;
   noMessagesText: string;
   isPending?: boolean;
+  draggable?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -674,7 +805,7 @@ function RoomItem({
       <button
         type="button"
         onClick={onClick}
-        draggable
+        draggable={draggable}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         className="flex min-w-0 flex-1 items-center gap-2.5 text-left select-none cursor-pointer"
