@@ -1,9 +1,9 @@
 # Stage 1: Build the backend application
-FROM node:lts-slim AS builder
+FROM node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS builder
 ENV CI=true
 
 RUN apt-get update -y && apt-get install -y openssl
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11.15.0 --activate
 
 WORKDIR /workspace
 
@@ -15,7 +15,7 @@ COPY shared/ ./shared/
 COPY backend/package.json backend/pnpm-lock.yaml backend/tsconfig.json ./backend/
 
 WORKDIR /workspace/backend
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
+RUN --mount=type=cache,id=pnpm-v11-builder,target=/pnpm/store,uid=1000,gid=1000 \
     pnpm install --store-dir /pnpm/store --no-frozen-lockfile --ignore-scripts
 
 # Copy backend source code and compile
@@ -23,11 +23,11 @@ COPY backend/src ./src
 RUN pnpm build
 
 # Stage 2: Create a production runner image
-FROM node:lts-slim AS runner
+FROM node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS runner
 ENV CI=true
 
 RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11.15.0 --activate
 
 WORKDIR /app
 
@@ -41,7 +41,7 @@ USER node
 
 # Copy production dependency declarations
 COPY --chown=node:node backend/package.json backend/pnpm-lock.yaml ./
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
+RUN --mount=type=cache,id=pnpm-v11-runner,target=/pnpm/store,uid=1000,gid=1000 \
     pnpm install --store-dir /pnpm/store --prod --no-frozen-lockfile --ignore-scripts
 
 # Copy compiled files and migrations
