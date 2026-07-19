@@ -47,7 +47,8 @@ Bundle 位元組大小會隨環境與相依套件版本而變動（隨 `pnpm-loc
 1. 讀取該路由的 `analyze.data`，將開頭 4 bytes 以 big-endian `uint32` 解讀為長度 `n`，僅解析 `data[4:4+n]` 作為 JSON——不要對前綴之後的全部內容執行 `json.loads`，因為 `4+n` 之後的附加資料並非合法 JSON，會導致解析錯誤。
 2. 篩選 `output_files` 中 `filename` 同時符合「含有 `static/chunks`」**且**「以 `.js` 結尾」的項目（可排除 SSR／伺服器端 chunk、CSS chunk 與字型／圖片等 media 檔案，只留下 client JS chunk——單純以 `static/chunks` 篩選也會匹配到 CSS chunk 檔案，例如包含 `globals.css` 的那個，因此必須加上 `.js` 副檔名檢查，才能讓此指標真正只計入 JS）。
 3. 將 `chunk_parts[].size` 依 `source_index` 加總，僅限 `output_file_index` 落在上述篩選集合內的項目。
-4. 依大小遞減排序，並透過 `sources[i].path`（視需要沿 `parent_source_index` 往上重建完整路徑）將 `source_index` 對應回實際路徑。
+4. **從加總結果中排除舊版 `nomodule` polyfill。** 它本身就是一個 `static/chunks/*.js` 檔案，光靠步驟 2 並不會排除它——請在排行前明確排除 `path` 含有檔名 `polyfill-nomodule.js` 的來源。請只比對檔名，不要比對完整目錄前綴：重建出的路徑雖然是以 `/` 串接各段 `path`，但各段本身就已經包含雙斜線（例如實際路徑長得像 `.../node_modules//next//dist//build//polyfills//polyfill-nomodule.js`），因此像 `next/dist/build/polyfills/polyfill-nomodule.js` 這種單斜線字串比對會悄悄比對失敗、完全不排除任何項目。若省略（或誤用）此步驟，每個路由的「client JS」總計會被悄悄加回約 112 KB 現代瀏覽器不會執行的 payload（原因見下方獨立說明）。
+5. 依大小遞減排序，並透過 `sources[i].path`（視需要沿 `parent_source_index` 往上重建完整路徑）將 `source_index` 對應回實際路徑。
 
 ## 基準：各頁面主要 client 模組（於上述 commit 量測）
 
@@ -99,11 +100,13 @@ Bundle 位元組大小會隨環境與相依套件版本而變動（隨 `pnpm-loc
 
 以下為至少三個具體且有實證依據的候選項目，供後續效能 issue 使用：
 
-1. **聊天頁面條件式顯示的側邊面板被靜態匯入至初始 bundle**（對應 #381）。`src/components/pages/ChatroomPageContent.tsx` 在模組頂層靜態匯入 `GroupSettings` 與 `RoomMembersPanel`，卻只在布林狀態為真時才渲染（例如 `{showSettings && <GroupSettings .../>}`）。由於是靜態匯入，這兩者即使在從未開啟過的工作階段中，也會一併出現在 `/chat/[chatId]` 路由的初始 client chunk 中——單是 `GroupSettings.tsx` 就佔約 18.7 KB。這兩者是明確的 `next/dynamic` 候選項目。
+1. **預設為關閉狀態的側邊面板被靜態匯入至初始 bundle**（對應 #381）。`src/components/pages/ChatroomPageContent.tsx` 在模組頂層靜態匯入 `GroupSettings`，僅由 `const [showSettings, setShowSettings] = useState(false)` 控制渲染（`{showSettings ? <GroupSettings .../> : <Chatroom .../>}`）。由於是靜態匯入，`GroupSettings.tsx`（約 18.7 KB）即使一開始就是隱藏狀態、且多數工作階段從未開啟過，仍會出現在 `/chat/[chatId]` 路由的初始 client chunk 中。這是明確乾淨的 `next/dynamic` 候選項目。
+
+   `ChatroomPageContent.tsx` 同時也靜態匯入了 `RoomMembersPanel`，但這個候選項目沒有表面上看起來那麼理想：`ChatContext.tsx` 中 `showRightPanel` 預設為 `true`（`useState<boolean>(true)`），且當 `type === "group"` 時 `rightPanel` 會直接指向 `RoomMembersPanel` 並在預設檢視下立即渲染——它並不像 `GroupSettings` 那樣是「尚未開啟」的面板。只有在私聊（`type === "msg"`，此時 `rightPanel` 改指向 `FriendInfoPanel`，完全不會用到 `RoomMembersPanel`）或使用者已手動呼叫 `setShowRightPanel(false)` 關閉面板的工作階段中，它才是真正未使用卻仍被打包的匯入。後續若針對此項目做 `next/dynamic` 化，前後比較應鎖定在這些私聊／面板已關閉的情境，而非宣稱能縮小預設群組聊天檢視的體積。
 
    `ChatroomPageContent.tsx` 同時也靜態匯入了 `FriendInfoPanel`，但只改這一處的匯入方式並不會縮小初始 bundle：`src/components/layout/Sidebar.tsx`（第 12 行）本身就無條件靜態匯入 `FriendInfoPanel`，而 `Sidebar` 是由 `src/app/(main)/layout.tsx`（本表所列 `/`、`/chat/[chatId]`、`/settings` 三個路由共用的常駐外殼）所渲染。因此無論 `ChatroomPageContent` 怎麼匯入，`FriendInfoPanel` 都已經是初始已登入外殼 bundle 的一部分；本候選項目排除它，若要真正減少體積，需要另外針對 `Sidebar` 本身的匯入方式做調查（例如改從 `Sidebar` 做 dynamic import）。
 
-2. **以執行期圖示名稱查找取代按需圖示元件匯入**（對應 #382）。`Chatroom.tsx`、`Sidebar.tsx`、`MobileNav.tsx` 皆匯入 `{ Icon } from "@iconify/react"`，並透過執行期字串查找 API 渲染圖示（`<Icon icon="bx:home" />`）。專案已在相依套件中包含 `@iconify-react/boxicons`（一個可依需求 tree-shake 的逐圖示元件套件），但目前沒有任何檔案從中匯入具名圖示元件。改為按需匯入可讓未使用的圖示被 tree-shake 掉，而非在每個路由都透過 `iconify.js` 執行期（約 17 KB）於執行期解析。
+2. **以執行期圖示名稱查找取代按需圖示元件匯入**（對應 #382）。`Chatroom.tsx`、`Sidebar.tsx`、`MobileNav.tsx` 皆匯入 `{ Icon } from "@iconify/react"`，並透過執行期字串查找 API 渲染圖示（`<Icon icon="bx:home" />`）。專案已相依 `@iconify-react/boxicons`，但它是一個「逐圖示 subpath」套件，並非從套件根目錄具名匯出：每個圖示都是各自 subpath 下的 default export，例如 `import Home from "@iconify-react/boxicons/home";`（已透過 `node_modules/@iconify-react/boxicons/package.json` 的 `exports` map 確認——套件根目錄並無具名匯出形式）。目前沒有任何檔案從這些 subpath 匯入。改為此逐圖示 default import 形式，可讓未使用的圖示被 tree-shake 掉，而非在每個路由都透過 `iconify.js` 執行期（約 17 KB）於執行期解析。
 
 3. **每個路由的 client chunk 清單都列出舊版瀏覽器 `nomodule` polyfill bundle**（對應 #380）。如上方所述，`polyfill-nomodule.js`（約 112 KB）是 Next.js 針對不支援 `<script type="module">` 瀏覽器的預設 fallback bundle；現代瀏覽器不會執行它，但 analyzer 的靜態檔案清單仍在每個路由中列出它，值得先確認本專案實際支援的瀏覽器矩陣是否真的不需要它，再視為可捨棄的成本。此處僅將其標記為 #380（Turbopack 程式碼分割策略／限制調查）的調查候選項目，而非已確認可移除、或實際會被執行的成本。
 
