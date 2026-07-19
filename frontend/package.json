@@ -6,7 +6,8 @@
     "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "analyze": "next experimental-analyze --output"
   },
   "dependencies": {
     "@iconify-react/boxicons": "^1.0.2",
