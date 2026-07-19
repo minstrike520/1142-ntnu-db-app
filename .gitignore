@@ -49,6 +49,7 @@ yarn-error.log*
 .omc/
 .agents/
 .gemini/
+.codex/
 
 # MCP server (local tool, not for repo)
 mcp/
