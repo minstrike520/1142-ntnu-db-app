@@ -92,7 +92,7 @@ specify known properties, and 'splitChunks' does not exist in type 'TurbopackOpt
 - 未來若加入任何 `turbopack.*` 設定,只會影響 `next build`(及 `pnpm run analyze`),**不影響** dev server;反之 `webpack()` callback 只影響 dev、被 production build 忽略。對任何未來的 bundler 層設定而言,這種分裂是明顯的陷阱——這也是讓 `next.config.ts` 維持 bundler 中立的又一理由(目前它既無 `webpack` 也無 `turbopack` 鍵)。
 - dev/prod 行為漂移(模組解析、HMR 語意、CSS 處理)理論上可能,但目前尚未觀察到實際問題。
 
-**建議:** 統一 dev 也使用 Turbopack(`next dev` 去掉 `--webpack`)——但應另開獨立 issue、附獨立驗證(dev server 的 HMR、CSS、socket.io client 行為煙霧測試),不搭在本文件 PR 上。在那之前,「只有單一 bundler 會讀取的設定」應視為 code review 的警訊。
+**建議:** 統一 dev 也使用 Turbopack(`next dev` 去掉 `--webpack`)——已由 #387 獨立追蹤,並附獨立驗證(dev server 的 HMR、CSS、Socket.IO client 行為煙霧測試),不搭在本文件 PR 上。在那之前,「只有單一 bundler 會讀取的設定」應視為 code review 的警訊。
 
 ## 問題 4:約 112 KB 的 `polyfill-nomodule.js`(基準文件候選 3)
 
