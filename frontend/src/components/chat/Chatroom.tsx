@@ -12,7 +12,12 @@ import { ChatBubble } from "@/components/ui/ChatBubble";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
-import { Icon } from "@iconify/react";
+import SliderVerticalIcon from "@iconify-react/boxicons/slider-vertical";
+import SearchIcon from "@iconify-react/boxicons/search";
+import DotsHorizontalRoundedIcon from "@iconify-react/boxicons/dots-horizontal-rounded";
+import SidebarRightIcon from "@iconify-react/boxicons/sidebar-right";
+import XIcon from "@iconify-react/boxicons/x";
+import PaperclipIcon from "@iconify-react/boxicons/paperclip";
 
 interface ChatroomProps {
   roomId: string;
@@ -523,7 +528,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
               onClick={onOpenGroupSettings}
               className="py-1 px-3 text-xs flex items-center gap-1.5"
             >
-              <Icon icon="boxicons:slider-vertical" className="h-3.5 w-3.5" />
+              <SliderVerticalIcon aria-hidden="true" className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">{t("chatroom.groupSettings")}</span>
             </Button>
           )}
@@ -537,7 +542,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
             }`}
             title={isSearchOpen ? t("chatroom.closeSearch") : t("chatroom.searchMessages")}
           >
-            <Icon icon="boxicons:search" className="h-4 w-4" />
+            <SearchIcon aria-hidden="true" className="h-4 w-4" />
           </button>
 
           <Dropdown
@@ -546,7 +551,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
                 className="p-1.5 border border-border-secondary hover:border-border-primary rounded-sm text-text-muted hover:text-foreground transition-colors cursor-pointer"
                 title={t("chatroom.chatOptions")}
               >
-                <Icon icon="bx:dots-horizontal-rounded" className="h-4 w-4" />
+                <DotsHorizontalRoundedIcon aria-hidden="true" className="h-4 w-4" />
               </button>
             }
             items={[
@@ -576,7 +581,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
             }`}
             title={showRightPanel ? t("chatroom.hideInfoPanel") : t("chatroom.showInfoPanel")}
           >
-            <Icon icon="boxicons:sidebar-right" className="h-4 w-4" />
+            <SidebarRightIcon aria-hidden="true" className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -584,7 +589,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
       {/* Search Bar */}
       {isSearchOpen && (
         <div className="border-b border-border-primary bg-surface-card px-3 md:px-6 py-2 flex items-center gap-2 shrink-0">
-          <Icon icon="boxicons:search" className="h-4 w-4 text-text-muted shrink-0" />
+          <SearchIcon aria-hidden="true" className="h-4 w-4 text-text-muted shrink-0" />
           <input
             ref={searchInputRef}
             type="text"
@@ -604,7 +609,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
             onClick={handleToggleSearch}
             className="p-0.5 text-text-muted hover:text-foreground transition-colors cursor-pointer shrink-0"
           >
-            <Icon icon="boxicons:x" className="h-4 w-4" />
+            <XIcon aria-hidden="true" className="h-4 w-4" />
           </button>
         </div>
       )}
@@ -786,7 +791,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
             onClick={() => setReplyTarget(null)}
             className="text-text-muted hover:text-foreground cursor-pointer p-0.5 border border-transparent hover:border-border-primary rounded-sm ml-4"
           >
-            <Icon icon="boxicons:x" className="h-3.5 w-3.5" />
+            <XIcon aria-hidden="true" className="h-3.5 w-3.5" />
           </button>
         </div>
       )}
@@ -861,7 +866,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
                 title={t("chatroom.uploadAttachment")}
                 className="p-2.5 border border-border-secondary hover:border-border-primary rounded-sm text-text-muted hover:text-foreground transition-colors cursor-pointer shrink-0 mb-0.5"
               >
-                <Icon icon="boxicons:paperclip" className="h-4 w-4" />
+                <PaperclipIcon aria-hidden="true" className="h-4 w-4" />
               </button>
               <div className="relative flex-1">
                 {editingMessage && (

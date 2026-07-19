@@ -16,9 +16,6 @@ importers:
       '@iconify-react/boxicons':
         specifier: ^1.0.2
         version: 1.0.2(react@19.2.7)
-      '@iconify/react':
-        specifier: ^6.0.2
-        version: 6.0.2(react@19.2.7)
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -255,11 +252,6 @@ packages:
     resolution: {integrity: sha512-k33FKG4jGgd8odos+1HdSwCKZOQ5F1heQxwl/zDrA53tLg5IseDPMqsmQbcCEZ6E0Zgcrmfo4ceFSBmbuEvGtw==}
     peerDependencies:
       react: '>=18.0.0'
-
-  '@iconify/react@6.0.2':
-    resolution: {integrity: sha512-SMmC2sactfpJD427WJEDN6PMyznTFMhByK9yLW0gOTtnjzzbsi/Ke/XqsumsavFPwNiXs8jSiYeZTmLCLwO+Fg==}
-    peerDependencies:
-      react: '>=16'
 
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
@@ -2333,11 +2325,6 @@ snapshots:
       - react
 
   '@iconify/css-react@1.0.2(react@19.2.7)':
-    dependencies:
-      '@iconify/types': 2.0.0
-      react: 19.2.7
-
-  '@iconify/react@6.0.2(react@19.2.7)':
     dependencies:
       '@iconify/types': 2.0.0
       react: 19.2.7
