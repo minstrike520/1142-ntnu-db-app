@@ -51,7 +51,6 @@ describe('userController', () => {
     getEmergencyContacts: vi.fn(),
     upsertEmergencyContact: vi.fn(),
     deleteEmergencyContact: vi.fn(),
-    triggerEmergencyAlert: vi.fn(),
     checkInactivity: vi.fn(),
   } as any;
   const ctrl = makeUserController(service);
@@ -255,16 +254,7 @@ describe('userController', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true });
   });
 
-  it('triggers emergency alerts', async () => {
-    service.triggerEmergencyAlert.mockResolvedValue({ alerted: true });
-    const res = mockRes();
-    const next = vi.fn();
 
-    await ctrl.triggerEmergencyAlert(authedReq({ body: { message: 'help' } }), res, next);
-
-    expect(res.status).toHaveBeenCalledWith(202);
-    expect(res.json).toHaveBeenCalledWith({ alerted: true });
-  });
 
   it('checks inactivity alerts', async () => {
     service.checkInactivity.mockResolvedValue({ alerted: true });
@@ -300,7 +290,6 @@ describe('userController', () => {
     ['updateMySettings', (c: any) => c.updateMySettings, authedReq({ body: { warningEnabled: true, warningDays: 1 } })],
     ['deleteMe', (c: any) => c.deleteMe, authedReq()],
     ['getEmergencyContacts', (c: any) => c.getEmergencyContacts, authedReq()],
-    ['triggerEmergencyAlert', (c: any) => c.triggerEmergencyAlert, authedReq({ body: { message: 'help' } })],
     ['checkEmergencyInactivity', (c: any) => c.checkEmergencyInactivity, authedReq()],
     ['search', (c: any) => c.search, authedReq({ query: { q: 'alice' } })],
   ];
@@ -313,7 +302,6 @@ describe('userController', () => {
         : name === 'updateMySettings' ? 'updateMySettings'
         : name === 'deleteMe' ? 'deleteMe'
         : name === 'getEmergencyContacts' ? 'getEmergencyContacts'
-        : name === 'triggerEmergencyAlert' ? 'triggerEmergencyAlert'
         : name === 'checkEmergencyInactivity' ? 'checkInactivity'
         : name === 'search' ? 'search'
         : name === 'uploadAvatar' ? 'uploadAvatar'
@@ -344,13 +332,7 @@ describe('userController', () => {
     expect(next).toHaveBeenCalledWith(err);
   });
 
-  it('sends undefined message to triggerEmergencyAlert when body.message is empty string', async () => {
-    service.triggerEmergencyAlert.mockResolvedValue({ alerted: false, recipients: [] });
-    const res = mockRes();
-    const next = vi.fn();
-    await ctrl.triggerEmergencyAlert(authedReq({ body: { message: '' } }), res, next);
-    expect(service.triggerEmergencyAlert).toHaveBeenCalledWith('user-1', undefined);
-  });
+
 
   it('passes ValidationError to next when checkEmergencyInactivity receives invalid date string', async () => {
     const res = mockRes();

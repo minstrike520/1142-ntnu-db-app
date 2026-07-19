@@ -1,6 +1,6 @@
 services:
   db-test:
-    image: postgres:16
+    image: postgres:18-alpine
     ports:
       - "5436:5432"
     environment:
@@ -10,7 +10,7 @@ services:
     networks:
       - app_network
     tmpfs:
-      - /var/lib/postgresql/data
+      - /var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 2s

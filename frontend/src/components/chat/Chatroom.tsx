@@ -76,6 +76,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     setShowRightPanel,
     typingUsers,
     groupReadStates,
+    markRoomAsRead,
   } = useChat();
 
   const [inputText, setInputText] = useState("");
@@ -90,11 +91,15 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [msgSearchQuery, setMsgSearchQuery] = useState("");
   const messageEndRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const { t } = useTranslation();
   const [isMultiLine, setIsMultiLine] = useState(false);
+  const [currentRoomUnreadId, setCurrentRoomUnreadId] = useState<string | null>(null);
+  const [hasInitializedUnread, setHasInitializedUnread] = useState(false);
   const maxMessageLength = Number(process.env.NEXT_PUBLIC_MAX_MESSAGE_LENGTH || 1000);
 
   const activeRoom = rooms.find((r) => r.id === roomId);
@@ -149,20 +154,131 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     setIsUploadingAttachment(false);
     setInputText("");
     setReplyTarget(null);
+    setHasInitializedUnread(false);
+    setCurrentRoomUnreadId(null);
   }
 
-  // Scroll to bottom when room or messages change
+  // Track whether the user is at the bottom of the message list
+  useEffect(() => {
+    const el = scrollAreaRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      if (atBottom && !isAtBottomRef.current) {
+        isAtBottomRef.current = true;
+        markRoomAsRead(roomId);
+      } else if (!atBottom) {
+        isAtBottomRef.current = false;
+      }
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [roomId, markRoomAsRead]);
+
+  // Track user interactions to mark room as read when at the bottom
+  useEffect(() => {
+    const el = scrollAreaRef.current;
+    if (!el) return;
+
+    const handleInteraction = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      if (atBottom) {
+        markRoomAsRead(roomId);
+      }
+    };
+
+    window.addEventListener("click", handleInteraction, { passive: true });
+    window.addEventListener("keydown", handleInteraction, { passive: true });
+
+    return () => {
+      window.removeEventListener("click", handleInteraction);
+      window.removeEventListener("keydown", handleInteraction);
+    };
+  }, [roomId, markRoomAsRead]);
+
+  // Initialize unread message ID for the current session (once per roomId entry)
+  useEffect(() => {
+    if (hasInitializedUnread) return;
+
+    const room = rooms.find((r) => r.id === roomId);
+    if (!room) return;
+
+    const roomMsgs = messages.filter((m) => m.roomId === roomId);
+    const hasMessagesExpected = !!(room.lastMessagePreview || room.lastMessageAt);
+
+    if (hasMessagesExpected && roomMsgs.length === 0) {
+      return;
+    }
+
+    const myLastReadId =
+      groupReadStates[roomId]?.[user.userId ?? ""] ??
+      room.lastReadId ??
+      room.members?.find((m) => m.userId === user.userId)?.lastReadId ??
+      null;
+
+    const sortedMsgs = [...roomMsgs].sort((a, b) => {
+      const timeDiff = new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime();
+      if (timeDiff !== 0) return timeDiff;
+      return a.id.localeCompare(b.id);
+    });
+
+    let initialUnreadId: string | null = null;
+    if (myLastReadId) {
+      const lastReadIdx = sortedMsgs.findIndex((m) => m.id === myLastReadId);
+      const firstUnreadMsg = sortedMsgs.slice(lastReadIdx >= 0 ? lastReadIdx + 1 : 0).find((m) => m.senderId !== user.userId);
+      initialUnreadId = firstUnreadMsg?.id ?? null;
+    } else if (room.unreadCount && room.unreadCount > 0) {
+      const firstUnreadMsg = sortedMsgs.find((m) => m.senderId !== user.userId);
+      initialUnreadId = firstUnreadMsg?.id ?? null;
+    }
+
+    setTimeout(() => {
+      setCurrentRoomUnreadId(initialUnreadId);
+      setHasInitializedUnread(true);
+    }, 0);
+  }, [roomId, messages, rooms, groupReadStates, user.userId, hasInitializedUnread]);
+
   const lastScrolledRoomIdRef = useRef<string | null>(null);
   useLayoutEffect(() => {
+    const room = rooms.find((r) => r.id === roomId);
+    if (!room) return;
+
     if (lastScrolledRoomIdRef.current !== roomId) {
-      messageEndRef.current?.scrollIntoView({ behavior: "auto" });
-      if (messages.length > 0) {
-        lastScrolledRoomIdRef.current = roomId;
+      if (!hasInitializedUnread) {
+        return;
       }
-    } else {
+
+      lastScrolledRoomIdRef.current = roomId;
+
+      if (currentRoomUnreadId) {
+        const marker = scrollAreaRef.current?.querySelector("[data-unread-marker='true']");
+        const target = marker || scrollAreaRef.current?.querySelector(`[data-msg-id="${currentRoomUnreadId}"]`);
+        if (target) {
+          target.scrollIntoView({ behavior: "auto", block: "center" });
+          
+          // Check if scrolling actually put us at the bottom
+          const el = scrollAreaRef.current;
+          const atBottom = el ? el.scrollHeight - el.scrollTop - el.clientHeight < 80 : false;
+          if (atBottom) {
+            isAtBottomRef.current = true;
+          } else {
+            isAtBottomRef.current = false;
+          }
+        } else {
+          messageEndRef.current?.scrollIntoView({ behavior: "auto" });
+          isAtBottomRef.current = true;
+        }
+      } else {
+        messageEndRef.current?.scrollIntoView({ behavior: "auto" });
+        isAtBottomRef.current = true;
+        markRoomAsRead(roomId);
+      }
+    } else if (isAtBottomRef.current) {
+      // Same room, new messages — auto-scroll only if already at bottom
       messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      markRoomAsRead(roomId);
     }
-  }, [roomId, messages]);
+  }, [roomId, rooms, markRoomAsRead, currentRoomUnreadId, hasInitializedUnread]);
 
 
 
@@ -494,7 +610,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
       )}
 
       {/* Chat Messages Area */}
-      <div className="flex-1 overflow-y-auto p-3 md:p-6 flex flex-col gap-4">
+      <div ref={scrollAreaRef} className="flex-1 overflow-y-auto p-3 md:p-6 flex flex-col gap-4">
         {messages
           .filter((m) => {
             if (m.roomId !== activeRoom.id) return false;
@@ -505,14 +621,25 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
           .map((msg) => {
             if (msg.content.startsWith("[System] ")) {
               return (
-                <div
-                  key={msg.id}
-                  className="w-full flex justify-center my-2 select-none"
-                >
-                  <div className="bg-surface-card border border-border-secondary px-3 py-1 rounded-full text-xs text-text-muted">
-                    {msg.content.substring(9)}
+                <React.Fragment key={msg.id}>
+                  {currentRoomUnreadId === msg.id && (
+                    <div data-unread-marker="true" className="w-full flex items-center my-3 select-none">
+                      <div className="flex-1 border-t border-red-500/50"></div>
+                      <span className="px-3 text-red-500 text-xs font-semibold uppercase tracking-wider font-sans">
+                        {t("chatroom.newMessages")}
+                      </span>
+                      <div className="flex-1 border-t border-red-500/50"></div>
+                    </div>
+                  )}
+                  <div
+                    data-msg-id={msg.id}
+                    className="w-full flex justify-center my-2 select-none"
+                  >
+                    <div className="bg-surface-card border border-border-secondary px-3 py-1 rounded-full text-xs text-text-muted">
+                      {msg.content.substring(9)}
+                    </div>
                   </div>
-                </div>
+                </React.Fragment>
               );
             }
 
@@ -542,69 +669,106 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
             const canRecall = Boolean(msg.isOutgoing) || isRoomOwner || canAdminRecall;
 
             return (
-              <div
-                key={msg.id}
-                className={`group/msg flex flex-col ${msg.isOutgoing ? "items-end" : "items-start"}`}
-              >
-                <ChatBubble
-                  content={msg.content}
-                  senderName={displayName}
-                  timestamp={msg.timestamp}
-                  isOutgoing={msg.isOutgoing}
-                  isHighEmphasis={msg.isOutgoing}
-                  isRecalled={msg.isRecalled}
-                  replyTo={msg.replyTo || undefined}
-                  attachments={msg.attachments}
-                  senderAvatar={
-                    msg.isOutgoing
-                      ? user.avatar
-                      : senderMember?.avatarUrl
-                      ? resolveAssetUrl(senderMember.avatarUrl)
-                      : undefined
-                  }
-                  isRead={isRead}
-                  readByAvatars={getReadAvatarsForMessage(activeRoom, msg)}
-                  roomType={activeRoom.type}
-                  senderId={msg.senderId || undefined}
-                  messageId={msg.id}
-                  onReply={() => setReplyTarget(msg)}
-                  onRecall={() => handleRecallMessage(msg.id)}
-                  onEdit={() => {
-                    setEditingMessage(msg);
-                    setInputText(msg.content);
-                    requestAnimationFrame(() => {
-                      inputRef.current?.focus();
-                    });
-                  }}
-                  canRecall={canRecall}
-                  canEdit={msg.isOutgoing && !msg.isRecalled}
-                  avatarName={
-                    msg.isOutgoing
-                      ? user.username
-                      : senderMember?.name || msg.senderName
-                  }
-                  searchHighlight={msgSearchQuery.trim() || undefined}
-                />
-
-                {!msg.isRecalled && (
-                  <div className="opacity-0 group-hover/msg:opacity-100 flex gap-2.5 mt-1 select-none text-[10px] text-text-muted transition-opacity">
-                    <button
-                      onClick={() => setReplyTarget(msg)}
-                      className="hover:text-primary transition-colors cursor-pointer"
-                    >
-                      {t("chatroom.reply")}
-                    </button>
-                    {canRecall && (
-                      <button
-                        onClick={() => handleRecallMessage(msg.id)}
-                        className="hover:text-danger transition-colors cursor-pointer"
-                      >
-                        {t("chatroom.recall")}
-                      </button>
-                    )}
+              <React.Fragment key={msg.id}>
+                {currentRoomUnreadId === msg.id && (
+                  <div data-unread-marker="true" className="w-full flex items-center my-3 select-none">
+                    <div className="flex-1 border-t border-red-500/50"></div>
+                    <span className="px-3 text-red-500 text-xs font-semibold uppercase tracking-wider font-sans">
+                      {t("chatroom.newMessages")}
+                    </span>
+                    <div className="flex-1 border-t border-red-500/50"></div>
                   </div>
                 )}
-              </div>
+                <div
+                  data-msg-id={msg.id}
+                  className={`group/msg flex flex-col ${msg.isOutgoing ? "items-end" : "items-start"}`}
+                >
+                  <ChatBubble
+                    content={msg.content}
+                    senderName={displayName}
+                    timestamp={msg.timestamp}
+                    isOutgoing={msg.isOutgoing}
+                    isHighEmphasis={msg.isOutgoing}
+                    isRecalled={msg.isRecalled}
+                    replyTo={msg.replyTo || undefined}
+                    attachments={msg.attachments}
+                    senderAvatar={
+                      msg.isOutgoing
+                        ? user.avatar
+                        : senderMember?.avatarUrl
+                        ? resolveAssetUrl(senderMember.avatarUrl)
+                        : undefined
+                    }
+                    isRead={isRead}
+                    senderId={msg.senderId || undefined}
+                    messageId={msg.id}
+                    onReply={() => setReplyTarget(msg)}
+                    onRecall={() => handleRecallMessage(msg.id)}
+                    onEdit={() => {
+                      setEditingMessage(msg);
+                      setInputText(msg.content);
+                      requestAnimationFrame(() => {
+                        inputRef.current?.focus();
+                      });
+                    }}
+                    canRecall={canRecall}
+                    canEdit={msg.isOutgoing && !msg.isRecalled}
+                    avatarName={
+                      msg.isOutgoing
+                        ? user.username
+                        : senderMember?.name || msg.senderName
+                    }
+                    searchHighlight={msgSearchQuery.trim() || undefined}
+                  />
+
+                  {/* Render read receipt avatars on the far right of the screen */}
+                  {((activeRoom.type === "group" || activeRoom.type === "msg") &&
+                    getReadAvatarsForMessage(activeRoom, msg).length > 0) && (
+                    <div className="self-stretch flex gap-1 mt-1 justify-end px-0.5 select-none">
+                      {getReadAvatarsForMessage(activeRoom, msg).map((reader, idx) => (
+                        <div
+                          key={idx}
+                          className="h-4.5 w-4.5 border border-border-primary bg-surface-muted rounded-sm overflow-hidden flex items-center justify-center"
+                          title={reader.displayName || reader.name}
+                        >
+                          {reader.avatarUrl ? (
+                            /* eslint-disable-next-line @next/next/no-img-element */
+                            <img src={resolveAssetUrl(reader.avatarUrl)} alt={reader.name} className="h-full w-full object-cover" />
+                          ) : (
+                            <span className="text-[8px] font-bold leading-none">
+                              {reader.name
+                                .split(" ")
+                                .map((n) => n[0])
+                                .join("")
+                                .slice(0, 2)
+                                .toUpperCase() || "U"}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {!msg.isRecalled && (
+                    <div className="opacity-0 group-hover/msg:opacity-100 flex gap-2.5 mt-1 select-none text-[10px] text-text-muted transition-opacity">
+                      <button
+                        onClick={() => setReplyTarget(msg)}
+                        className="hover:text-primary transition-colors cursor-pointer"
+                      >
+                        {t("chatroom.reply")}
+                      </button>
+                      {canRecall && (
+                        <button
+                          onClick={() => handleRecallMessage(msg.id)}
+                          className="hover:text-danger transition-colors cursor-pointer"
+                        >
+                          {t("chatroom.recall")}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </React.Fragment>
             );
           })}
         <div ref={messageEndRef} />
@@ -614,7 +778,9 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
         <div className="bg-surface-muted border-t border-border-primary px-3 md:px-6 py-2 flex items-center justify-between text-xs select-none">
           <div className="flex-1 min-w-0 border-l-2 border-primary pl-2">
             <span className="font-bold text-foreground block">{t("chatroom.replyTo", { name: activeRoom.members?.find((m) => m.userId === replyTarget.senderId)?.nickname || replyTarget.senderName })}</span>
-            <p className="text-text-muted truncate mt-0.5">{replyTarget.content}</p>
+            <p className="text-text-muted truncate mt-0.5">
+              {replyTarget.content || replyTarget.attachments?.[0]?.filename}
+            </p>
           </div>
           <button
             onClick={() => setReplyTarget(null)}

@@ -180,4 +180,32 @@ describe('MessageRepository (pg)', () => {
     const missing = await repo.findById('00000000-0000-0000-0000-000000000000');
     expect(missing).toBeNull();
   });
+
+  it('markRecalled hides attachments from the recalled message and future fetches', async () => {
+    const senderId = await createUser('recall-attachment-sender@test.com');
+    const roomId = await createRoom();
+    const attachmentRes = await testPool.query(
+      `INSERT INTO attachments (uploaded_by, file_path, file_type, original_name)
+       VALUES ($1, $2, $3, $4)
+       RETURNING attachment_id`,
+      [senderId, 'uploads/recall-test.txt', 'text/plain', 'recall-test.txt'],
+    );
+    const attachmentId = attachmentRes.rows[0].attachment_id as string;
+
+    const created = await repo.create({
+      roomId,
+      senderId,
+      content: 'recall me with an attachment',
+      attachmentIds: [attachmentId],
+    });
+    expect(created.attachments).toHaveLength(1);
+
+    const recalled = await repo.markRecalled(created.messageId);
+    expect(recalled.isRecalled).toBe(true);
+    expect(recalled.attachments).toBeUndefined();
+
+    const messages = await repo.findByRoom(roomId, { limit: 10 });
+    expect(messages[0].isRecalled).toBe(true);
+    expect(messages[0].attachments).toBeUndefined();
+  });
 });

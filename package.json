@@ -1,0 +1,12 @@
+{
+  "name": "near-chat",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "docker compose up -d",
+    "build": "pnpm --filter frontend build && pnpm --filter backend build"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

@@ -388,7 +388,13 @@ export default function ProfileSettings() {
           <option value="zh-TW">繁體中文</option>
           <option value="en">English</option>
         </select>
+
+        <SectionTitle title={t("profile.appInfo")} />
+        <div className="text-sm text-foreground/70">
+          {t("profile.version")}：v {process.env.NEXT_PUBLIC_APP_VERSION}
+        </div>
       </div>
+
 
       <div className="mt-12 max-w-4xl border border-border-primary rounded-lg p-6 bg-surface-card">
         <h3 className="text-lg font-semibold text-foreground mb-2">{t("sidebar.logout")}</h3>

@@ -50,7 +50,10 @@
   "mainRedirect": {
     "emptyChats": "No chat rooms yet",
     "emptyChatsDesc": "Head to the Friends page to start a private chat, or create a new group from the sidebar",
-    "goToFriends": "Go to Friends"
+    "goToFriends": "Go to Friends",
+    "welcome": "Welcome to Near Chat",
+    "selectChat": "Select a chat room to start messaging",
+    "selectChatDesc": "Choose a conversation from the sidebar or start a new one with your friends."
   },
   "profilePage": {
     "title": "Profile settings"
@@ -129,6 +132,8 @@
   },
   "profile": {
     "profile": "Profile",
+    "appInfo": "Application Info",
+    "version": "Version",
     "changeAvatar": "Change avatar",
     "userId": "User ID",
     "username": "Username",
@@ -216,7 +221,8 @@
     "copyText": "Copy Text",
     "messageRecalled": "Message recalled",
     "downloadingAttachment": "Downloading attachment",
-    "downloadAttachment": "Download attachment"
+    "downloadAttachment": "Download attachment",
+    "newMessages": "New Messages"
   },
   "profileCard": {
     "myInfo": "My Info",

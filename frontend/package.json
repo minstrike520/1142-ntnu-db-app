@@ -1,5 +1,5 @@
 {
-  "name": "frontend",
+  "name": "near-chat-frontend",
   "version": "1.0.0",
   "private": true,
   "scripts": {
@@ -23,8 +23,10 @@
     "@types/node": "^25.7.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "babel-plugin-react-compiler": "^1.0.0",
     "eslint": "^9.39.0",
     "eslint-config-next": "16.2.6",
+    "eslint-plugin-react-compiler": "19.1.0-rc.2",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3"
   }

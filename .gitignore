@@ -41,6 +41,7 @@ yarn-error.log*
 *.swp
 *.swo
 *~
+.zed
 
 # AI Agent Worktrees
 .antigravitycli

@@ -11,7 +11,8 @@ USER node
 
 COPY --chown=node:node package.json pnpm-lock.yaml ./
 
-RUN pnpm install --no-frozen-lockfile --ignore-scripts
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
+    pnpm install --store-dir /pnpm/store --no-frozen-lockfile --ignore-scripts
 
 COPY --chown=node:node . .
 

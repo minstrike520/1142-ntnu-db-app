@@ -22,7 +22,6 @@ interface UserService {
   getEmergencyContacts(userId: string): Promise<any>;
   upsertEmergencyContact(userId: string, contactId: string, message: string): Promise<{ contact: any, isUpdate: boolean }>;
   deleteEmergencyContact(userId: string, contactId: string): Promise<void>;
-  triggerEmergencyAlert(userId: string, message?: string): Promise<any>;
   checkInactivity(userId: string, now?: Date): Promise<any>;
 }
 
@@ -142,18 +141,6 @@ export const makeUserController = (service: UserService) => ({
     }
   },
 
-  async triggerEmergencyAlert(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const userId = req.user!.userId;
-      const message = typeof req.body?.message === 'string' && req.body.message.trim()
-        ? req.body.message.trim()
-        : undefined;
-      const result = await service.triggerEmergencyAlert(userId, message);
-      res.status(202).json(result);
-    } catch (err) {
-      next(err);
-    }
-  },
 
   async checkEmergencyInactivity(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

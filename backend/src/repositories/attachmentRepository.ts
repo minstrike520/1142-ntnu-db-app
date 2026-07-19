@@ -13,7 +13,10 @@ export class AttachmentRepository {
 
   async findById(attachmentId: string): Promise<any> {
     const res = await this.pool.query(
-      'SELECT * FROM attachments WHERE attachment_id = $1',
+      `SELECT a.*, m.is_recalled AS message_is_recalled
+       FROM attachments a
+       LEFT JOIN messages m ON m.message_id = a.message_id
+       WHERE a.attachment_id = $1`,
       [attachmentId]
     );
     return res.rows[0] || null;

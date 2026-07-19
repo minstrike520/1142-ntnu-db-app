@@ -57,4 +57,8 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 - The active branch is `dev`.
 - Code changes should be verified with TypeScript compiler checks (`pnpm exec tsc --noEmit` on both backend and frontend) and E2E/integration tests.
 
+### 5. GitHub Text Language
+- Write all human-readable GitHub text in **Traditional Chinese (繁體中文)**: PR titles (the description after the conventional-commit prefix), PR bodies, and Issue titles/bodies/comments.
+- Keep structural tokens and code in English: the conventional-commit type prefix (e.g. `fix:`, `docs:`), `Closes #<n>`, branch names, file paths, code identifiers, and any trailer/footer lines.
+
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->

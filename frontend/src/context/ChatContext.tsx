@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { resolveAssetUrl } from "@/lib/assets";
 import type {
@@ -50,7 +50,6 @@ import {
   respondFriendRequest,
   searchUsers,
   sendFriendRequest as sendFriendRequestApi,
-  triggerEmergencyAlert as triggerEmergencyAlertApi,
   unblockUser as unblockUserApi,
   updateFolderRooms,
   updateMe,
@@ -156,8 +155,6 @@ export interface User {
   notifySound?: boolean;
   warningEnabled?: boolean;
   warningDays?: number;
-  demoWarningEnabled?: boolean;
-  demoWarningSeconds?: number;
   lastActivity?: Date | string;
   roomOrder?: Record<string, string[]>;
 }
@@ -199,16 +196,10 @@ export interface EmergencyContact {
 export interface EmergencySettings {
   warningEnabled: boolean;
   warningDays: number;
-  demoWarningEnabled: boolean;
-  demoWarningSeconds: number;
   contacts: EmergencyContact[];
 }
 
-interface TriggerEmergencyAlertResult {
-  alerted: boolean;
-  recipients: string[];
-  reason?: string;
-}
+
 
 export type UiLanguage = "zh-TW" | "en";
 
@@ -323,12 +314,12 @@ interface ChatContextType {
   blockFriend: (friendId: string) => Promise<void>;
   unblockUser: (blockedId: string) => Promise<void>;
   saveEmergencySettings: (settings: EmergencySettings) => Promise<void>;
-  triggerEmergencyAlertNow: (message?: string) => Promise<TriggerEmergencyAlertResult>;
   setUiLanguage: (language: UiLanguage) => void;
   activeProfilePopover: { instanceId: string; userId: string } | null;
   setActiveProfilePopover: React.Dispatch<React.SetStateAction<{ instanceId: string; userId: string } | null>>;
   refreshSocialData: () => Promise<void>;
   updateRoomSorting: (nextOrder: Record<string, string[]>) => Promise<void>;
+  markRoomAsRead: (roomId: string) => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -347,9 +338,6 @@ const toStoredUser = (
   notifyDesktop: settings?.notifyDesktop ?? true,
   notifySound: settings?.notifySound ?? true,
   warningEnabled: settings?.warningEnabled ?? false,
-  warningDays: settings?.warningDays ?? 0,
-  demoWarningEnabled: settings?.demoWarningEnabled ?? false,
-  demoWarningSeconds: settings?.demoWarningSeconds ?? 30,
   lastActivity: profile.lastActivity,
   roomOrder: settings?.roomOrder ?? {},
 });
@@ -447,7 +435,9 @@ const hydrateReplyTargets = (items: Message[]): Message[] => {
 
     const nextReplyTo = {
       senderName: replyTarget.senderName,
-      content: replyTarget.isRecalled ? "" : replyTarget.content,
+      content: replyTarget.isRecalled
+        ? ""
+        : replyTarget.content || replyTarget.attachments?.[0]?.filename || "",
     };
 
     if (
@@ -542,13 +532,6 @@ const mapFolders = (apiFolders: ApiFolder[], currentFolders: Folder[]): Folder[]
 const normalizeLanguage = (language?: string): UiLanguage =>
   language === "zh-TW" || language === "en" ? language : "en";
 
-const formatUploadedAttachmentsMessage = (language: UiLanguage, fileNames: string[]) => {
-  if (fileNames.length === 1) {
-    return language === "zh-TW" ? `已上傳附件：${fileNames[0]}` : `Shared attachment: ${fileNames[0]}`;
-  }
-  return language === "zh-TW" ? `已上傳了 ${fileNames.length} 個附件` : `Shared ${fileNames.length} attachments`;
-};
-
 const mapFriend = (item: FriendResponse, emergencyContactIds: Set<string>): Friend => ({
   id: item.friend.userId,
   name: item.friend.name,
@@ -627,23 +610,6 @@ const sortMessages = (items: Message[]) =>
     return a.id.localeCompare(b.id);
   });
 
-const computeUnreadCount = (
-  roomMessages: Message[],
-  currentUserId?: string,
-  lastReadId?: string | null,
-) => {
-  if (!roomMessages.length) return 0;
-
-  const firstUnreadIndex = lastReadId
-    ? roomMessages.findIndex((message) => message.id === lastReadId) + 1
-    : 0;
-
-  return roomMessages
-    .slice(Math.max(firstUnreadIndex, 0))
-    .filter((message) => message.senderId !== currentUserId)
-    .length;
-};
-
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -674,8 +640,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [emergencySettings, setEmergencySettings] = useState<EmergencySettings>({
     warningEnabled: false,
     warningDays: 0,
-    demoWarningEnabled: false,
-    demoWarningSeconds: 30,
     contacts: [],
   });
   const [selectedFriendForSidebar, setSelectedFriendForSidebar] = useState<Friend | null>(null);
@@ -693,6 +657,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     activeRoomIdRef.current = activeRoomId;
   }, [activeRoomId]);
+
 
   const loadGroupMembers = async (roomId: string): Promise<Member[]> => {
     if (!token) return [];
@@ -752,6 +717,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const clearSession = () => {
     localStorage.removeItem("user");
+    localStorage.removeItem("theme");
+    localStorage.removeItem("language");
+    localStorage.removeItem("notify-desktop");
+    localStorage.removeItem("notify-sound");
+    localStorage.removeItem("near:roomOrder");
+    localStorage.removeItem("just_registered");
     setActiveAccessToken(null);
     setToken(null);
     setCurrentUserId(undefined);
@@ -764,7 +735,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     socketRef.current = null;
   };
 
-  const loadMessagesForRooms = async (authToken: string, nextRooms: ChatRoom[], userId?: string) => {
+  const loadMessagesForRooms = useCallback(async (authToken: string, nextRooms: ChatRoom[], userId?: string) => {
     const roomMessages = await Promise.all(
       nextRooms.map(async (room) => {
         try {
@@ -782,7 +753,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }),
     );
     setMessages(hydrateReplyTargets(roomMessages.flat()));
-  };
+  }, [user.username]);
+
+  useEffect(() => {
+    if (!token || !activeRoomId) return;
+
+    const activeRoom = roomsRef.current.find((r) => r.id === activeRoomId);
+    if (activeRoom) {
+      void loadMessagesForRooms(token, [activeRoom], currentUserId);
+    }
+  }, [activeRoomId, token, currentUserId, loadMessagesForRooms]);
 
   const refreshRoomsAndFolders = async (authToken: string, userId = currentUserId) => {
     const [apiRooms, apiFolders] = await Promise.all([listRooms(authToken), listFolders(authToken)]);
@@ -790,7 +770,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     setFolders((current) => mapFolders(apiFolders, current));
     setRooms(nextRooms);
-    void loadMessagesForRooms(authToken, nextRooms, userId);
+    const activeRoom = nextRooms.find((r) => r.id === activeRoomIdRef.current);
+    void loadMessagesForRooms(authToken, activeRoom ? [activeRoom] : [], userId);
     setRoomsInitialized(true);
   };
 
@@ -835,8 +816,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setEmergencySettings({
           warningEnabled: settings?.warningEnabled ?? user.warningEnabled ?? false,
           warningDays: settings?.warningDays ?? user.warningDays ?? 0,
-          demoWarningEnabled: settings?.demoWarningEnabled ?? user.demoWarningEnabled ?? false,
-          demoWarningSeconds: settings?.demoWarningSeconds ?? user.demoWarningSeconds ?? 30,
           contacts,
         });
       } catch (error) {
@@ -852,6 +831,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- canonical SSR mounted flag; must flip after hydration
     setIsMounted(true);
+    console.log(`Near Chat client successfully initialized (v${process.env.NEXT_PUBLIC_APP_VERSION || '1.0.0'})`);
   }, []);
 
   useEffect(() => {
@@ -995,6 +975,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const withoutDuplicate = current.filter((message) => message.id !== incoming.id);
         return hydrateReplyTargets(sortMessages([...withoutDuplicate, incoming]));
       });
+
+      // Update the sender's read receipt (since they sent it, they've read it!)
+      const senderId = incoming.senderId;
+      if (senderId) {
+        setGroupReadStates((current) => ({
+          ...current,
+          [incoming.roomId]: {
+            ...(current[incoming.roomId] ?? {}),
+            [senderId]: incoming.id,
+          },
+        }));
+      }
+
       setRooms((current) =>
         current.map((room) =>
           room.id === incoming.roomId
@@ -1002,6 +995,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 ...room,
                 lastMessagePreview: summarizeMessagePreview(incoming),
                 lastMessageAt: incoming.timestamp,
+                unreadCount:
+                  activeRoomIdRef.current === room.id
+                    ? 0
+                    : incoming.senderId === currentUserId
+                    ? (room.unreadCount ?? 0)
+                    : (room.unreadCount ?? 0) + 1,
+                lastReadId: incoming.senderId === currentUserId ? incoming.id : room.lastReadId,
+                members: room.members?.map((member) =>
+                  member.userId === incoming.senderId
+                    ? { ...member, lastReadId: incoming.id }
+                    : member
+                ),
               }
             : room,
         ),
@@ -1011,7 +1016,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setMessages((current) =>
         hydrateReplyTargets(
           current.map((message) =>
-            message.id === messageId ? { ...message, isRecalled: true, content: "" } : message,
+            message.id === messageId
+              ? { ...message, isRecalled: true, content: "", attachments: [] }
+              : message,
           ),
         ),
       );
@@ -1037,19 +1044,28 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }));
       setRooms((current) =>
         current.map((room) => {
-          if (room.id !== roomId || !room.members) return room;
+          if (room.id !== roomId) return room;
 
-          let memberChanged = false;
-          const nextMembers = room.members.map((member) => {
-            if (member.userId !== userId || member.lastReadId === messageId) {
-              return member;
-            }
+          let roomChanged = false;
+          const nextRoom = { ...room };
 
-            memberChanged = true;
-            return { ...member, lastReadId: messageId };
-          });
+          if (userId === currentUserId && room.lastReadId !== messageId) {
+            nextRoom.lastReadId = messageId;
+            roomChanged = true;
+          }
 
-          return memberChanged ? { ...room, members: nextMembers } : room;
+          if (room.members) {
+            const nextMembers = room.members.map((member) => {
+              if (member.userId !== userId || member.lastReadId === messageId) {
+                return member;
+              }
+              roomChanged = true;
+              return { ...member, lastReadId: messageId };
+            });
+            nextRoom.members = nextMembers;
+          }
+
+          return roomChanged ? nextRoom : room;
         }),
       );
     });
@@ -1288,10 +1304,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     );
     const attachmentIds = uploadedResults.map((res) => res.attachmentId);
 
-    const fileNames = files.map((file) => file.name);
-    const content = options?.content?.trim()
-      ? options.content.trim()
-      : formatUploadedAttachmentsMessage(uiLanguage, fileNames);
+    const content = options?.content?.trim() ?? "";
 
     sendMessage(socketRef.current, {
       roomId,
@@ -1331,8 +1344,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             notifySound: user.notifySound ?? true,
             warningEnabled: user.warningEnabled ?? false,
             warningDays: user.warningDays ?? 14,
-            demoWarningEnabled: user.demoWarningEnabled ?? false,
-            demoWarningSeconds: user.demoWarningSeconds ?? 30,
           }),
         };
       };
@@ -1433,8 +1444,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         notifySound: updatedSettings.notifySound, 
         warningEnabled: updatedSettings.warningEnabled, 
         warningDays: updatedSettings.warningDays,
-        demoWarningEnabled: updatedSettings.demoWarningEnabled,
-        demoWarningSeconds: updatedSettings.demoWarningSeconds,
       };
     }
 
@@ -1576,15 +1585,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   // Lazy-load members for the active room (placed after loadGroupMembers so the
   // effect references it after declaration).
+  // Synchronize/load members for the active room whenever it changes
   useEffect(() => {
     if (!token || !activeRoomId) return;
 
-    const activeRoom = rooms.find((room) => room.id === activeRoomId);
-    if (!activeRoom || activeRoom.members?.length) return;
-
     void loadGroupMembers(activeRoomId).catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRoomId, rooms, token]);
+  }, [activeRoomId, token]);
 
   const saveGroupSettings = async (roomId: string, settings: GroupSettingsInput) => {
     if (!token) return;
@@ -1779,13 +1786,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const saveEmergencySettings = async (settings: EmergencySettings) => {
     if (!token) return;
     const nextWarningDays = settings.warningEnabled ? Math.max(1, settings.warningDays) : 0;
-    const nextDemoWarningSeconds = Math.max(1, settings.demoWarningSeconds);
-
     await updateMySettings(token, {
       warningEnabled: settings.warningEnabled,
       warningDays: nextWarningDays,
-      demoWarningEnabled: settings.demoWarningEnabled,
-      demoWarningSeconds: nextDemoWarningSeconds,
     });
 
     const nextContactIds = new Set(settings.contacts.map((contact) => contact.contactId));
@@ -1810,27 +1813,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       notifySound: user.notifySound ?? true,
       warningEnabled: settings.warningEnabled,
       warningDays: nextWarningDays,
-      demoWarningEnabled: settings.demoWarningEnabled,
-      demoWarningSeconds: nextDemoWarningSeconds,
     };
     await refreshSocialData(token, updatedSettings);
     const nextUser = {
       ...user,
       warningEnabled: updatedSettings.warningEnabled,
       warningDays: updatedSettings.warningDays,
-      demoWarningEnabled: updatedSettings.demoWarningEnabled,
-      demoWarningSeconds: updatedSettings.demoWarningSeconds,
     };
     localStorage.setItem("user", JSON.stringify(nextUser));
     setUser(nextUser);
-  };
-
-  const triggerEmergencyAlertNow = async (message?: string): Promise<TriggerEmergencyAlertResult> => {
-    if (!token) {
-      throw new Error("Not authenticated");
-    }
-
-    return triggerEmergencyAlertApi(token, message?.trim() ? message.trim() : undefined);
   };
 
   const setUiLanguage = (language: UiLanguage) => {
@@ -1855,13 +1846,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const nextRooms = current.map((room) => {
         const roomMessages = sortMessages(messagesByRoom[room.id] ?? []);
         const latestMessage = roomMessages.at(-1);
-        const roomLastReadId =
-          groupReadStates[room.id]?.[currentUserId] ??
-          room.lastReadId ??
-          room.members?.find((member) => member.userId === currentUserId)?.lastReadId ??
-          null;
         const nextUnreadCount =
-          activeRoomId === room.id ? 0 : computeUnreadCount(roomMessages, currentUserId, roomLastReadId);
+          activeRoomId === room.id ? 0 : (room.unreadCount ?? 0);
         const nextPreview = latestMessage ? summarizeMessagePreview(latestMessage) : room.lastMessagePreview;
         const nextLastMessageAt = latestMessage ? latestMessage.timestamp : room.lastMessageAt;
 
@@ -1886,14 +1872,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
   }, [activeRoomId, currentUserId, groupReadStates, messages]);
 
+  const prevActiveRoomIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!socketRef.current || !activeRoomId || !currentUserId) return;
+
+    // Skip on room entry — Chatroom calls markRoomAsRead once the user scrolls to the bottom
+    if (prevActiveRoomIdRef.current !== activeRoomId) {
+      prevActiveRoomIdRef.current = activeRoomId;
+      return;
+    }
 
     const activeRoom = roomsRef.current.find((room) => room.id === activeRoomId);
     if (!activeRoom) return;
 
     const roomMessages = sortMessages(messages.filter((message) => message.roomId === activeRoomId));
-    const latestIncoming = [...roomMessages].reverse().find((message) => message.senderId !== currentUserId);
+    const latestIncoming = roomMessages.at(-1);
     if (!latestIncoming) return;
 
     const currentLastReadId =
@@ -1916,6 +1910,33 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       },
     }));
   }, [activeRoomId, currentUserId, groupReadStates, messages]);
+
+  // Stable function for Chatroom to call when the user has scrolled to the bottom
+  const markRoomAsReadRef = useRef<((roomId: string) => void) | null>(null);
+  useLayoutEffect(() => {
+    markRoomAsReadRef.current = (roomId: string) => {
+      if (!socketRef.current || !currentUserId) return;
+      const room = roomsRef.current.find((r) => r.id === roomId);
+      if (!room) return;
+      const roomMessages = sortMessages(messages.filter((m) => m.roomId === roomId));
+      const latestIncoming = roomMessages.at(-1);
+      if (!latestIncoming) return;
+      const currentLastReadId =
+        groupReadStates[roomId]?.[currentUserId] ??
+        room.members?.find((m) => m.userId === currentUserId)?.lastReadId ??
+        null;
+      if (currentLastReadId === latestIncoming.id) return;
+      sendReadReceipt(socketRef.current, { roomId, messageId: latestIncoming.id });
+      setGroupReadStates((current) => ({
+        ...current,
+        [roomId]: { ...(current[roomId] ?? {}), [currentUserId]: latestIncoming.id },
+      }));
+    };
+  });
+
+  const markRoomAsRead = useCallback((roomId: string) => {
+    markRoomAsReadRef.current?.(roomId);
+  }, []);
 
   const derivedRooms = useMemo(() => {
     return rooms.map((room) => {
@@ -2025,7 +2046,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         blockFriend,
         unblockUser,
         saveEmergencySettings,
-        triggerEmergencyAlertNow,
         setUiLanguage,
         typingUsers,
         activeProfilePopover,
@@ -2034,6 +2054,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setHasUnsavedChanges,
         refreshSocialData: handleRefreshSocialData,
         updateRoomSorting,
+        markRoomAsRead,
       }}
     >
       {children}

@@ -48,7 +48,6 @@ describe('userService', () => {
       update: vi.fn(),
       delete: vi.fn(),
       findAllWarningEnabled: vi.fn(),
-      findAllDemoWarningEnabled: vi.fn(),
     };
     emergencyContactRepo = {
       findByUserId: vi.fn(),
@@ -469,26 +468,6 @@ describe('userService', () => {
       warningDays: 2,
     };
 
-    it('notifies emergency contacts for manual alerts', async () => {
-      mockRepo.findById.mockResolvedValue(inactiveUser);
-      emergencyContactRepo.findByUserId.mockResolvedValue([
-        {
-          userId: 'u1',
-          contactId: 'u2',
-          message: 'please check on me',
-          createdAt: new Date(),
-        },
-      ]);
-
-      const result = await userService.triggerEmergencyAlert('u1');
-
-      expect(result).toEqual({ alerted: true, recipients: ['u2'] });
-      expect(notifyEmergencyContact).toHaveBeenCalledWith('u2', {
-        userId: 'u1',
-        message: '(測試) please check on me',
-      });
-    });
-
     it('checks inactivity threshold and suppresses duplicate alerts', async () => {
       mockRepo.findById.mockResolvedValue(inactiveUser);
       emergencyContactRepo.recordAlertIfNew.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
@@ -507,6 +486,10 @@ describe('userService', () => {
       expect(first.alerted).toBe(true);
       expect(second).toEqual({ alerted: false, recipients: [], reason: 'ALREADY_ALERTED' });
       expect(notifyEmergencyContact).toHaveBeenCalledTimes(1);
+      expect(notifyEmergencyContact).toHaveBeenCalledWith('u2', {
+        userId: 'u1',
+        message: 'inactive',
+      });
     });
 
     it('does not alert below the inactivity threshold', async () => {
@@ -516,45 +499,6 @@ describe('userService', () => {
 
       expect(result).toEqual({ alerted: false, recipients: [], reason: 'BELOW_THRESHOLD' });
       expect(emergencyContactRepo.recordAlertIfNew).not.toHaveBeenCalled();
-    });
-
-    it('checks demo inactivity threshold and suppresses duplicate alerts', async () => {
-      const demoUser = {
-        ...baseUser(),
-        demoWarningEnabled: true,
-        demoWarningSeconds: 15,
-        lastActivity: new Date('2026-01-01T00:00:00.000Z'),
-      };
-      mockRepo.findById.mockResolvedValue(demoUser);
-      emergencyContactRepo.recordAlertIfNew.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-      emergencyContactRepo.findByUserId.mockResolvedValue([
-        {
-          userId: 'u1',
-          contactId: 'u2',
-          message: 'inactive',
-          createdAt: new Date(),
-        },
-      ]);
-
-      const first = await userService.checkDemoInactivity('u1', new Date('2026-01-01T00:00:16.000Z'));
-      const second = await userService.checkDemoInactivity('u1', new Date('2026-01-01T00:00:16.000Z'));
-
-      expect(first.alerted).toBe(true);
-      expect(second).toEqual({ alerted: false, recipients: [], reason: 'ALREADY_ALERTED' });
-    });
-
-    it('does not alert below the demo inactivity threshold', async () => {
-      const demoUser = {
-        ...baseUser(),
-        demoWarningEnabled: true,
-        demoWarningSeconds: 15,
-        lastActivity: new Date('2026-01-01T00:00:00.000Z'),
-      };
-      mockRepo.findById.mockResolvedValue(demoUser);
-
-      const result = await userService.checkDemoInactivity('u1', new Date('2026-01-01T00:00:10.000Z'));
-
-      expect(result).toEqual({ alerted: false, recipients: [], reason: 'BELOW_THRESHOLD' });
     });
   });
 
@@ -701,32 +645,35 @@ describe('userService', () => {
 
   describe('notifyContacts additional branches', () => {
     it('returns NO_CONTACTS when user has no emergency contacts', async () => {
-      mockRepo.findById.mockResolvedValue(baseUser());
+      mockRepo.findById.mockResolvedValue({ ...baseUser(), warningEnabled: true, warningDays: 1, lastActivity: new Date('2026-01-01T00:00:00.000Z') });
       emergencyContactRepo.findByUserId.mockResolvedValue([]);
-      const result = await userService.triggerEmergencyAlert('u1');
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      const result = await userService.checkInactivity('u1', new Date('2026-01-03T00:00:00.000Z'));
       expect(result).toEqual({ alerted: false, recipients: [], reason: 'NO_CONTACTS' });
     });
 
     it('still resolves and tracks recipients when notifyEmergencyContact callback is absent', async () => {
       const serviceNoCallback = makeUserService(mockRepo, emergencyContactRepo, mockRefreshTokenRepo, mockJwt);
-      mockRepo.findById.mockResolvedValue(baseUser());
+      mockRepo.findById.mockResolvedValue({ ...baseUser(), warningEnabled: true, warningDays: 1, lastActivity: new Date('2026-01-01T00:00:00.000Z') });
       emergencyContactRepo.findByUserId.mockResolvedValue([
         { contactId: 'c1', userId: 'u1', contactUserId: 'c1', message: 'Call me' },
       ] as any);
-      const result = await serviceNoCallback.triggerEmergencyAlert('u1');
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      const result = await serviceNoCallback.checkInactivity('u1', new Date('2026-01-03T00:00:00.000Z'));
       expect(result.alerted).toBe(true);
       expect(result.recipients).toContain('c1');
     });
 
     it('uses the fallback message when contact.message is an empty string', async () => {
-      mockRepo.findById.mockResolvedValue(baseUser());
+      mockRepo.findById.mockResolvedValue({ ...baseUser(), warningEnabled: true, warningDays: 1, lastActivity: new Date('2026-01-01T00:00:00.000Z') });
       emergencyContactRepo.findByUserId.mockResolvedValue([
         { contactId: 'c1', userId: 'u1', contactUserId: 'c1', message: '' },
       ] as any);
-      await userService.triggerEmergencyAlert('u1', 'Fallback message');
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      await userService.checkInactivity('u1', new Date('2026-01-03T00:00:00.000Z'));
       expect(notifyEmergencyContact).toHaveBeenCalledWith(
         'c1',
-        expect.objectContaining({ message: expect.stringContaining('Fallback message') }),
+        expect.objectContaining({ message: expect.stringContaining('User has exceeded their inactivity warning threshold') }),
       );
     });
   });
@@ -999,12 +946,7 @@ describe('userService', () => {
     });
   });
 
-  describe('triggerEmergencyAlert user not found', () => {
-    it('throws NotFoundError when user does not exist', async () => {
-      mockRepo.findById.mockResolvedValue(null);
-      await expect(userService.triggerEmergencyAlert('u1')).rejects.toThrow(NotFoundError);
-    });
-  });
+
 
   describe('checkInactivity user not found', () => {
     it('throws NotFoundError when user does not exist', async () => {

@@ -5,13 +5,14 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /workspace
 
 # Copy global configs and shared files
-COPY tsconfig.base.json ./
+COPY tsconfig.base.json package.json ./
 COPY shared/ ./shared/
 
 # Copy frontend packages
 COPY frontend/package.json frontend/pnpm-lock.yaml ./frontend/
 WORKDIR /workspace/frontend
-RUN pnpm install --no-frozen-lockfile --ignore-scripts
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
+    pnpm install --store-dir /pnpm/store --no-frozen-lockfile --ignore-scripts
 
 # Stage 2: Build the frontend
 FROM node:lts-slim AS builder
@@ -22,7 +23,7 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /workspace
 
 # Copy global configs and shared files
-COPY tsconfig.base.json ./
+COPY tsconfig.base.json package.json ./
 COPY shared/ ./shared/
 
 # Copy frontend packages and node_modules

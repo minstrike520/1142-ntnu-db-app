@@ -68,6 +68,7 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
           attachmentIds,
         });
         io.to(`room_${roomId}`).emit('new_message', message);
+        socket.to(`room_${roomId}`).emit('read_update', { roomId, userId, messageId: message.messageId });
       } catch (err) {
         socket.emit('error', mapErrorToApiShape(err));
       }

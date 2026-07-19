@@ -2,10 +2,12 @@ import { Pool } from "pg";
 import type { User } from "@shared/types";
 import type { IUserRepository } from "./IUserRepository";
 
+// ponytail: we keep the columns here in USER_COLUMNS select temporarily until we've run migration, or we can drop them now to be clean since they will be dropped from DB anyway.
+// Wait, actually, let's keep them out of USER_COLUMNS so that we don't select them, and mapRowToUser doesn't map them.
+// Let's rewrite it:
 const USER_COLUMNS =
   'user_id, name, email, password_hash, bio, avatar_url, lang_preference, app_theme, ' +
-  'notify_desktop, notify_sound, warning_enabled, warning_days, last_activity, created_at, deleted_at, ' +
-  'demo_warning_enabled, demo_warning_seconds, room_order';
+  'notify_desktop, notify_sound, warning_enabled, warning_days, last_activity, created_at, deleted_at, room_order';
 
 function mapRowToUser(row: any): User {
   return {
@@ -24,8 +26,6 @@ function mapRowToUser(row: any): User {
     lastActivity: row.last_activity,
     createdAt: row.created_at,
     deletedAt: row.deleted_at ?? null,
-    demoWarningEnabled: row.demo_warning_enabled ?? false,
-    demoWarningSeconds: row.demo_warning_seconds ?? 30,
     roomOrder: row.room_order ?? undefined,
   };
 }
@@ -89,16 +89,6 @@ export class UserRepository implements IUserRepository {
     }));
   }
 
-  async findAllDemoWarningEnabled(): Promise<{ userId: string; lastActivity: Date; demoWarningSeconds: number }[]> {
-    const res = await this.db.query(
-      `SELECT user_id, last_activity, demo_warning_seconds FROM users WHERE demo_warning_enabled = true AND deleted_at IS NULL`
-    );
-    return res.rows.map(row => ({
-      userId: row.user_id,
-      lastActivity: row.last_activity,
-      demoWarningSeconds: row.demo_warning_seconds,
-    }));
-  }
 
   async create(data: { name: string; email: string; passwordHash: string }): Promise<User> {
     const res = await this.db.query(
@@ -128,8 +118,6 @@ export class UserRepository implements IUserRepository {
         | "warningDays"
         | "lastActivity"
         | "deletedAt"
-        | "demoWarningEnabled"
-        | "demoWarningSeconds"
         | "roomOrder"
       >
     >,
@@ -186,14 +174,7 @@ export class UserRepository implements IUserRepository {
       fields.push(`last_activity = $${queryIdx++}`);
       values.push(data.lastActivity);
     }
-    if (data.demoWarningEnabled !== undefined) {
-      fields.push(`demo_warning_enabled = $${queryIdx++}`);
-      values.push(data.demoWarningEnabled);
-    }
-    if (data.demoWarningSeconds !== undefined) {
-      fields.push(`demo_warning_seconds = $${queryIdx++}`);
-      values.push(data.demoWarningSeconds);
-    }
+
     if (data.deletedAt !== undefined) {
       fields.push(`deleted_at = $${queryIdx++}`);
       values.push(data.deletedAt);

@@ -8,14 +8,15 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /workspace
 
 # Copy global typescript and workspace configs
-COPY tsconfig.base.json ./
+COPY tsconfig.base.json package.json ./
 COPY shared/ ./shared/
 
 # Copy backend dependency declarations
 COPY backend/package.json backend/pnpm-lock.yaml backend/tsconfig.json ./backend/
 
 WORKDIR /workspace/backend
-RUN pnpm install --no-frozen-lockfile --ignore-scripts
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
+    pnpm install --store-dir /pnpm/store --no-frozen-lockfile --ignore-scripts
 
 # Copy backend source code and compile
 COPY backend/src ./src
@@ -40,7 +41,8 @@ USER node
 
 # Copy production dependency declarations
 COPY --chown=node:node backend/package.json backend/pnpm-lock.yaml ./
-RUN pnpm install --prod --no-frozen-lockfile --ignore-scripts
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
+    pnpm install --store-dir /pnpm/store --prod --no-frozen-lockfile --ignore-scripts
 
 # Copy compiled files and migrations
 COPY --from=builder --chown=node:node /workspace/backend/dist ./dist

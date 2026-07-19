@@ -1,6 +1,6 @@
 import type { Room, RoomSummary } from '@shared/types';
 
-export type CreateRoomData = Pick<Room, 'type' | 'name' | 'avatarUrl' | 'inviteCode' | 'requireApproval' | 'viewHistory'>;
+export type CreateRoomData = Pick<Room, 'type' | 'requireApproval' | 'viewHistory'> & Partial<Pick<Room, 'name' | 'avatarUrl' | 'inviteCode'>>;
 
 export type UpdateRoomData = Partial<Pick<Room, 'name' | 'avatarUrl' | 'requireApproval' | 'viewHistory' | 'isArchived' | 'isReadonly'>>;
 

@@ -92,7 +92,7 @@ describe('RoomRepository (pg)', () => {
     expect(typeof room.roomId).toBe('string');
   });
 
-  it('findByMember unreadCount logic: own messages are not counted as unread', async () => {
+  it('findByMember unreadCount logic: unread count correctly reflects read status', async () => {
     const user1Res = await testPool.query(
       "INSERT INTO users (name, email, password_hash) VALUES ('Alice', 'alice@test.com', 'hash') RETURNING user_id"
     );
@@ -114,24 +114,37 @@ describe('RoomRepository (pg)', () => {
       [room.roomId, aliceId, 'owner', bobId, 'member']
     );
 
+    // 1. Bob sends a message, Alice's last_read_id is NULL (unread count should be 1)
     const msg1Res = await testPool.query(
       'INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, $3) RETURNING message_id',
       [room.roomId, bobId, 'Hello from Bob']
     );
     const msg1Id = msg1Res.rows[0].message_id;
 
-    await testPool.query(
-      'INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, $3) RETURNING message_id',
-      [room.roomId, aliceId, 'Hello from Alice']
-    );
+    let rooms = await repo.findByMember(aliceId);
+    expect(rooms).toHaveLength(1);
+    expect(rooms[0].unreadCount).toBe(1);
 
+    // 2. Alice updates last_read_id to Bob's message (unread count should be 0)
     await testPool.query(
       'UPDATE room_members SET last_read_id = $1 WHERE room_id = $2 AND user_id = $3',
       [msg1Id, room.roomId, aliceId]
     );
+    rooms = await repo.findByMember(aliceId);
+    expect(rooms[0].unreadCount).toBe(0);
 
-    const rooms = await repo.findByMember(aliceId);
-    expect(rooms).toHaveLength(1);
+    // 3. Alice sends a message, and updates her last_read_id to her own message (unread count should be 0)
+    const msg2Res = await testPool.query(
+      'INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, $3) RETURNING message_id',
+      [room.roomId, aliceId, 'Hello from Alice']
+    );
+    const msg2Id = msg2Res.rows[0].message_id;
+
+    await testPool.query(
+      'UPDATE room_members SET last_read_id = $1 WHERE room_id = $2 AND user_id = $3',
+      [msg2Id, room.roomId, aliceId]
+    );
+    rooms = await repo.findByMember(aliceId);
     expect(rooms[0].unreadCount).toBe(0);
   });
 });

@@ -109,7 +109,9 @@ export const makeMessageService = (
         messageData.attachmentIds = parsed.data.attachmentIds;
       }
 
-      return messageRepo.create(messageData);
+      const message = await messageRepo.create(messageData);
+      await roomMemberRepo.update(parsed.data.roomId, userId, { lastReadId: message.messageId });
+      return message;
     },
 
     async listForRoom(

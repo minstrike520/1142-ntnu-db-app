@@ -141,7 +141,6 @@ export class RoomRepository implements IRoomRepository {
            JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $1
            LEFT JOIN messages last_read ON last_read.message_id = rm.last_read_id
            WHERE m.room_id = ANY($2::uuid[])
-             AND (m.sender_id IS NULL OR m.sender_id != $1)
              AND (last_read.sent_at IS NULL OR m.sent_at > last_read.sent_at)
              AND (cr.view_history = true OR m.sent_at >= rm.join_time)
          )

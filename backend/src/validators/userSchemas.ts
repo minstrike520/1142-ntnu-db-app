@@ -36,8 +36,6 @@ export const updateSettingsSchema = z
   .object({
     warningEnabled: z.boolean().optional(),
     warningDays: z.number().int().min(0).optional(),
-    demoWarningEnabled: z.boolean().optional(),
-    demoWarningSeconds: z.number().int().min(1).optional(),
     language: z
       .string()
       .trim()
