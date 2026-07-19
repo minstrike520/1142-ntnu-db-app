@@ -15,6 +15,7 @@
 - [快速開始](#快速開始)
 - [生產環境部署](#生產環境部署)
 - [測試指令](#測試指令)
+- [Express 舊後端封存](#express-舊後端封存)
 
 ---
 
@@ -138,3 +139,6 @@ docker compose -f docker-compose.prod.yml down
 
 關於如何執行單元測試、整合測試與 E2E 測試的詳細說明，請直接參閱 [開發者與測試指南](docs/ZH-TW/DEVELOPMENT.md#5-測試指南)。
 
+## Express 舊後端封存
+
+Express／Node 後端的凍結基線、回滾方式與僅限重大修補的維護政策，請參閱 [舊後端封存文件](docs/ZH-TW/legacy-backend.md)。

@@ -2,7 +2,7 @@ services:
   db:
     image: postgres:18-alpine
     ports:
-      - "5435:5432"
+      - "${POSTGRES_HOST_PORT:-5435}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -20,7 +20,7 @@ services:
       context: .
       dockerfile: ./backend/Dockerfile.prod
     ports:
-      - "4005:4000"
+      - "${BACKEND_HOST_PORT:-4005}:4000"
     environment:
       - NODE_ENV=${NODE_ENV}
       - PORT=${PORT}
@@ -47,7 +47,7 @@ services:
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
     ports:
-      - "3005:3000"
+      - "${FRONTEND_HOST_PORT:-3005}:3000"
     environment:
       - NODE_ENV=${NODE_ENV}
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}

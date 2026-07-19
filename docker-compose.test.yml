@@ -2,7 +2,7 @@ services:
   db-test:
     image: postgres:18-alpine
     ports:
-      - "5436:5432"
+      - "${TEST_POSTGRES_HOST_PORT:-5436}:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -20,4 +20,4 @@ services:
 networks:
   app_network:
     external: true
-    name: near-chat_network
+    name: ${COMPOSE_NETWORK_NAME:-near-chat_network}

@@ -2,27 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
-    paths-ignore:
-      - 'docs/**'
-      - 'README.md'
-      - 'README.zh-TW.md'
-      - '.github/ISSUE_TEMPLATE/**'
-      - 'LICENSE'
-      - 'AGENTS.md'
+    branches: [main, dev, 'legacy/backend-express-node']
   pull_request:
-    branches: [main, dev]
-    paths-ignore:
-      - 'docs/**'
-      - 'README.md'
-      - 'README.zh-TW.md'
-      - '.github/ISSUE_TEMPLATE/**'
-      - 'LICENSE'
-      - 'AGENTS.md'
+    branches: [main, dev, 'legacy/backend-express-node']
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
   security-events: write
 
 jobs:
@@ -41,14 +28,26 @@ jobs:
               - 'frontend/**'
               - 'shared/**'
               - 'tsconfig.base.json'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - '.env.example'
+              - '.dockerignore'
+              - 'docker-compose*.yml'
+              - '.github/workflows/**'
             backend:
               - 'backend/**'
               - 'shared/**'
               - 'tsconfig.base.json'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - '.env.example'
+              - '.dockerignore'
+              - 'docker-compose*.yml'
+              - '.github/workflows/**'
 
   frontend-lint:
     needs: changes
-    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/legacy/backend-express-node' || github.base_ref == 'legacy/backend-express-node'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,7 +64,7 @@ jobs:
 
   frontend-typecheck:
     needs: changes
-    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/legacy/backend-express-node' || github.base_ref == 'legacy/backend-express-node'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +81,7 @@ jobs:
 
   frontend-build:
     needs: changes
-    if: (needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')
+    if: ((needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')) || github.ref == 'refs/heads/legacy/backend-express-node' || github.base_ref == 'legacy/backend-express-node'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,7 +98,7 @@ jobs:
 
   backend-build:
     needs: changes
-    if: (needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')
+    if: ((needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')) || github.ref == 'refs/heads/legacy/backend-express-node' || github.base_ref == 'legacy/backend-express-node'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -116,7 +115,7 @@ jobs:
 
   unit-tests:
     needs: changes
-    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/legacy/backend-express-node' || github.base_ref == 'legacy/backend-express-node'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -133,7 +132,7 @@ jobs:
 
   integration-tests:
     needs: changes
-    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/legacy/backend-express-node' || github.base_ref == 'legacy/backend-express-node'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -167,7 +166,7 @@ jobs:
 
   e2e-tests:
     needs: changes
-    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/legacy/backend-express-node' || github.base_ref == 'legacy/backend-express-node'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -201,7 +200,7 @@ jobs:
 
   security-scan:
     needs: changes
-    if: (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')
+    if: ((needs.changes.outputs.frontend == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')) || github.ref == 'refs/heads/legacy/backend-express-node' || github.base_ref == 'legacy/backend-express-node'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -248,3 +247,64 @@ jobs:
         with:
           sarif_file: frontend.sarif
           category: frontend
+
+  legacy-required:
+    name: Legacy required checks
+    needs:
+      - changes
+      - frontend-lint
+      - frontend-typecheck
+      - frontend-build
+      - backend-build
+      - unit-tests
+      - integration-tests
+      - e2e-tests
+      - security-scan
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      NEEDS_JSON: ${{ toJSON(needs) }}
+      LEGACY_RUN: ${{ github.ref == 'refs/heads/legacy/backend-express-node' || github.base_ref == 'legacy/backend-express-node' }}
+    steps:
+      - name: 驗證所有必要工作
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed="$(jq -r '
+            to_entries[]
+            | select(.value.result != "success" and .value.result != "skipped")
+            | "\(.key)=\(.value.result)"
+          ' <<< "$NEEDS_JSON")"
+
+          if [[ -n "$failed" ]]; then
+            echo "下列必要工作未成功：" >&2
+            echo "$failed" >&2
+            exit 1
+          fi
+
+          if [[ "$LEGACY_RUN" == "true" ]]; then
+            incomplete="$(jq -r '
+              to_entries[]
+              | .key as $job
+              | select([
+                  "frontend-lint",
+                  "frontend-typecheck",
+                  "frontend-build",
+                  "backend-build",
+                  "unit-tests",
+                  "integration-tests",
+                  "e2e-tests",
+                  "security-scan"
+                ] | index($job))
+              | select(.value.result != "success")
+              | "\(.key)=\(.value.result)"
+            ' <<< "$NEEDS_JSON")"
+
+            if [[ -n "$incomplete" ]]; then
+              echo "Legacy push／PR 的完整檢查不得 skipped 或未成功：" >&2
+              echo "$incomplete" >&2
+              exit 1
+            fi
+          fi
+
+          echo "所有必要工作皆為 success 或 skipped。"

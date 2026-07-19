@@ -15,6 +15,7 @@ A real-time group chat application built as an NTNU Database Theories course pro
 - [Getting Started](#getting-started)
 - [Production Deployment](#production-deployment)
 - [Testing](#testing)
+- [Legacy Express Backend](#legacy-express-backend)
 
 ---
 
@@ -139,3 +140,6 @@ docker compose -f docker-compose.prod.yml down
 
 For detailed instructions on running unit, integration, and E2E tests, please refer directly to the [Developer & Testing Guide](docs/DEVELOPMENT.md#5-testing-guide).
 
+## Legacy Express Backend
+
+The frozen Express / Node backend baseline, rollback procedure, and critical-fix-only maintenance policy are documented in the [Legacy Backend Archive](docs/legacy-backend.md).

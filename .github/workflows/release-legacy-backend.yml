@@ -1,0 +1,309 @@
+name: 發布 Express／Node 舊後端
+
+on:
+  push:
+    tags:
+      - 'backend-express-node-v*'
+
+concurrency:
+  group: release-legacy-backend-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: nearcsie/near-chat-backend
+
+jobs:
+  publish:
+    name: 驗證、建置映像並建立封存 Release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: 取出完整封存歷史
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 驗證版本標籤並計算映像標籤
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^backend-express-node-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "標籤格式必須是 backend-express-node-vX.Y.Z：$GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+          version="${GITHUB_REF_NAME#backend-}"
+          short_sha="${GITHUB_SHA:0:12}"
+          {
+            echo "version=$version"
+            echo "sha_tag=sha-$short_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 驗證 annotated tag、legacy HEAD 與成功 CI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag_ref="refs/tags/${GITHUB_REF_NAME}"
+
+          object_type="$(git cat-file -t "$tag_ref")"
+          if [[ "$object_type" != "tag" ]]; then
+            echo "封存版本必須使用 annotated tag；實際 object type：$object_type" >&2
+            exit 1
+          fi
+
+          peeled_sha="$(git rev-parse "${tag_ref}^{}")"
+          peeled_type="$(git cat-file -t "$peeled_sha")"
+          if [[ "$peeled_type" != "commit" || "$peeled_sha" != "$GITHUB_SHA" ]]; then
+            echo "Tag peeled commit 必須等於 workflow commit：tag=$peeled_sha workflow=$GITHUB_SHA" >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin \
+            '+refs/heads/legacy/backend-express-node:refs/remotes/origin/legacy/backend-express-node'
+          legacy_sha="$(git rev-parse refs/remotes/origin/legacy/backend-express-node)"
+          if [[ "$legacy_sha" != "$GITHUB_SHA" ]]; then
+            echo "Tag 必須指向 legacy/backend-express-node HEAD：legacy=$legacy_sha tag=$GITHUB_SHA" >&2
+            exit 1
+          fi
+
+          runs="$(gh api --method GET \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+            -f head_sha="$GITHUB_SHA" \
+            -f branch=legacy/backend-express-node \
+            -f event=push \
+            -f status=completed \
+            -f per_page=100)"
+          run_id="$(jq -r '
+            [.workflow_runs[] | select(.conclusion == "success")]
+            | first
+            | .id // empty
+          ' <<< "$runs")"
+          if [[ -z "$run_id" ]]; then
+            echo "找不到此 commit 在 legacy branch 已完成且成功的 ci.yml push run：$GITHUB_SHA" >&2
+            exit 1
+          fi
+
+          jobs="$(gh api --method GET \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs" \
+            -f per_page=100)"
+          if ! jq -e '
+            .jobs
+            | any(.name == "Legacy required checks" and .conclusion == "success")
+          ' <<< "$jobs" >/dev/null; then
+            echo "成功的 CI run 未包含通過的 Legacy required checks gate：run_id=$run_id" >&2
+            exit 1
+          fi
+
+      - name: 檢查既有 GitHub Release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_json="$RUNNER_TEMP/existing-legacy-release.json"
+          release_error="$RUNNER_TEMP/existing-legacy-release.error"
+
+          if gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+            > "$release_json" 2> "$release_error"; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            echo "Release 已存在；後續只驗證，不會覆寫。"
+          elif grep -q 'HTTP 404' "$release_error"; then
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+            echo "Release 尚未建立。"
+          else
+            cat "$release_error" >&2
+            exit 1
+          fi
+
+      - name: 登入 GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 設定 Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: 檢查不可變映像參照
+        id: registry
+        shell: bash
+        env:
+          VERSION_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image.outputs.version }}
+          SHA_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image.outputs.sha_tag }}
+          RELEASE_EXISTS: ${{ steps.release.outputs.exists }}
+        run: |
+          set -euo pipefail
+
+          inspect_digest() {
+            local ref="$1"
+            local output digest
+            local error_file="$RUNNER_TEMP/imagetools-inspect.error"
+
+            if output="$(docker buildx imagetools inspect "$ref" 2> "$error_file")"; then
+              digest="$(awk '$1 == "Digest:" { print $2; exit }' <<< "$output")"
+              if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "無法從映像參照解析 digest：$ref" >&2
+                exit 1
+              fi
+              printf '%s' "$digest"
+              return 0
+            fi
+
+            if grep -Eiq '(manifest unknown|name unknown|not found|no such manifest)' "$error_file"; then
+              echo "映像參照不存在：$ref" >&2
+              return 0
+            fi
+
+            cat "$error_file" >&2
+            return 1
+          }
+
+          version_digest="$(inspect_digest "$VERSION_REF")"
+          sha_digest="$(inspect_digest "$SHA_REF")"
+
+          if [[ -z "$version_digest" && -z "$sha_digest" ]]; then
+            if [[ "$RELEASE_EXISTS" == "true" ]]; then
+              echo "Release 已存在但兩個映像參照皆遺失；拒絕以新建置取代既有 digest。" >&2
+              exit 1
+            fi
+            echo 'build_required=true' >> "$GITHUB_OUTPUT"
+            echo 'resolved_digest=' >> "$GITHUB_OUTPUT"
+            echo "兩個映像參照皆不存在，允許首次建置。"
+          elif [[ -n "$version_digest" && -n "$sha_digest" ]]; then
+            if [[ "$version_digest" != "$sha_digest" ]]; then
+              echo "版本與 commit 映像的 digest 不一致，拒絕覆寫。" >&2
+              echo "version=$version_digest sha=$sha_digest" >&2
+              exit 1
+            fi
+            if [[ "$RELEASE_EXISTS" != "true" ]]; then
+              echo "兩個映像參照已存在但 Release 不存在；拒絕替既有 artifact 補簽 provenance 或自動建立 Release。" >&2
+              exit 1
+            fi
+            echo 'build_required=false' >> "$GITHUB_OUTPUT"
+            echo "resolved_digest=$version_digest" >> "$GITHUB_OUTPUT"
+            echo "兩個映像參照已存在且一致，沿用 $version_digest。"
+          else
+            echo "只存在一個映像參照，屬於不完整發布；拒絕自動修補或覆寫。" >&2
+            echo "version=${version_digest:-missing} sha=${sha_digest:-missing}" >&2
+            exit 1
+          fi
+
+      - name: 首次建置並推送後端映像
+        if: steps.registry.outputs.build_required == 'true'
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./backend/Dockerfile.prod
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image.outputs.sha_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.image.outputs.version }}
+
+      - name: 解析最終映像 Digest
+        id: resolved
+        shell: bash
+        env:
+          BUILD_REQUIRED: ${{ steps.registry.outputs.build_required }}
+          EXISTING_DIGEST: ${{ steps.registry.outputs.resolved_digest }}
+          BUILT_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$BUILD_REQUIRED" == "true" ]]; then
+            digest="$BUILT_DIGEST"
+          else
+            digest="$EXISTING_DIGEST"
+          fi
+
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "最終映像 digest 無效：$digest" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: 驗證既有 Release 不可變內容
+        if: steps.release.outputs.exists == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.resolved.outputs.digest }}
+        run: |
+          set -euo pipefail
+          body="$(gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json body \
+            --jq .body)"
+
+          if [[ "$body" != *"$GITHUB_SHA"* ]]; then
+            echo "既有 Release body 未包含預期 commit SHA，拒絕修改。" >&2
+            exit 1
+          fi
+          if [[ "$body" != *"$IMAGE_DIGEST"* ]]; then
+            echo "既有 Release body 未包含預期映像 digest，拒絕修改。" >&2
+            exit 1
+          fi
+          echo "既有 Release 與 commit／digest 一致；不進行任何修改。"
+
+      - name: 建立映像來源證明
+        if: steps.release.outputs.exists == 'false' && steps.registry.outputs.build_required == 'true'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.resolved.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: 建立 GitHub Release
+        if: steps.release.outputs.exists == 'false' && steps.registry.outputs.build_required == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_VERSION: ${{ steps.image.outputs.version }}
+          IMAGE_SHA_TAG: ${{ steps.image.outputs.sha_tag }}
+          IMAGE_DIGEST: ${{ steps.resolved.outputs.digest }}
+        run: |
+          set -euo pipefail
+          notes_file="$RUNNER_TEMP/legacy-backend-release-notes.md"
+          image="${REGISTRY}/${IMAGE_NAME}"
+
+          {
+            echo '# Express／Node 舊後端封存版本'
+            echo
+            printf -- '- 封存標籤：`%s`\n' "$GITHUB_REF_NAME"
+            printf -- '- 程式 Commit：`%s`\n' "$GITHUB_SHA"
+            printf -- '- 容器映像：`%s:%s`\n' "$image" "$IMAGE_VERSION"
+            printf -- '- Commit 映像標籤：`%s:%s`\n' "$image" "$IMAGE_SHA_TAG"
+            printf -- '- 映像 Digest：`%s@%s`\n' "$image" "$IMAGE_DIGEST"
+            echo
+            echo '此版本只接受安全漏洞、資料損壞、無法啟動與阻斷性相容問題的修補，不再新增功能。資料庫異動必須遵守 expand-and-contract，直到 Hono 穩定上線後 30 天的維護期結束。'
+            echo
+            printf -- '操作與維護文件：[繁體中文](https://github.com/%s/blob/%s/docs/ZH-TW/legacy-backend.md)／[English](https://github.com/%s/blob/%s/docs/legacy-backend.md)\n' \
+              "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+          } > "$notes_file"
+
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Express／Node 舊後端 $IMAGE_VERSION" \
+            --notes-file "$notes_file" \
+            --latest=false
