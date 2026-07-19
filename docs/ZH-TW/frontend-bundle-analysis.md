@@ -40,26 +40,29 @@ Bundle 位元組大小會隨環境與相依套件版本而變動（隨 `pnpm-loc
 
 ### 萃取模組體積排行的方法
 
-`next experimental-analyze --output` 會在 `frontend/.next/diagnostics/analyze/data/` 下為每個路由產生一份 `analyze.data`（例如 `/` 對應 `data/analyze.data`、`data/chat/[chatId]/analyze.data`、`data/settings/analyze.data`），並額外產生共用的 `data/modules.data`。每個 `.data` 檔案格式為「4 bytes big-endian 長度前綴」加上「JSON payload」（JSON 之後還有一段供互動式 UI 內部使用的二進位相依關係（adjacency list）附加資料，本基準文件不解析該段）。JSON 內容包含 `output_files`、`chunk_parts`（各筆含 `source_index`、`output_file_index`、`size`）與 `sources`（各筆含 `path` 與 `parent_source_index`）。
+`next experimental-analyze --output` 會在 `frontend/.next/diagnostics/analyze/data/` 下為每個路由產生一份 `analyze.data`（例如 `/` 對應 `data/analyze.data`、`data/chat/[chatId]/analyze.data`、`data/settings/analyze.data`），並額外產生共用的 `data/modules.data`。每個 `.data` 檔案格式為「4 bytes big-endian 長度前綴 `n`」，後接**恰好 `n` bytes** 的 JSON payload，再之後是供互動式 UI 內部使用的二進位相依關係（adjacency list）附加資料——這段附加資料**不是** JSON，不可當作 JSON 解析。JSON payload 內容包含 `output_files`、`chunk_parts`（各筆含 `source_index`、`output_file_index`、`size`）與 `sources`（各筆含 `path` 與 `parent_source_index`）。
 
 要依體積排序某路由的 client-side JS 模組：
 
-1. 讀取該路由的 `analyze.data`，去除開頭 4 bytes 長度前綴後以 `json.loads` 解析剩餘內容。
-2. 篩選 `output_files` 中 `filename` 含有 `static/chunks` 的項目（可排除 SSR／伺服器端 chunk 與字型／圖片等 media 檔案，只留下 client JS chunk）。
+1. 讀取該路由的 `analyze.data`，將開頭 4 bytes 以 big-endian `uint32` 解讀為長度 `n`，僅解析 `data[4:4+n]` 作為 JSON——不要對前綴之後的全部內容執行 `json.loads`，因為 `4+n` 之後的附加資料並非合法 JSON，會導致解析錯誤。
+2. 篩選 `output_files` 中 `filename` 同時符合「含有 `static/chunks`」**且**「以 `.js` 結尾」的項目（可排除 SSR／伺服器端 chunk、CSS chunk 與字型／圖片等 media 檔案，只留下 client JS chunk——單純以 `static/chunks` 篩選也會匹配到 CSS chunk 檔案，例如包含 `globals.css` 的那個，因此必須加上 `.js` 副檔名檢查，才能讓此指標真正只計入 JS）。
 3. 將 `chunk_parts[].size` 依 `source_index` 加總，僅限 `output_file_index` 落在上述篩選集合內的項目。
 4. 依大小遞減排序，並透過 `sources[i].path`（視需要沿 `parent_source_index` 往上重建完整路徑）將 `source_index` 對應回實際路徑。
 
 ## 基準：各頁面主要 client 模組（於上述 commit 量測）
 
-下表中的框架／第三方套件模組在三個路由間共用，是每個路由無論如何都要負擔的基礎成本。
+以下數字皆僅計入 **client JS**（`static/chunks/*.js`），依照上方修正後的篩選方法萃取。下表中的框架／第三方套件模組在三個路由間共用，是每個路由無論如何都要負擔的 JS 基礎成本。
 
-### 三個路由共用（近似值）
+有兩項成本刻意獨立列出、不併入下表，因為它們不是「現代瀏覽器工作階段會執行的 JS」：
+
+- **CSS**：`src/app/globals.css` 會編譯成獨立的 `static/chunks/*.css` chunk（約 44 KB）。它確實是每個路由都會下載的共用資源，但屬於 CSS 而非 JS——若併入「client JS」排行，未來的 CSS 迴歸／改善會被誤判為 JS 的變化。
+- **舊版瀏覽器 polyfill**：見下方獨立說明。
+
+### 三個路由共用（client JS，近似值）
 
 | 大小 | 模組 |
 | ---: | :--- |
 | ~199 KB | `react-dom/cjs/react-dom-client.production.js` |
-| ~112 KB | Next.js `polyfill-nomodule.js`（舊版瀏覽器相容 fallback bundle） |
-| ~44 KB | `src/app/globals.css` |
 | ~27.5 KB | `src/context/ChatContext.tsx` |
 | ~27 KB | `tailwind-merge/dist/bundle-mjs.mjs` |
 | ~24 KB | `react-server-dom-turbopack-client.browser.production.js` |
@@ -67,6 +70,8 @@ Bundle 位元組大小會隨環境與相依套件版本而變動（隨 `pnpm-loc
 | ~15 KB | `src/components/layout/Sidebar.tsx` |
 | ~13 KB | `src/components/layout/ChatList.tsx` |
 | ~12 KB | `src/locales/en.json` |
+
+**舊版 `nomodule` polyfill（未計入上表）：** analyzer 輸出中，每個路由也都列出一個約 112 KB 的 `polyfill-nomodule.js`。這是 Next.js 透過 `<script nomodule>` 標籤提供給不支援 `<script type="module">` 瀏覽器的 fallback bundle；支援 module script 的瀏覽器不會執行它，因此對現代瀏覽器工作階段而言，它並非實際執行的 JS payload，即使 analyzer 的靜態輸出仍將它列在每個路由的檔案清單中。為避免高估一般情況下的共用 JS 預算約 112 KB，此處刻意將它排除於上表與下方各路由總計之外。後續請見候選項目 3。
 
 ### `/`（首頁）
 
@@ -94,11 +99,13 @@ Bundle 位元組大小會隨環境與相依套件版本而變動（隨 `pnpm-loc
 
 以下為至少三個具體且有實證依據的候選項目，供後續效能 issue 使用：
 
-1. **聊天頁面條件式顯示的側邊面板被靜態匯入至初始 bundle**（對應 #381）。`src/components/pages/ChatroomPageContent.tsx` 在模組頂層靜態匯入 `GroupSettings`、`RoomMembersPanel`、`FriendInfoPanel`，卻只在布林狀態為真時才渲染（例如 `{showSettings && <GroupSettings .../>}`）。由於是靜態匯入，這三者即使在從未開啟過的工作階段中，也會一併出現在 `/chat/[chatId]` 路由的初始 client chunk 中——單是 `GroupSettings.tsx` 就佔約 18.7 KB。這是明確的 `next/dynamic` 候選項目。
+1. **聊天頁面條件式顯示的側邊面板被靜態匯入至初始 bundle**（對應 #381）。`src/components/pages/ChatroomPageContent.tsx` 在模組頂層靜態匯入 `GroupSettings` 與 `RoomMembersPanel`，卻只在布林狀態為真時才渲染（例如 `{showSettings && <GroupSettings .../>}`）。由於是靜態匯入，這兩者即使在從未開啟過的工作階段中，也會一併出現在 `/chat/[chatId]` 路由的初始 client chunk 中——單是 `GroupSettings.tsx` 就佔約 18.7 KB。這兩者是明確的 `next/dynamic` 候選項目。
+
+   `ChatroomPageContent.tsx` 同時也靜態匯入了 `FriendInfoPanel`，但只改這一處的匯入方式並不會縮小初始 bundle：`src/components/layout/Sidebar.tsx`（第 12 行）本身就無條件靜態匯入 `FriendInfoPanel`，而 `Sidebar` 是由 `src/app/(main)/layout.tsx`（本表所列 `/`、`/chat/[chatId]`、`/settings` 三個路由共用的常駐外殼）所渲染。因此無論 `ChatroomPageContent` 怎麼匯入，`FriendInfoPanel` 都已經是初始已登入外殼 bundle 的一部分；本候選項目排除它，若要真正減少體積，需要另外針對 `Sidebar` 本身的匯入方式做調查（例如改從 `Sidebar` 做 dynamic import）。
 
 2. **以執行期圖示名稱查找取代按需圖示元件匯入**（對應 #382）。`Chatroom.tsx`、`Sidebar.tsx`、`MobileNav.tsx` 皆匯入 `{ Icon } from "@iconify/react"`，並透過執行期字串查找 API 渲染圖示（`<Icon icon="bx:home" />`）。專案已在相依套件中包含 `@iconify-react/boxicons`（一個可依需求 tree-shake 的逐圖示元件套件），但目前沒有任何檔案從中匯入具名圖示元件。改為按需匯入可讓未使用的圖示被 tree-shake 掉，而非在每個路由都透過 `iconify.js` 執行期（約 17 KB）於執行期解析。
 
-3. **每個路由都攜帶舊版瀏覽器 polyfill bundle**（對應 #380）。`polyfill-nomodule.js`（約 112 KB）是 Next.js 針對不支援 `<script type="module">` 瀏覽器的預設 fallback bundle，且出現在每個路由的 client chunk 清單中。本專案實際支援的瀏覽器矩陣是否真的需要它，本次基準量測並未驗證——此處僅將其標記為 #380（Turbopack 程式碼分割策略／限制調查）的調查候選項目，而非已確認可移除的成本。
+3. **每個路由的 client chunk 清單都列出舊版瀏覽器 `nomodule` polyfill bundle**（對應 #380）。如上方所述，`polyfill-nomodule.js`（約 112 KB）是 Next.js 針對不支援 `<script type="module">` 瀏覽器的預設 fallback bundle；現代瀏覽器不會執行它，但 analyzer 的靜態檔案清單仍在每個路由中列出它，值得先確認本專案實際支援的瀏覽器矩陣是否真的不需要它，再視為可捨棄的成本。此處僅將其標記為 #380（Turbopack 程式碼分割策略／限制調查）的調查候選項目，而非已確認可移除、或實際會被執行的成本。
 
 上述描述刻意使用「被靜態匯入」／「出現在每個路由中」等用語，而非因果式的體積論斷：上方排行表呈現的是各路由 client bundle 中實際攜帶的內容，並不能證明任一模組主導了渲染成本或載入時間。後續 issue 應在每次針對性變更後，依本文件的方法重新量測。
 
