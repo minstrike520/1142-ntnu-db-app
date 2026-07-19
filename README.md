@@ -15,6 +15,7 @@ A real-time group chat application built as an NTNU Database Theories course pro
 - [Getting Started](#getting-started)
 - [Production Deployment](#production-deployment)
 - [Testing](#testing)
+- [Backend Releases](#backend-releases)
 
 ---
 
@@ -139,3 +140,6 @@ docker compose -f docker-compose.prod.yml down
 
 For detailed instructions on running unit, integration, and E2E tests, please refer directly to the [Developer & Testing Guide](docs/DEVELOPMENT.md#5-testing-guide).
 
+## Backend Releases
+
+Annotated `vX.Y.Z` tags automatically publish immutable GHCR backend images and a digest-recorded GitHub Release. See the [Backend Version Release Guide](docs/backend-release.md).

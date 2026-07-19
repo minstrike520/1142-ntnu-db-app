@@ -41,10 +41,18 @@ jobs:
               - 'frontend/**'
               - 'shared/**'
               - 'tsconfig.base.json'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - '.dockerignore'
+              - '.github/workflows/**'
             backend:
               - 'backend/**'
               - 'shared/**'
               - 'tsconfig.base.json'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - '.dockerignore'
+              - '.github/workflows/**'
 
   frontend-lint:
     needs: changes

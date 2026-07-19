@@ -15,6 +15,7 @@
 - [快速開始](#快速開始)
 - [生產環境部署](#生產環境部署)
 - [測試指令](#測試指令)
+- [後端版本發布](#後端版本發布)
 
 ---
 
@@ -138,3 +139,6 @@ docker compose -f docker-compose.prod.yml down
 
 關於如何執行單元測試、整合測試與 E2E 測試的詳細說明，請直接參閱 [開發者與測試指南](docs/ZH-TW/DEVELOPMENT.md#5-測試指南)。
 
+## 後端版本發布
+
+推送 annotated `vX.Y.Z` tag 後，系統會自動發布不可變的 GHCR 後端映像，以及記錄 digest 的 GitHub Release。詳見[後端版本發布指南](docs/ZH-TW/backend-release.md)。
