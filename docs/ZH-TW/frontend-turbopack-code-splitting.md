@@ -4,6 +4,8 @@
 
 **決策(TL;DR):本專案使用的 Next.js 版本中,Turbopack 沒有任何等同 Webpack `splitChunks` 的公開穩定 API。我們「不會」在 `next.config.ts` 加入任何 chunk splitting 設定。Bundle 體積工作改由受支援的層級進行:App Router 路由分割(自動)、`next/dynamic`(#381)、逐圖示/套件按需匯入(#382)。**
 
+> **2026-07-19 更新:** 重新評估觸發條件 3(dev/build bundler 統一)已由 #387 達成(PR #388,commit `7322545`)。已依約重新檢視本決策——**決策維持不變**,因為主要依據(觸發條件 1:沒有公開穩定的 chunking API)仍然成立。詳見文末〈重新評估紀錄〉。
+
 ## 本次調查使用的工具鏈版本
 
 | 工具 | 版本 |
@@ -80,9 +82,9 @@ specify known properties, and 'splitChunks' does not exist in type 'TurbopackOpt
 
 換句話說:#381–#383 需要的一切都不會被「缺少 `splitChunks`」擋住。手動 vendor 分組是 Webpack 時代的手段;在 Turbopack 之下,等價效果來自非同步邊界與匯入衛生。
 
-## 問題 3:dev/build bundler 不一致
+## 問題 3:dev/build bundler 不一致(已於 2026-07-19 解決)
 
-`frontend/package.json` 目前:
+本調查當時,`frontend/package.json` 為:
 
 - `dev`:`next dev --webpack` → 開發使用 **Webpack**
 - `build`:`next build` → production 使用 **Turbopack**(Next 16 預設)
@@ -94,6 +96,8 @@ specify known properties, and 'splitChunks' does not exist in type 'TurbopackOpt
 
 **建議:** 統一 dev 也使用 Turbopack(`next dev` 去掉 `--webpack`)——已由 #387 獨立追蹤,並附獨立驗證(dev server 的 HMR、CSS、Socket.IO client 行為煙霧測試),不搭在本文件 PR 上。在那之前,「只有單一 bundler 會讀取的設定」應視為 code review 的警訊。
 
+**後續(2026-07-19):** #387 已完成——commit `7322545`(PR #388)自 `dev` script 移除 `--webpack`,dev 與 build 現在皆使用 Turbopack。本節描述的設定分裂陷阱不復存在:未來任何 `turbopack.*` 設定會同時作用於兩個環境;反之,`webpack()` callback 如今 dev 與 build 都不會讀取,屬純粹的死設定。此事件即〈重新評估觸發條件〉第 3 項,重新評估結果見下方〈重新評估紀錄〉。
+
 ## 問題 4:約 112 KB 的 `polyfill-nomodule.js`(基準文件候選 3)
 
 `docs/frontend-bundle-analysis.md` 指出分析器在每個路由都列出 `polyfill-nomodule.js`(~112 KB),並把結論交由本調查。
@@ -104,7 +108,7 @@ specify known properties, and 'splitChunks' does not exist in type 'TurbopackOpt
 
 ### 採用
 
-1. **不在 `next.config.ts` 加入任何 chunk splitting 設定。** 沒有受支援的 API 可加;且在 dev/build 使用不同 bundler 期間,設定檔維持 bundler 中立。
+1. **不在 `next.config.ts` 加入任何 chunk splitting 設定。** 沒有受支援的 API 可加;且在 dev/build 使用不同 bundler 期間,設定檔維持 bundler 中立。(2026-07-19 更新:bundler 已統一,後半「bundler 中立」理由退役;前半「沒有受支援的 API」仍成立,決策不變——見〈重新評估紀錄〉。)
 2. **Bundle 體積工作僅經由受支援層級進行:** `next/dynamic` 邊界(#381)、逐圖示 subpath 匯入(#382)、有量測依據的重新渲染修正(#383),全部以 `docs/frontend-bundle-analysis.md` 的可重現 `pnpm run analyze` 流程驗證。
 3. **`polyfill-nomodule.js` 以「不採取行動」結案:** 排除於 client-JS 統計,非可移除項目,亦非現代瀏覽器的實際成本。
 
@@ -120,7 +124,24 @@ specify known properties, and 'splitChunks' does not exist in type 'TurbopackOpt
 
 1. Next.js 將 Turbopack 的 chunking 控制 API 升為**穩定**(升級時追蹤 `turbopack` 設定參考頁)。
 2. `pnpm run analyze` 顯示存在單一過大的 client chunk,且可證明 `next/dynamic` 邊界無法拆解(例如某共用 vendor 模組始終被拉進初始 chunk)。
-3. dev/build bundler 統一完成,使 bundler 專屬設定對兩個環境同時生效。
+3. ~~dev/build bundler 統一完成,使 bundler 專屬設定對兩個環境同時生效。~~ → **已於 2026-07-19 觸發並完成重新評估**(見下方〈重新評估紀錄〉);後續重新評估以條件 1、2 為準。
+
+### 重新評估紀錄
+
+#### 2026-07-19:觸發條件 3(dev/build bundler 統一)
+
+**觸發事實:** issue #387 由 PR #388 合併完成(commit `7322545`),自 `frontend/package.json` 的 `dev` script 移除 `--webpack`。dev 與 build 現在皆由 Turbopack 驅動,bundler 專屬設定自此對兩個環境同時生效。
+
+**重新驗證(於 next@16.2.10,lockfile 實際安裝版):**
+
+- `frontend/node_modules/next/dist/server/config-shared.d.ts` 的 `TurbopackOptions` 仍恰好只有原六個欄位(`resolveAlias`、`resolveExtensions`、`rules`、`root`、`debugIds`、`ignoreIssue`),沒有任何 chunking 相關欄位——觸發條件 1 仍未發生。
+- `next.config.ts` 維持既無 `webpack` 也無 `turbopack` 鍵,與原決策一致。
+
+**結論:決策維持不變。** bundler 統一移除的是「設定分裂陷阱」這個**次要**理由,不是主要理由——主要理由(Turbopack 沒有公開穩定的 chunking API)在 next@16.2.10 仍然成立,因此仍然沒有任何受支援的 chunk splitting 設定可加。本次觸發帶來的實際變化:
+
+1. 「維持 `next.config.ts` bundler 中立」不再是防禦性要求。日後若 Next.js 將 chunking 控制升為穩定(觸發條件 1),`turbopack.*` 設定可直接採用,並同時作用於 dev 與 build,不再有「只影響單邊」的陷阱。
+2. Code review 警訊從「只有單一 bundler 會讀取的設定」更新為:`webpack()` callback 如今不被任何環境讀取,任何新增皆為死設定,應直接拒絕。
+3. 觸發條件 3 已消耗;本決策的後續重新評估以觸發條件 1、2 為準。
 
 ### 回退方案
 
