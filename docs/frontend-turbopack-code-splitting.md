@@ -4,6 +4,8 @@ This document records the investigation requested by issue #380 (a sub-task of t
 
 **Decision (TL;DR): Turbopack in the Next.js version this project uses has no public, stable API equivalent to Webpack's `splitChunks`. We will NOT add any chunk-splitting configuration to `next.config.ts`. Bundle-size work proceeds through the layers that are supported: App Router route splitting (automatic), `next/dynamic` (#381), and per-icon/package imports (#382).**
 
+> **Update 2026-07-19:** re-evaluation trigger 3 (dev/build bundler unification) has occurred via #387 (PR #388, commit `7322545`). The decision was revisited as promised — **it stands unchanged**, because the primary basis (trigger 1: no public, stable chunking API) still holds. See "Re-evaluation record" at the end of this document.
+
 ## Toolchain versions used for this investigation
 
 | Tool | Version |
@@ -80,9 +82,9 @@ With no manual chunking API, splitting responsibilities in this project break do
 
 In other words: nothing that #381–#383 need is blocked by the absence of `splitChunks`. Manual vendor grouping was a Webpack-era tactic; under Turbopack the equivalent outcomes come from async boundaries and import hygiene.
 
-## Question 3: dev/build bundler mismatch
+## Question 3: dev/build bundler mismatch (resolved 2026-07-19)
 
-`frontend/package.json` currently has:
+At the time of this investigation, `frontend/package.json` had:
 
 - `dev`: `next dev --webpack` → development uses **Webpack**
 - `build`: `next build` → production uses **Turbopack** (Next 16 default)
@@ -94,6 +96,8 @@ Implications:
 
 **Recommendation:** unify on Turbopack for dev (`next dev` without `--webpack`) — tracked separately in #387 with its own verification (dev-server smoke test of HMR, CSS, and Socket.IO client behavior), not as a rider on this documentation PR. Until then, treat "config that only one bundler reads" as a review red flag.
 
+**Follow-up (2026-07-19):** #387 is done — commit `7322545` (PR #388) removed `--webpack` from the `dev` script, so dev and build both run Turbopack now. The config-split foot-gun described above no longer exists: any future `turbopack.*` config applies to both environments, and conversely a `webpack()` callback is now read by neither dev nor build — pure dead config. This event is re-evaluation trigger 3; the outcome is recorded in "Re-evaluation record" below.
+
 ## Question 4: the ~112 KB `polyfill-nomodule.js` (baseline candidate 3)
 
 `docs/frontend-bundle-analysis.md` flagged that the analyzer lists `polyfill-nomodule.js` (~112 KB) for every route and deferred the verdict to this investigation.
@@ -104,7 +108,7 @@ Implications:
 
 ### Adopted
 
-1. **No chunk-splitting configuration is added to `next.config.ts`.** There is no supported API to add, and the config file stays bundler-agnostic while dev and build use different bundlers.
+1. **No chunk-splitting configuration is added to `next.config.ts`.** There is no supported API to add, and the config file stays bundler-agnostic while dev and build use different bundlers. (Update 2026-07-19: the bundlers are now unified, retiring the "bundler-agnostic" half of this rationale; the "no supported API" half still holds, so the decision is unchanged — see "Re-evaluation record".)
 2. **Bundle-size work proceeds via supported layers only:** `next/dynamic` boundaries (#381), per-icon subpath imports (#382), measured re-render fixes (#383), all validated with the reproducible `pnpm run analyze` process from `docs/frontend-bundle-analysis.md`.
 3. **`polyfill-nomodule.js` is closed as "no action":** excluded from client-JS accounting, not a removable or real modern-browser cost.
 
@@ -120,7 +124,24 @@ Revisit this decision if any of the following happens:
 
 1. Next.js promotes a chunking-control API for Turbopack to **stable** (watch the `turbopack` config reference page across upgrades).
 2. `pnpm run analyze` shows a single oversized client chunk that `next/dynamic` boundaries demonstrably cannot break up (e.g. a shared vendor module that async boundaries keep pulling into the initial chunk).
-3. The dev/build bundler unification lands and makes bundler-specific config meaningful for both environments.
+3. ~~The dev/build bundler unification lands and makes bundler-specific config meaningful for both environments.~~ → **Fired 2026-07-19 and re-evaluated** (see "Re-evaluation record" below); future re-evaluations are governed by triggers 1 and 2.
+
+### Re-evaluation record
+
+#### 2026-07-19: trigger 3 (dev/build bundler unification)
+
+**What fired:** issue #387 was completed by PR #388 (commit `7322545`), removing `--webpack` from the `dev` script in `frontend/package.json`. Dev and build are now both driven by Turbopack, so bundler-specific config applies to both environments from here on.
+
+**Re-verified (against next@16.2.10, the version actually installed per the lockfile):**
+
+- `TurbopackOptions` in `frontend/node_modules/next/dist/server/config-shared.d.ts` still has exactly the original six fields (`resolveAlias`, `resolveExtensions`, `rules`, `root`, `debugIds`, `ignoreIssue`) and nothing chunking-related — trigger 1 has not occurred.
+- `next.config.ts` still contains no `webpack` and no `turbopack` key, consistent with the original decision.
+
+**Outcome: the decision stands unchanged.** The unification removed the **secondary** rationale (the config-split foot-gun), not the primary one — the primary rationale (Turbopack exposes no public, stable chunking API) still holds in next@16.2.10, so there is still no supported chunk-splitting configuration to add. What actually changes as a result of this trigger:
+
+1. Keeping `next.config.ts` bundler-neutral is no longer a defensive requirement. If Next.js later promotes chunking control to stable (trigger 1), a `turbopack.*` config can be adopted directly and will apply to dev and build alike, with no "only affects one side" trap.
+2. The code-review red flag updates from "config that only one bundler reads" to: a `webpack()` callback is now read by neither environment — any addition of one is dead config and should simply be rejected.
+3. Trigger 3 is consumed; future re-evaluations of this decision are governed by triggers 1 and 2.
 
 ### Rollback
 
