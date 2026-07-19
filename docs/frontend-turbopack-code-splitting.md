@@ -92,7 +92,7 @@ Implications:
 - Any `turbopack.*` config we might add would affect `next build` (and `pnpm run analyze`) but **not** the dev server; conversely a `webpack()` callback would affect dev but be ignored by the production build. This split is a real foot-gun for any future bundler-level configuration — one more reason to keep `next.config.ts` bundler-agnostic (as it is today: it currently contains no `webpack` and no `turbopack` key).
 - Dev/prod behavioral drift (module resolution, HMR semantics, CSS handling) is possible but has not caused observed issues so far.
 
-**Recommendation:** unify on Turbopack for dev (`next dev` without `--webpack`) — but as its own follow-up issue with its own verification (dev-server smoke test of HMR, CSS, socket.io client behavior), not as a rider on this documentation PR. Until then, treat "config that only one bundler reads" as a review red flag.
+**Recommendation:** unify on Turbopack for dev (`next dev` without `--webpack`) — tracked separately in #387 with its own verification (dev-server smoke test of HMR, CSS, and Socket.IO client behavior), not as a rider on this documentation PR. Until then, treat "config that only one bundler reads" as a review red flag.
 
 ## Question 4: the ~112 KB `polyfill-nomodule.js` (baseline candidate 3)
 
