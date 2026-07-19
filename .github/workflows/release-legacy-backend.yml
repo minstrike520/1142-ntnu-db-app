@@ -55,6 +55,9 @@ jobs:
           set -euo pipefail
           tag_ref="refs/tags/${GITHUB_REF_NAME}"
 
+          git fetch --force origin \
+            "${tag_ref}:${tag_ref}"
+
           object_type="$(git cat-file -t "$tag_ref")"
           if [[ "$object_type" != "tag" ]]; then
             echo "封存版本必須使用 annotated tag；實際 object type：$object_type" >&2
