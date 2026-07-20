@@ -70,7 +70,8 @@ export class MockSocket {
 
 let latestSocket: MockSocket | null = null;
 
-export const io = (..._args: unknown[]): MockSocket => {
+// The real io() takes (uri, opts); the fake ignores them.
+export const io = (): MockSocket => {
   latestSocket = new MockSocket();
   return latestSocket;
 };

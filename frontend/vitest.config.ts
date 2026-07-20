@@ -1,7 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { transformAsync } from "@babel/core";
-import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vitest/config";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));

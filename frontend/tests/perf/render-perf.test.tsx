@@ -28,9 +28,7 @@ afterAll(() => {
   const outFile =
     process.env.PERF_RESULTS_FILE ?? path.join(__dirname, ".last-results.txt");
   fs.writeFileSync(outFile, lines.join("\n"));
-  /* eslint-disable no-console */
   console.log(lines.join("\n"));
-  /* eslint-enable no-console */
 });
 
 describe("scenario 1: open and switch chatroom", () => {
