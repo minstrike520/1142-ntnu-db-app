@@ -1,6 +1,6 @@
 # Near Chat Stack 版本發布
 
-[English](../backend-release.md) | 繁體中文
+[English](../RELEASE.md) | 繁體中文
 
 Near Chat 的版本 tag 代表一份可部署的完整 Stack，不只是 Express 後端。從 `v1.0.1` 起，每個版本都包含前端映像、後端映像、PostgreSQL 18 runtime digest、資料庫 migration runner，以及 Docker Compose 部署 bundle。既有的 `v1.0.0` 後端專用版本已不可變，仍永久保留供回滾。
 
