@@ -361,6 +361,51 @@ interface RightPanelContextType {
 
 const RightPanelContext = createContext<RightPanelContextType | undefined>(undefined);
 
+// Static key list for the stable handler proxies built in ChatProvider. Kept
+// at module level so building the proxies never reads a ref during render.
+// The `NoMissingHandlerKey` check below fails to compile if a handler is
+// added to the `handlers` object without being listed here.
+const HANDLER_KEYS = [
+  "toggleFolder",
+  "handleLogout",
+  "handleSendMessage",
+  "handleTyping",
+  "handleUploadAttachments",
+  "handleRecallMessage",
+  "handleUpdateMessage",
+  "handleUpdateProfile",
+  "handleUpdatePreferences",
+  "handleCreateRoom",
+  "handleOpenPrivateRoom",
+  "handleCreateFolder",
+  "handleDeleteFolder",
+  "handleRenameFolder",
+  "handleCategorizeRoom",
+  "handleModifyNickname",
+  "handleLeaveOrBlock",
+  "handleDeleteAccount",
+  "loadGroupMembers",
+  "saveGroupSettings",
+  "approveGroupMember",
+  "updateGroupMember",
+  "kickGroupMember",
+  "transferGroupOwner",
+  "handleDeleteGroupRoom",
+  "searchUsersForInvite",
+  "handleJoinByInviteCode",
+  "sendFriendRequest",
+  "acceptFriendRequest",
+  "rejectFriendRequest",
+  "removeFriend",
+  "blockFriend",
+  "unblockUser",
+  "saveEmergencySettings",
+  "setUiLanguage",
+  "refreshSocialData",
+  "updateRoomSorting",
+] as const;
+type HandlerKey = (typeof HANDLER_KEYS)[number];
+
 const toStoredUser = (
   profile: MyProfile,
   settings?: Partial<UserSettings>,
@@ -2124,6 +2169,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     updateRoomSorting,
   };
   type Handlers = typeof handlers;
+  // Compile-time exhaustiveness check: every key of `handlers` must appear in
+  // the module-level HANDLER_KEYS list (and vice versa via HandlerKey).
+  type NoMissingHandlerKey = Exclude<keyof Handlers, HandlerKey> extends never ? true : never;
+  const assertAllHandlerKeysListed: NoMissingHandlerKey = true;
+  void assertAllHandlerKeysListed;
 
   const handlersRef = useRef<Handlers>(handlers);
   useLayoutEffect(() => {
@@ -2131,8 +2181,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   });
 
   const stableHandlers = useMemo(() => {
-    const proxies = {} as Record<keyof Handlers, (...args: unknown[]) => unknown>;
-    for (const key of Object.keys(handlersRef.current) as Array<keyof Handlers>) {
+    const proxies = {} as Record<HandlerKey, (...args: unknown[]) => unknown>;
+    for (const key of HANDLER_KEYS) {
       proxies[key] = (...args: unknown[]) =>
         (handlersRef.current[key] as (...inner: unknown[]) => unknown)(...args);
     }
@@ -2144,7 +2194,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       rooms: derivedRooms,
       folders,
       messages,
-      typingUsers,
       groupReadStates,
       user,
       activeRoomNicknames,
