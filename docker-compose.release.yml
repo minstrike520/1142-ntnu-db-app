@@ -1,0 +1,69 @@
+name: near-chat
+
+services:
+  db:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    restart: "no"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["pnpm", "run", "migrate:up"]
+
+  backend:
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    restart: unless-stopped
+    ports:
+      - "4005:4000"
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
+      RATE_LIMIT_DISABLED: ${RATE_LIMIT_DISABLED:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+      ATTACHMENT_TYPE_RESTRICTION_ENABLED: ${ATTACHMENT_TYPE_RESTRICTION_ENABLED:-false}
+      ATTACHMENT_ALLOWED_MIME_TYPES: ${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
+      ATTACHMENT_ALLOWED_EXTENSIONS: ${ATTACHMENT_ALLOWED_EXTENSIONS:-.jpg,.jpeg,.png,.gif,.pdf,.zip,.txt}
+      ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:-10485760}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/app/uploads
+    command: ["node", "dist/backend/src/index.js"]
+
+  frontend:
+    image: ${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}
+    restart: unless-stopped
+    ports:
+      - "3005:3000"
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4005}
+      ALLOWED_DEV_ORIGINS: ${ALLOWED_DEV_ORIGINS:-}
+    depends_on:
+      backend:
+        condition: service_started
+
+volumes:
+  pgdata:
+  app_uploads:

@@ -15,7 +15,7 @@ A real-time group chat application built as an NTNU Database Theories course pro
 - [Getting Started](#getting-started)
 - [Production Deployment](#production-deployment)
 - [Testing](#testing)
-- [Backend Releases](#backend-releases)
+- [Stack Releases](#stack-releases)
 
 ---
 
@@ -113,6 +113,8 @@ docker compose exec backend pnpm run db:seed
 
 The project provides a production-ready configuration using `docker-compose.prod.yml`, which runs optimized production builds (`Dockerfile.prod`) and sets up a Cloudflare Tunnel for secure remote access.
 
+For a versioned deployment using published artifacts, download the `near-chat-stack-vX.Y.Z.tar.gz` asset from the GitHub Release and use its `docker-compose.release.yml`. That bundle pins the frontend and backend image digests, PostgreSQL 18 runtime digest, and migration step together. See the [Stack Version Release Guide](docs/backend-release.md).
+
 ### 1. Configure Production Environment
 Ensure all production environment variables (e.g., `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DATABASE_URL`, `JWT_SECRET`, `NEXT_PUBLIC_API_URL`, `TUNNEL_TOKEN`) are configured in your `.env` file.
 
@@ -140,6 +142,6 @@ docker compose -f docker-compose.prod.yml down
 
 For detailed instructions on running unit, integration, and E2E tests, please refer directly to the [Developer & Testing Guide](docs/DEVELOPMENT.md#5-testing-guide).
 
-## Backend Releases
+## Stack Releases
 
-Annotated `vX.Y.Z` tags automatically publish immutable GHCR backend images and a digest-recorded GitHub Release. See the [Backend Version Release Guide](docs/backend-release.md).
+Annotated `vX.Y.Z` tags automatically publish immutable frontend and backend GHCR images, a pinned PostgreSQL 18 runtime, migrations, a Docker Compose bundle, and a digest-recorded GitHub Release. See the [Stack Version Release Guide](docs/backend-release.md).

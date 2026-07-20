@@ -1,36 +1,50 @@
-# 後端版本發布
+# Near Chat Stack 版本發布
 
 [English](../backend-release.md) | 繁體中文
 
-`main` 上的 Express／Node 後端採用 Semantic Versioning。PR #392 合併的應用程式基線是 `5455d6a524c39eeafd4bfb860afb3a7c6fb8b27a`，套件版本為 `1.0.0`。第一個 Release tag 會指向稍後加入本發布自動化、但不改變後端行為的 `main` commit。
+Near Chat 的版本 tag 代表一份可部署的完整 Stack，不只是 Express 後端。從 `v1.0.1` 起，每個版本都包含前端映像、後端映像、PostgreSQL 18 runtime digest、資料庫 migration runner，以及 Docker Compose 部署 bundle。既有的 `v1.0.0` 後端專用版本已不可變，仍永久保留供回滾。
 
 ## 發布版本
 
-只有推送完全符合 `vX.Y.Z` 的 annotated tag 才會啟動發布。數字版本必須等於 `backend/package.json`，tag 必須指向目前 `main` HEAD，而且同一個 commit 必須已有成功的 main CI run，包含 backend build、unit、integration、E2E 與 security jobs。
+只有推送完全符合 `vX.Y.Z` 的 annotated tag 才會啟動發布。數字版本必須同時等於 root、`backend/package.json` 與 `frontend/package.json`。Tag 必須指向目前 `main` HEAD，且該 commit 必須通過 main CI 的 frontend lint／typecheck／build、backend build、unit、integration、E2E 與 security jobs。
 
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v1.0.0 -m "Near Chat backend v1.0.0"
-git push origin v1.0.0
+git tag -a v1.0.1 -m "Near Chat Stack v1.0.1"
+git push origin v1.0.1
 ```
 
-Workflow 會發布：
+Workflow 會發布兩個不可變的應用程式映像，各自包含版本 tag 與 commit tag：
 
-- `ghcr.io/nearcsie/near-chat-backend:1.0.0`
+- `ghcr.io/nearcsie/near-chat-backend:1.0.1`
 - `ghcr.io/nearcsie/near-chat-backend:sha-<12-character-commit>`
-- provenance attestation，以及記錄完整 commit 與映像 digest 的繁體中文 GitHub Release
+- `ghcr.io/nearcsie/near-chat-frontend:1.0.1`
+- `ghcr.io/nearcsie/near-chat-frontend:sha-<12-character-commit>`
 
-不發布可變的 `latest` tag。部署與回滾應固定使用 digest：
+GitHub Release 也會記錄固定 digest 的 PostgreSQL runtime、兩個映像的 digest、provenance attestation，以及 `near-chat-stack-vX.Y.Z.tar.gz` 部署 bundle。不發布可變的 `latest` tag。
+
+## 使用 Release bundle 部署
+
+從 GitHub Release 下載 bundle、解壓縮、複製環境變數範例，再將所有 placeholder 換成部署環境的值。範例檔不包含任何 credential。
 
 ```bash
-docker pull ghcr.io/nearcsie/near-chat-backend@sha256:<digest-from-release>
+tar -xzf near-chat-stack-v1.0.1.tar.gz
+cd near-chat-stack-v1.0.1
+cp near-chat.env.example .env
+docker compose --env-file .env -f docker-compose.release.yml up -d
 ```
+
+Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行一次 `pnpm run migrate:up`，再啟動 backend 與 frontend。PostgreSQL 資料與使用者上傳檔案仍由部署環境的 volume 持有，不會放入 image 或 Release archive。
+
+正式部署應把 `BACKEND_IMAGE` 與 `FRONTEND_IMAGE` 固定為 manifest 記錄的 digest 參照。Frontend image 預設以 `http://localhost:4005` 建置 API URL；現有前端 runtime 邏輯會對標準 `3005`／`4005` host port 做對應，若公開拓撲不同，需另行設定建置參數。
+
+## 資料庫相容規則
+
+資料庫 runtime 固定為 digest 指定的 PostgreSQL 18 Alpine。Schema 由 `backend/migrations` 版本化，並隨 backend image 發布；`migrate` service 會在應用程式啟動前套用尚未執行的 migration。不得把資料庫 volume 或含真實資料的 dump 當成 Release artifact。破壞性 schema 變更必須採 expand-and-contract，並在 migration 期間維持對 legacy Express 部署的相容性。
 
 ## 不可變與失敗處理
 
-版本與 commit 映像參照都視為不可變。乾淨的首次發布要求 GitHub Release 與兩個映像參照都不存在。重新執行時，只驗證兩個參照解析為相同 digest、且 Release 已記錄該 commit 與 digest 的完整既有發布。
+四個應用程式 image 參照與 GitHub Release 視為同一個不可變發布。乾淨的首次發布要求四個 image 參照與 Release 都不存在；重新執行時，只驗證四個參照的 digest、兩個 provenance attestation、Release manifest 與 bundle 是否完全一致。Partial publication、digest 不一致、attestation 缺失或 bundle asset 缺失都會 fail closed；workflow 不會覆寫既有版本。
 
-若發生 partial publication、digest 不一致、只有 Release 沒有映像，或只有映像沒有 Release，workflow 會停止。它不會自動覆寫或重建既有版本；必須先人工調查 registry 與 Release 再決定後續處理。
-
-Production image 使用 Node.js 24 與 pnpm 11。發布成果不得包含 `.env`、credential、包含真實資料的 database volume／dump，或使用者 uploads。
+發布成果不得包含 `.env`、credential、包含真實資料的 database volume／dump，或使用者 uploads。
