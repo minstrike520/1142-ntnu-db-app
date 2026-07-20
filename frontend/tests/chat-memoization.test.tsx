@@ -11,7 +11,7 @@
  */
 import React from "react";
 import { describe, expect, test } from "vitest";
-import { act } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { useChat } from "@/context/ChatContext";
 import { mountChatApp } from "./harness";
 import { makeMessage, messageId } from "./fixtures";
@@ -80,6 +80,63 @@ describe("ChatContext value stability", () => {
     );
     expect(byFolder.get("folder-2")).toEqual(["room-5"]);
     expect(byFolder.has("folder-Later")).toBe(true);
+  });
+
+  test("remote typing events do not invalidate the main context value", async () => {
+    const seen: ChatContextValue[] = [];
+    const app = await mountChatApp("/chat/room-1", { probe: makeProbe(seen) });
+
+    const before = seen.at(-1)!;
+    act(() => {
+      app.socket().serverEmit("user_typing", { roomId: "room-1", userId: "m-1", isTyping: true });
+    });
+    expect(await screen.findByText(/Member One is typing/)).toBeTruthy();
+
+    // The indicator rendered, but the main context value kept its identity —
+    // useChat() consumers were not invalidated by the typing event.
+    expect(seen.at(-1)!).toBe(before);
+
+    act(() => {
+      app.socket().serverEmit("user_typing", { roomId: "room-1", userId: "m-1", isTyping: false });
+    });
+    await app.settle();
+    expect(seen.at(-1)!).toBe(before);
+  });
+
+  test("toggling the right panel does not invalidate the main context value", async () => {
+    const seen: ChatContextValue[] = [];
+    const app = await mountChatApp("/chat/room-1", { probe: makeProbe(seen) });
+
+    const before = seen.at(-1)!;
+    fireEvent.click(screen.getByTitle("Hide Info Panel"));
+    await app.settle();
+
+    expect(screen.queryByText("Members (8)")).toBeNull();
+    expect(seen.at(-1)!).toBe(before);
+
+    fireEvent.click(screen.getByTitle("Show Info Panel"));
+    await app.settle();
+    expect(screen.getByText("Members (8)")).toBeTruthy();
+  });
+
+  test("switching the UI language still reaches translation consumers", async () => {
+    const seen: ChatContextValue[] = [];
+    const app = await mountChatApp("/chat/room-1", { probe: makeProbe(seen) });
+
+    expect(screen.getByText("Send")).toBeTruthy();
+
+    await act(async () => {
+      await seen.at(-1)!.handleUpdatePreferences({
+        theme: "light",
+        language: "zh-TW",
+        notifyDesktop: true,
+        notifySound: true,
+      });
+    });
+    await app.settle();
+
+    expect(screen.getByText("發送")).toBeTruthy();
+    expect(screen.getByText("成員列表 (8)")).toBeTruthy();
   });
 
   test("getReadAvatarsForMessage tracks the latest read state", async () => {

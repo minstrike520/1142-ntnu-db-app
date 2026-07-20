@@ -5,7 +5,7 @@ import { Avatar } from "./Avatar";
 import ProfilePopover from "../chat/ProfilePopover";
 import { fetchAttachmentBlobUrl } from "@/lib/api";
 import { FileDownloaderBridge } from "@/lib/fileDownloaderBridge";
-import { useChat } from "@/context/ChatContext";
+import { useProfilePopover } from "@/context/ChatContext";
 
 export interface Attachment {
   filename: string;
@@ -213,7 +213,7 @@ export function ChatBubble({
   const [downloadingUrl, setDownloadingUrl] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState("");
 
-  const { activeProfilePopover, setActiveProfilePopover } = useChat();
+  const { activeProfilePopover, setActiveProfilePopover } = useProfilePopover();
   const showPopover = messageId ? activeProfilePopover?.instanceId === messageId : false;
 
   const menuOpenedAtRef = useRef(0);

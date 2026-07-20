@@ -2,7 +2,13 @@
 
 import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { useChat, getAvatarForUser, Message } from "@/context/ChatContext";
+import {
+  useChat,
+  useRightPanel,
+  useTypingUsers,
+  getAvatarForUser,
+  Message,
+} from "@/context/ChatContext";
 import { resolveAssetUrl } from "@/lib/assets";
 import { Button } from "@/components/ui/Button";
 import { Dropdown } from "@/components/ui/Dropdown";
@@ -40,6 +46,23 @@ const formatFileSize = (bytes: number) => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+// Isolated so remote typing events (which fire on every peer keystroke) only
+// re-render this one element instead of the whole conversation pane.
+function TypingIndicator({ roomId }: { roomId: string }) {
+  const typingUsers = useTypingUsers();
+  const names = typingUsers[roomId] ?? [];
+  if (names.length === 0) return null;
+  const label =
+    names.length === 1
+      ? `${names[0]} is typing...`
+      : `${names.slice(0, 2).join(", ")} are typing...`;
+  return (
+    <div className="px-3 md:px-6 py-1 text-xs text-text-muted italic select-none">
+      {label}
+    </div>
+  );
+}
+
 const getMentionDraft = (value: string, cursorPosition: number): MentionDraft | null => {
   const beforeCursor = value.slice(0, cursorPosition);
   const match = beforeCursor.match(/(?:^|\s)@([^\s@]*)$/);
@@ -72,12 +95,10 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     handleModifyNickname,
     handleLeaveOrBlock,
     getReadAvatarsForMessage,
-    showRightPanel,
-    setShowRightPanel,
-    typingUsers,
     groupReadStates,
     markRoomAsRead,
   } = useChat();
+  const { showRightPanel, setShowRightPanel } = useRightPanel();
 
   const [inputText, setInputText] = useState("");
   const [mentionDraft, setMentionDraft] = useState<MentionDraft | null>(null);
@@ -791,18 +812,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
         </div>
       )}
 
-      {(() => {
-        const names = typingUsers[activeRoom.id] ?? [];
-        if (names.length === 0) return null;
-        const label = names.length === 1
-          ? `${names[0]} is typing...`
-          : `${names.slice(0, 2).join(", ")} are typing...`;
-        return (
-          <div className="px-3 md:px-6 py-1 text-xs text-text-muted italic select-none">
-            {label}
-          </div>
-        );
-      })()}
+      <TypingIndicator roomId={activeRoom.id} />
 
       {/* Input Box Area */}
       <div className="border-t border-border-primary bg-surface-card px-3 py-3 md:px-6 md:py-4 shrink-0">

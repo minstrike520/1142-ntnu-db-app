@@ -254,7 +254,6 @@ interface ChatContextType {
   rooms: ChatRoom[];
   folders: Folder[];
   messages: Message[];
-  typingUsers: Record<string, string[]>;
   groupReadStates: Record<string, Record<string, string>>;
   user: User;
   activeRoomNicknames: Record<string, string>;
@@ -268,8 +267,6 @@ interface ChatContextType {
   roomsInitialized: boolean;
   selectedFriendForSidebar: Friend | null;
   setSelectedFriendForSidebar: React.Dispatch<React.SetStateAction<Friend | null>>;
-  showRightPanel: boolean;
-  setShowRightPanel: React.Dispatch<React.SetStateAction<boolean>>;
   hasUnsavedChanges: boolean;
   setHasUnsavedChanges: (val: boolean) => void;
 
@@ -324,14 +321,45 @@ interface ChatContextType {
   unblockUser: (blockedId: string) => Promise<void>;
   saveEmergencySettings: (settings: EmergencySettings) => Promise<void>;
   setUiLanguage: (language: UiLanguage) => void;
-  activeProfilePopover: { instanceId: string; userId: string } | null;
-  setActiveProfilePopover: React.Dispatch<React.SetStateAction<{ instanceId: string; userId: string } | null>>;
   refreshSocialData: () => Promise<void>;
   updateRoomSorting: (nextOrder: Record<string, string[]>) => Promise<void>;
   markRoomAsRead: (roomId: string) => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
+
+// ---------------------------------------------------------------------------
+// Leaf contexts for high-frequency / UI-local state (hotspot #2, issue #383).
+//
+// These states change far more often than the chat data (typing events fire
+// on every keystroke of every peer) or are purely presentational (popover,
+// right panel). Keeping them inside the main context value forced every
+// useChat() consumer — including every ChatBubble via useTranslation — to
+// re-render on each change. They still live in ChatProvider's state; only the
+// subscription channel is separate, so this is not a ChatContext re-
+// architecture (that is tracked separately, see
+// docs/frontend-react-render-optimization.md).
+// ---------------------------------------------------------------------------
+
+const TypingUsersContext = createContext<Record<string, string[]> | undefined>(undefined);
+
+const UiLanguageContext = createContext<UiLanguage | undefined>(undefined);
+
+interface ProfilePopoverContextType {
+  activeProfilePopover: { instanceId: string; userId: string } | null;
+  setActiveProfilePopover: React.Dispatch<
+    React.SetStateAction<{ instanceId: string; userId: string } | null>
+  >;
+}
+
+const ProfilePopoverContext = createContext<ProfilePopoverContextType | undefined>(undefined);
+
+interface RightPanelContextType {
+  showRightPanel: boolean;
+  setShowRightPanel: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+const RightPanelContext = createContext<RightPanelContextType | undefined>(undefined);
 
 const toStoredUser = (
   profile: MyProfile,
@@ -2130,8 +2158,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       roomsInitialized,
       selectedFriendForSidebar,
       setSelectedFriendForSidebar,
-      showRightPanel,
-      setShowRightPanel,
       hasUnsavedChanges,
       setHasUnsavedChanges,
       setRooms,
@@ -2140,8 +2166,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setUser,
       setActiveRoomNicknames,
       getReadAvatarsForMessage,
-      activeProfilePopover,
-      setActiveProfilePopover,
       markRoomAsRead,
       ...stableHandlers,
     }),
@@ -2149,7 +2173,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       derivedRooms,
       folders,
       messages,
-      typingUsers,
       groupReadStates,
       user,
       activeRoomNicknames,
@@ -2162,18 +2185,34 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       isMounted,
       roomsInitialized,
       selectedFriendForSidebar,
-      showRightPanel,
       hasUnsavedChanges,
       getReadAvatarsForMessage,
-      activeProfilePopover,
       markRoomAsRead,
       stableHandlers,
     ],
   );
 
+  const profilePopoverValue = useMemo<ProfilePopoverContextType>(
+    () => ({ activeProfilePopover, setActiveProfilePopover }),
+    [activeProfilePopover],
+  );
+
+  const rightPanelValue = useMemo<RightPanelContextType>(
+    () => ({ showRightPanel, setShowRightPanel }),
+    [showRightPanel],
+  );
+
   return (
     <ChatContext.Provider value={contextValue}>
-      {children}
+      <UiLanguageContext.Provider value={uiLanguage}>
+        <TypingUsersContext.Provider value={typingUsers}>
+          <ProfilePopoverContext.Provider value={profilePopoverValue}>
+            <RightPanelContext.Provider value={rightPanelValue}>
+              {children}
+            </RightPanelContext.Provider>
+          </ProfilePopoverContext.Provider>
+        </TypingUsersContext.Provider>
+      </UiLanguageContext.Provider>
     </ChatContext.Provider>
   );
 }
@@ -2182,6 +2221,42 @@ export function useChat() {
   const context = useContext(ChatContext);
   if (context === undefined) {
     throw new Error("useChat must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** Per-room typing indicator state. Changes on every remote typing event. */
+export function useTypingUsers() {
+  const context = useContext(TypingUsersContext);
+  if (context === undefined) {
+    throw new Error("useTypingUsers must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** UI language only — lets useTranslation avoid subscribing to chat data. */
+export function useUiLanguage() {
+  const context = useContext(UiLanguageContext);
+  if (context === undefined) {
+    throw new Error("useUiLanguage must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** Shared profile-popover open state (message bubbles, member list). */
+export function useProfilePopover() {
+  const context = useContext(ProfilePopoverContext);
+  if (context === undefined) {
+    throw new Error("useProfilePopover must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** Right info-panel visibility. */
+export function useRightPanel() {
+  const context = useContext(RightPanelContext);
+  if (context === undefined) {
+    throw new Error("useRightPanel must be used within a ChatProvider");
   }
   return context;
 }
