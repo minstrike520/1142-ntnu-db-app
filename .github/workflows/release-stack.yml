@@ -470,10 +470,10 @@ jobs:
           frontend_image="${REGISTRY}/${FRONTEND_IMAGE_NAME}"
 
           {
-            echo '# Near Chat 完整 Stack 正式版本'
+            echo '# Near Chat'
             echo
-            printf -- '- 版本：`%s`\n' "$GITHUB_REF_NAME"
-            printf -- '- 程式 Commit：`%s`\n' "$GITHUB_SHA"
+            printf -- '- version：`%s`\n' "$GITHUB_REF_NAME"
+            printf -- '- Commit：`%s`\n' "$GITHUB_SHA"
             printf -- '- Backend image：`%s:%s`\n' "$backend_image" "$VERSION_NUMBER"
             printf -- '- Backend commit image：`%s:%s`\n' "$backend_image" "$IMAGE_SHA_TAG"
             printf -- '- Backend digest：`%s@%s`\n' "$backend_image" "$BACKEND_DIGEST"
@@ -481,11 +481,8 @@ jobs:
             printf -- '- Frontend commit image：`%s:%s`\n' "$frontend_image" "$IMAGE_SHA_TAG"
             printf -- '- Frontend digest：`%s@%s`\n' "$frontend_image" "$FRONTEND_DIGEST"
             printf -- '- PostgreSQL runtime：`%s`\n' "$POSTGRES_IMAGE"
-            printf -- '- 部署 bundle：`%s`\n' "$(basename "$BUNDLE_ARCHIVE")"
+            printf -- '- Depoly bundle：`%s`\n' "$(basename "$BUNDLE_ARCHIVE")"
             printf -- '- Bundle SHA-256：`%s`\n' "$BUNDLE_SHA256"
-            echo
-            echo '此 Release 包含前端、後端、PostgreSQL 18 runtime digest 與 migration 啟動流程。資料庫 volume 不包含在 artifact 中；部署時由 Compose 建立並持有。'
-            echo '部署與回滾應固定使用 manifest 記錄的 image digest。'
             echo
             printf -- '發布說明：[繁體中文](https://github.com/%s/blob/%s/docs/ZH-TW/backend-release.md)／[English](https://github.com/%s/blob/%s/docs/backend-release.md)\n' \
               "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
@@ -494,7 +491,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
-            --title "Near Chat 完整 Stack $GITHUB_REF_NAME" \
+            --title "Near Chat $GITHUB_REF_NAME" \
             --notes-file "$notes_file" \
             --latest=false \
             "$BUNDLE_ARCHIVE"
