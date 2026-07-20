@@ -1348,7 +1348,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 | :--- | :--- | :--- |
 | `join_room` | `{ roomId: string }` | 訂閱特定聊天室的訊息推播（需為成員） |
 | `leave_room` | `{ roomId: string }` | 取消訂閱 |
-| `send_message` | `{ roomId: string, content: string, replyTo?: string, attachmentIds?: string[] }` | 發送訊息；`replyTo` 為引用的訊息 ID；`attachmentIds` 為待綁定附件 ID 陣列 |
+| `send_message` | `{ roomId: string, content: string, replyTo?: string, attachmentIds?: string[] }` | 發送訊息；`replyTo` 為引用的訊息 ID；`attachmentIds` 為待綁定附件 ID 陣列。備註：`content` 僅在至少提供一個附件 ID 時可為空字串；否則 `content` 不可為空。 |
 | `recall_message` | `{ messageId: string }` | 收回訊息（僅限原發送者） |
 | `typing` | `{ roomId: string, isTyping: boolean }` | 廣播輸入中狀態 |
 | `read_receipt` | `{ roomId: string, messageId: string }` | 更新已讀游標至指定訊息 |
