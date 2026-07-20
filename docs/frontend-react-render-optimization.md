@@ -58,7 +58,7 @@ Baseline(修正前,React Compiler 已套用):
 | S3b 本地輸入 x5 | 10 | 90.3ms | 200 | 10 | 0 |
 | S3c 面板切換 x2 | 2 | 40.7ms | 80 | 2 | 2 |
 
-### 熱點一:ChatContext value 與 handler 識別性不穩定(commit `45b4515`、lint 補強 `e930c2f`)
+### 熱點一:ChatContext value 與 handler 識別性不穩定(commit `daca745`、lint 補強 `2eb4887`)
 
 `ChatContext.tsx` 因既有的 hook 依賴抑制註解被 React Compiler 跳過(檔頭本來就記載),所以 provider 每次 render 都重建 context value 物件與全部 37 個 handler closure——任何 provider 狀態變動都讓所有 `useChat()` consumer 重新 render,而且下游任何 memo 邊界都會被不穩定的 handler prop 打穿。這是熱點二、三能生效的前提。
 
@@ -68,7 +68,7 @@ Baseline(修正前,React Compiler 已套用):
 - handler 以「ref + 恆定 proxy」曝露(沿用檔內既有 `markRoomAsRead` 的模式):proxy 識別性永不變,呼叫時委派到最後一次 commit 的實作。proxy 只會在事件/effect 中被呼叫;**於 render 期間被呼叫**的 `getReadAvatarsForMessage` 則改為 `useCallback` 帶真實依賴,避免讀到上一個 commit 的狀態。
 - 此修正單獨量測時七個情境數字幾乎不變(各情境仍有合法的資料變動),屬結構性前置。
 
-### 熱點二:高頻/UI-local 狀態擠在單一 context value(commit `ebdad42`)
+### 熱點二:高頻/UI-local 狀態擠在單一 context value(commit `e914d33`)
 
 `typingUsers` 隨對方每個按鍵變動;`uiLanguage` 透過 `useTranslation` 被幾乎每個元件訂閱;`activeProfilePopover`、`showRightPanel` 是純 UI 狀態。它們在單一 value 裡,任何一個變動都會重繪整個 consumer 樹——S3a 的證據:typing 亮/滅共重繪 80 個泡泡子樹 + Sidebar,總 38.8ms,而畫面上只需要更新一行指示文字。
 
@@ -81,7 +81,7 @@ Baseline(修正前,React Compiler 已套用):
 
 效果:S3a 從 38.8ms / 80 次泡泡 render → **1.4ms / 0 次**。
 
-### 熱點三:訊息列表沒有 memo 邊界 + Chatroom/ChatBubble 被 compiler 跳過(commit `d85514f`)
+### 熱點三:訊息列表沒有 memo 邊界 + Chatroom/ChatBubble 被 compiler 跳過(commit `b51b61d`)
 
 bailout 診斷顯示 **`Chatroom` 與 `ChatBubble` 在產線 build 中都沒有被 React Compiler 編譯**:
 
