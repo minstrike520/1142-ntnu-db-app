@@ -1,6 +1,6 @@
 # Near Chat Stack Version Release
 
-[繁體中文](ZH-TW/backend-release.md) | English
+[繁體中文](ZH-TW/RELEASE.md) | English
 
 Near Chat release tags represent a deployable stack, not only the Express backend. Starting with `v1.0.1`, every release contains the frontend image, backend image, PostgreSQL 18 runtime digest, database migration runner, and a Docker Compose bundle. The existing `v1.0.0` backend-only release is immutable and remains available for rollback.
 
