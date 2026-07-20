@@ -217,7 +217,10 @@
     "messageRecalled": "訊息已收回",
     "downloadingAttachment": "正在下載附件",
     "downloadAttachment": "下載附件",
-    "newMessages": "新訊息"
+    "newMessages": "新訊息",
+    "tasks": "任務",
+    "hideTasks": "隱藏任務",
+    "showTasks": "顯示任務"
   },
   "profileCard": {
     "myInfo": "我的資訊",
@@ -332,5 +335,38 @@
     "renameFailed": "修改資料夾名稱失敗",
     "deleteFailed": "刪除資料夾失敗",
     "confirmAction": "確定"
+  },
+  "tasks": {
+    "title": "任務 ({count})",
+    "empty": "尚無任務",
+    "newTask": "新增任務",
+    "onlyOwnerAdminCanCreate": "僅群組擁有者或管理員可以建立任務",
+    "fieldTitle": "標題",
+    "fieldTitlePlaceholder": "任務標題",
+    "fieldDescription": "說明",
+    "fieldDescriptionPlaceholder": "任務說明（選填）",
+    "fieldDueAt": "截止時間",
+    "fieldExternalLink": "外部連結",
+    "fieldExternalLinkPlaceholder": "https://...",
+    "fieldAssignees": "指派成員",
+    "noAssignees": "尚無指派對象",
+    "cancel": "取消",
+    "create": "建立",
+    "save": "儲存",
+    "edit": "編輯",
+    "delete": "刪除",
+    "confirmDelete": "確定要刪除此任務嗎？",
+    "createdBy": "建立者：{name}",
+    "due": "截止：{date}",
+    "statusOpen": "進行中",
+    "statusDone": "已完成",
+    "markDone": "標記為已完成",
+    "markOpen": "標記為未完成",
+    "titleCannotBeEmpty": "任務標題不能為空",
+    "createFailed": "建立任務失敗",
+    "updateFailed": "更新任務失敗",
+    "deleteFailed": "刪除任務失敗",
+    "loadFailed": "載入任務失敗",
+    "invalidExternalLink": "外部連結必須是有效的 http(s) 網址"
   }
 }

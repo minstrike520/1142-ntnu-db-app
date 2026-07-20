@@ -257,3 +257,29 @@ export interface Attachment {
   originalName: string;
   uploadedAt: Date;
 }
+
+// ---------------------------------------------------------------------------
+// Room tasks
+// ---------------------------------------------------------------------------
+
+export type RoomTaskStatus = 'open' | 'done';
+
+export interface RoomTask {
+  taskId: string;
+  roomId: string;
+  title: string;
+  description?: string;
+  /** null when the creator's account has been deleted (SET NULL on FK). */
+  createdBy: string | null;
+  dueAt?: Date;
+  externalLink?: string;
+  status: RoomTaskStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Task enriched with creator and assignee public profiles (via JOIN). */
+export interface RoomTaskWithDetails extends RoomTask {
+  creator: PublicUser | null;
+  assignees: PublicUser[];
+}

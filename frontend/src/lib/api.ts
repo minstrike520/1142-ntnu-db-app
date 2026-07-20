@@ -12,6 +12,7 @@ import type {
   Room,
   RoomMember,
   RoomSummary,
+  RoomTaskWithDetails,
   SearchUserResult,
   UserProfile,
   UserSettings,
@@ -506,6 +507,66 @@ export const listMessages = (
 
   return requestJson<MessageWithSender[]>(`/rooms/${roomId}/messages${suffix}`, {}, { token });
 };
+
+export interface CreateRoomTaskRequest {
+  title: string;
+  description?: string;
+  dueAt?: string;
+  externalLink?: string;
+  assigneeUserIds?: string[];
+}
+
+export type UpdateRoomTaskRequest = Partial<Omit<CreateRoomTaskRequest, 'assigneeUserIds'>>;
+
+export const listRoomTasks = (token: string, roomId: string): Promise<RoomTaskWithDetails[]> =>
+  requestJson<RoomTaskWithDetails[]>(`/rooms/${roomId}/tasks`, {}, { token });
+
+export const createRoomTask = (
+  token: string,
+  roomId: string,
+  data: CreateRoomTaskRequest,
+): Promise<RoomTaskWithDetails> =>
+  requestJson<RoomTaskWithDetails>(
+    `/rooms/${roomId}/tasks`,
+    {
+      method: 'POST',
+      ...withJsonBody(data),
+    },
+    { token },
+  );
+
+export const updateRoomTask = (
+  token: string,
+  roomId: string,
+  taskId: string,
+  data: UpdateRoomTaskRequest,
+): Promise<RoomTaskWithDetails> =>
+  requestJson<RoomTaskWithDetails>(
+    `/rooms/${roomId}/tasks/${taskId}`,
+    {
+      method: 'PATCH',
+      ...withJsonBody(data),
+    },
+    { token },
+  );
+
+export const setRoomTaskStatus = (
+  token: string,
+  roomId: string,
+  taskId: string,
+  status: 'open' | 'done',
+): Promise<RoomTaskWithDetails> =>
+  requestJson<RoomTaskWithDetails>(
+    `/rooms/${roomId}/tasks/${taskId}/status`,
+    {
+      method: 'PATCH',
+      ...withJsonBody({ status }),
+    },
+    { token },
+  );
+
+export const deleteRoomTask = (token: string, roomId: string, taskId: string): Promise<void> =>
+  requestJson<void>(`/rooms/${roomId}/tasks/${taskId}`, { method: 'DELETE' }, { token });
 
 export const listFolders = (token: string): Promise<ApiFolder[]> =>
   requestJson<ApiFolder[]>('/folders', {}, { token });

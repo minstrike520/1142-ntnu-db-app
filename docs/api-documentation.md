@@ -49,6 +49,11 @@ This document defines the RESTful API and Socket.IO real-time communication inte
 | | `POST` | [`/users/me/emergency-contacts`](#post-usersmeemergency-contacts) | Yes | Add or update emergency contact |
 | | `DELETE` | [`/users/me/emergency-contacts/:contactId`](#delete-usersmeemergency-contactscontactid) | Yes | Delete emergency contact |
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | Yes | Check inactivity to trigger alert automatically |
+| **Room Tasks** | `GET` | [`/rooms/:roomId/tasks`](#get-roomsroomidtasks) | Yes | List tasks for a room |
+| | `POST` | [`/rooms/:roomId/tasks`](#post-roomsroomidtasks) | Yes | Create a task (room Owner/Admin only) |
+| | `PATCH` | [`/rooms/:roomId/tasks/:taskId`](#patch-roomsroomidtaskstaskid) | Yes | Edit a task's fields |
+| | `PATCH` | [`/rooms/:roomId/tasks/:taskId/status`](#patch-roomsroomidtaskstaskidstatus) | Yes | Toggle a task's open/done status |
+| | `DELETE` | [`/rooms/:roomId/tasks/:taskId`](#delete-roomsroomidtaskstaskid) | Yes | Delete a task |
 
 ### Socket.IO Real-Time Communication
 
@@ -424,6 +429,40 @@ All errors return the following JSON structure:
     "name": "Work Chats",
     "createdAt": "2026-06-14T22:18:13Z",
     "roomIds": ["8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d"]
+  }
+  ```
+
+#### RoomTaskWithDetails
+- **Field Details**:
+  | Field | Type | Description |
+  | :--- | :--- | :--- |
+  | `taskId` | UUID | Unique task identifier |
+  | `roomId` | UUID | Room the task belongs to |
+  | `title` | String | Task title |
+  | `description` | String | Task detail (optional) |
+  | `createdBy` | UUID \| null | Creator user ID (`null` if the creator's account was deleted) |
+  | `dueAt` | String | Optional ISO deadline |
+  | `externalLink` | String | Optional URL (e.g. a GitHub issue link) |
+  | `status` | `"open"` \| `"done"` | Task status |
+  | `createdAt` | String | Creation timestamp |
+  | `updatedAt` | String | Last modified timestamp |
+  | `creator` | PublicUser \| null | Creator's public profile |
+  | `assignees` | Array\<PublicUser\> | Assigned members' public profiles |
+- **Example**:
+  ```json
+  {
+    "taskId": "b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2",
+    "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
+    "title": "Write Q3 report",
+    "description": "Summarize the sprint progress",
+    "createdBy": "d3b07384-d113-4956-a5cc-4847841c2c31",
+    "dueAt": "2026-07-25T00:00:00Z",
+    "externalLink": "https://github.com/example/repo/issues/1",
+    "status": "open",
+    "createdAt": "2026-07-20T09:00:00Z",
+    "updatedAt": "2026-07-20T09:00:00Z",
+    "creator": { "userId": "d3b07384-d113-4956-a5cc-4847841c2c31", "name": "Alice" },
+    "assignees": [{ "userId": "e4c07384-d113-4956-a5cc-4847841c2c32", "name": "Bob" }]
   }
   ```
 
@@ -1330,6 +1369,65 @@ All errors return the following JSON structure:
   ```
 - **Response**:
   - `200 OK`: Check completed.
+
+---
+
+### H. Room Tasks
+
+Tasks require the caller to hold the room role `owner` or `admin` to create/edit/delete (an assignee, or the creator, may also toggle status). Since private (1:1) rooms never have an `owner`/`admin` member, tasks are effectively available in group rooms only.
+
+#### `GET /rooms/:roomId/tasks`
+- **Description**: List all tasks for a room, newest first.
+- **Authentication & Authorization**: Authentication required. Caller must be a non-pending member of the room.
+- **Response**:
+  - `200 OK`: Returns `RoomTaskWithDetails[]`.
+  - `403 Forbidden`: Caller is not a member of the room, or is a pending member.
+  - `404 Not Found`: Room does not exist.
+
+#### `POST /rooms/:roomId/tasks`
+- **Description**: Create a task in the room.
+- **Authentication & Authorization**: Caller must be room `owner` or `admin`.
+- **Request Body**:
+  | Field | Type | Required | Description |
+  | :--- | :--- | :---: | :--- |
+  | `title` | String | Yes | Task title (1 to 200 characters) |
+  | `description` | String | No | Task detail (up to 2000 characters) |
+  | `dueAt` | String | No | ISO 8601 deadline |
+  | `externalLink` | String | No | A valid `http(s)` URL (e.g. a GitHub issue link) |
+  | `assigneeUserIds` | Array\<UUID\> | No | Current, non-pending room member IDs to assign |
+- **Response**:
+  - `201 Created`: Returns the created `RoomTaskWithDetails`.
+  - `400 Bad Request`: Invalid payload, or an assignee is not a current room member.
+  - `403 Forbidden`: Caller is not `owner`/`admin`.
+
+#### `PATCH /rooms/:roomId/tasks/:taskId`
+- **Description**: Edit a task's title, description, due date, or external link. Assignees are not editable after creation in v1.
+- **Authentication & Authorization**: The task's creator may always edit it; otherwise caller must be `owner`/`admin`. An `admin` cannot edit a task created by the room `owner` or by another `admin`.
+- **Request Body**: Same optional fields as create (`title`, `description`, `dueAt`, `externalLink`); at least one must be provided.
+- **Response**:
+  - `200 OK`: Returns the updated `RoomTaskWithDetails`.
+  - `403 Forbidden`: Caller lacks permission to edit this task.
+  - `404 Not Found`: Task does not exist in this room.
+
+#### `PATCH /rooms/:roomId/tasks/:taskId/status`
+- **Description**: Toggle a task between `open` and `done`.
+- **Authentication & Authorization**: Any assignee of the task, the task's creator, or `owner`/`admin`.
+- **Request Body**:
+  | Field | Type | Required | Description |
+  | :--- | :--- | :---: | :--- |
+  | `status` | `"open"` \| `"done"` | Yes | New status |
+- **Response**:
+  - `200 OK`: Returns the updated `RoomTaskWithDetails`.
+  - `403 Forbidden`: Caller is neither an assignee, the creator, nor an admin.
+  - `404 Not Found`: Task does not exist in this room.
+
+#### `DELETE /rooms/:roomId/tasks/:taskId`
+- **Description**: Delete a task.
+- **Authentication & Authorization**: Same hierarchy as edit — creator, or `owner`/`admin` (an `admin` cannot delete a task created by the `owner` or another `admin`).
+- **Response**:
+  - `204 No Content`: Task deleted.
+  - `403 Forbidden`: Caller lacks permission to delete this task.
+  - `404 Not Found`: Task does not exist in this room.
 
 ---
 
