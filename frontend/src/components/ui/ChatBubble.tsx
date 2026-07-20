@@ -38,6 +38,12 @@ export interface ChatBubbleProps {
   searchHighlight?: string;
 }
 
+// Kept outside the component: a conditional expression inside a component-
+// level try/catch (or a try/finally) makes the React Compiler skip the whole
+// component (see docs/frontend-react-render-optimization.md).
+const toErrorMessage = (error: unknown, fallback: string): string =>
+  error instanceof Error ? error.message : fallback;
+
 const highlightText = (text: string, query: string): React.ReactNode => {
   const lowerText = text.toLowerCase();
   const lowerQuery = query.toLowerCase();
@@ -346,12 +352,14 @@ export function ChatBubble({
     setDownloadError("");
     setDownloadingUrl(file.url);
 
+    // No `finally`: a try/finally would make the React Compiler bail out of
+    // this component; both paths reset the downloading state explicitly.
     try {
       await FileDownloaderBridge.download(file.url, file.filename);
+      setDownloadingUrl(null);
     } catch (error) {
       console.error(error);
-      setDownloadError(error instanceof Error ? error.message : "Failed to download attachment");
-    } finally {
+      setDownloadError(toErrorMessage(error, "Failed to download attachment"));
       setDownloadingUrl(null);
     }
   };

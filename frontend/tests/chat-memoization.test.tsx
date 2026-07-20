@@ -28,6 +28,79 @@ function makeProbe(sink: ChatContextValue[]): React.ReactElement {
   return <ContextProbe />;
 }
 
+describe("message list memo boundary", () => {
+  test("appending one message renders only the affected rows", async () => {
+    const app = await mountChatApp("/chat/room-1");
+
+    app.startMeasure();
+    act(() => {
+      app.socket().serverEmit("new_message", makeMessage("room-1", 41, "m-2"));
+    });
+    await app.settle();
+    const m = app.measure("append one message");
+
+    expect(screen.getAllByText("Message 41 in room-1").length).toBeGreaterThan(0);
+    // 40 existing rows must not re-render; only the new row (plus at most a
+    // couple of rows whose read receipts moved) may.
+    expect(m.chatBubbleRenders).toBeLessThanOrEqual(3);
+  });
+
+  test("messages for a background room render no rows in the active room", async () => {
+    const app = await mountChatApp("/chat/room-1");
+
+    app.startMeasure();
+    act(() => {
+      app.socket().serverEmit("new_message", makeMessage("room-3", 11, "f-1"));
+    });
+    await app.settle();
+    const m = app.measure("background message");
+
+    expect(m.chatBubbleRenders).toBe(0);
+  });
+
+  test("local keystrokes render no message rows", async () => {
+    const app = await mountChatApp("/chat/room-1");
+    const textarea = screen.getByPlaceholderText("Type a message...");
+
+    app.startMeasure();
+    for (const value of ["a", "ab", "abc"]) {
+      fireEvent.change(textarea, { target: { value } });
+    }
+    await app.settle();
+    const m = app.measure("local keystrokes");
+
+    expect(m.chatBubbleRenders).toBe(0);
+  });
+
+  test("remote typing events render no message rows", async () => {
+    const app = await mountChatApp("/chat/room-1");
+
+    app.startMeasure();
+    act(() => {
+      app.socket().serverEmit("user_typing", { roomId: "room-1", userId: "m-1", isTyping: true });
+    });
+    expect(await screen.findByText(/Member One is typing/)).toBeTruthy();
+    await app.settle();
+    const m = app.measure("remote typing");
+
+    expect(m.chatBubbleRenders).toBe(0);
+  });
+
+  test("reply and recall actions still work through the stable row callbacks", async () => {
+    const app = await mountChatApp("/chat/room-1");
+
+    // Hover actions render for every non-recalled row; pick the last one.
+    fireEvent.click(screen.getAllByText("Reply").at(-1)!);
+    // The last row (message 40) is an outgoing message from the fixture user.
+    expect(screen.getByText("Reply to Me User")).toBeTruthy();
+
+    fireEvent.click(screen.getAllByText("Recall").at(-1)!);
+    const recalls = app.socket().emitted.filter((e) => e.event === "recall_message");
+    expect(recalls).toHaveLength(1);
+    expect(recalls[0].payload).toMatchObject({ messageId: messageId("room-1", 40) });
+  });
+});
+
 describe("ChatContext value stability", () => {
   test("handler identities survive provider state changes", async () => {
     const seen: ChatContextValue[] = [];
