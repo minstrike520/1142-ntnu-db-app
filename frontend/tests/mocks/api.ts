@@ -37,9 +37,16 @@ import {
 let activeAccessToken: string | null = TEST_TOKEN;
 let settingsState: UserSettings = { ...mySettings };
 
+/** Recorded mutation calls, for asserting handler behaviour in tests. */
+const apiCallLog: Array<{ fn: string; args: unknown[] }> = [];
+
+export const __getApiCallLog = (fn?: string): Array<{ fn: string; args: unknown[] }> =>
+  fn ? apiCallLog.filter((entry) => entry.fn === fn) : [...apiCallLog];
+
 export const __resetApiMock = (): void => {
   activeAccessToken = TEST_TOKEN;
   settingsState = { ...mySettings };
+  apiCallLog.length = 0;
 };
 
 export const getApiBaseUrl = (): string => "http://mock-api.test";
@@ -202,7 +209,13 @@ export const renameFolder = async (
   roomIds: [],
 });
 
-export const updateFolderRooms = async (): Promise<void> => undefined;
+export const updateFolderRooms = async (
+  _token: string,
+  folderId: string,
+  roomIds: string[],
+): Promise<void> => {
+  apiCallLog.push({ fn: "updateFolderRooms", args: [folderId, roomIds] });
+};
 
 export const uploadAttachment = async (): Promise<{ attachmentId: string }> => ({
   attachmentId: "att-1",

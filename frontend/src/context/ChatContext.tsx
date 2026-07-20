@@ -1711,23 +1711,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     return remaining[0]?.id ?? null;
   };
 
-  const getReadAvatarsForMessage = (room: ChatRoom, msg: Message): { name: string; displayName?: string; avatarUrl: string }[] => {
-    if (room.type !== "group" && room.type !== "msg") return [];
+  // Called during render by consumers (Chatroom), so it must be a real
+  // useCallback over its state dependencies rather than a stable proxy that
+  // could observe a previous commit's state.
+  const getReadAvatarsForMessage = useCallback(
+    (room: ChatRoom, msg: Message): { name: string; displayName?: string; avatarUrl: string }[] => {
+      if (room.type !== "group" && room.type !== "msg") return [];
 
-    const roomReads = groupReadStates[room.id];
-    if (!roomReads) return [];
+      const roomReads = groupReadStates[room.id];
+      if (!roomReads) return [];
 
-    return Object.entries(roomReads)
-      .filter(([readerId, lastReadId]) => readerId !== currentUserId && lastReadId === msg.id)
-      .map(([readerId]) => {
-        const member = room.members?.find((m) => m.userId === readerId);
-        return {
-          name: member?.name ?? readerId,
-          displayName: member?.nickname ?? member?.name ?? readerId,
-          avatarUrl: member?.avatarUrl ?? "",
-        };
-      });
-  };
+      return Object.entries(roomReads)
+        .filter(([readerId, lastReadId]) => readerId !== currentUserId && lastReadId === msg.id)
+        .map(([readerId]) => {
+          const member = room.members?.find((m) => m.userId === readerId);
+          return {
+            name: member?.name ?? readerId,
+            displayName: member?.nickname ?? member?.name ?? readerId,
+            avatarUrl: member?.avatarUrl ?? "",
+          };
+        });
+    },
+    [groupReadStates, currentUserId],
+  );
 
   const searchUsersForInvite = async (query: string): Promise<PublicUser[]> => {
     if (!token) throw new Error("Not authenticated");
@@ -2034,78 +2040,139 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // -------------------------------------------------------------------------
+  // Context value stabilization (hotspot #1, issue #383)
+  //
+  // The React Compiler is disabled for this file (see header), so without
+  // manual memoization every provider render would rebuild all handler
+  // closures and the context value object, forcing every useChat() consumer
+  // to re-render on any provider state change.
+  //
+  // Imperative handlers are exposed through identity-stable proxies that
+  // delegate to the latest implementation via a ref (same pattern as
+  // markRoomAsRead below). The proxies are only ever invoked from event
+  // handlers and effects — never during render — so they always observe the
+  // closures of the last committed render. Functions that consumers call
+  // during render (getReadAvatarsForMessage) use useCallback with real
+  // dependencies instead.
+  // -------------------------------------------------------------------------
+  const handlers = {
+    toggleFolder,
+    handleLogout,
+    handleSendMessage,
+    handleTyping,
+    handleUploadAttachments,
+    handleRecallMessage,
+    handleUpdateMessage,
+    handleUpdateProfile,
+    handleUpdatePreferences,
+    handleCreateRoom,
+    handleOpenPrivateRoom,
+    handleCreateFolder,
+    handleDeleteFolder,
+    handleRenameFolder,
+    handleCategorizeRoom,
+    handleModifyNickname,
+    handleLeaveOrBlock,
+    handleDeleteAccount,
+    loadGroupMembers,
+    saveGroupSettings,
+    approveGroupMember,
+    updateGroupMember,
+    kickGroupMember,
+    transferGroupOwner,
+    handleDeleteGroupRoom,
+    searchUsersForInvite,
+    handleJoinByInviteCode,
+    sendFriendRequest,
+    acceptFriendRequest,
+    rejectFriendRequest,
+    removeFriend,
+    blockFriend,
+    unblockUser,
+    saveEmergencySettings,
+    setUiLanguage,
+    refreshSocialData: handleRefreshSocialData,
+    updateRoomSorting,
+  };
+  type Handlers = typeof handlers;
+
+  const handlersRef = useRef<Handlers>(handlers);
+  useLayoutEffect(() => {
+    handlersRef.current = handlers;
+  });
+
+  const stableHandlers = useMemo(() => {
+    const proxies = {} as Record<keyof Handlers, (...args: unknown[]) => unknown>;
+    for (const key of Object.keys(handlersRef.current) as Array<keyof Handlers>) {
+      proxies[key] = (...args: unknown[]) =>
+        (handlersRef.current[key] as (...inner: unknown[]) => unknown)(...args);
+    }
+    return proxies as unknown as Handlers;
+  }, []);
+
+  const contextValue = useMemo<ChatContextType>(
+    () => ({
+      rooms: derivedRooms,
+      folders,
+      messages,
+      typingUsers,
+      groupReadStates,
+      user,
+      activeRoomNicknames,
+      friends,
+      friendRequests,
+      blockedUsers,
+      emergencySettings,
+      uiLanguage,
+      isAuthenticated,
+      isMounted,
+      roomsInitialized,
+      selectedFriendForSidebar,
+      setSelectedFriendForSidebar,
+      showRightPanel,
+      setShowRightPanel,
+      hasUnsavedChanges,
+      setHasUnsavedChanges,
+      setRooms,
+      setFolders,
+      setMessages,
+      setUser,
+      setActiveRoomNicknames,
+      getReadAvatarsForMessage,
+      activeProfilePopover,
+      setActiveProfilePopover,
+      markRoomAsRead,
+      ...stableHandlers,
+    }),
+    [
+      derivedRooms,
+      folders,
+      messages,
+      typingUsers,
+      groupReadStates,
+      user,
+      activeRoomNicknames,
+      friends,
+      friendRequests,
+      blockedUsers,
+      emergencySettings,
+      uiLanguage,
+      isAuthenticated,
+      isMounted,
+      roomsInitialized,
+      selectedFriendForSidebar,
+      showRightPanel,
+      hasUnsavedChanges,
+      getReadAvatarsForMessage,
+      activeProfilePopover,
+      markRoomAsRead,
+      stableHandlers,
+    ],
+  );
+
   return (
-    <ChatContext.Provider
-      value={{
-        rooms: derivedRooms,
-        folders,
-        messages,
-        groupReadStates,
-        user,
-        activeRoomNicknames,
-        friends,
-        friendRequests,
-        blockedUsers,
-        emergencySettings,
-        uiLanguage,
-        isAuthenticated,
-        isMounted,
-        roomsInitialized,
-        selectedFriendForSidebar,
-        setSelectedFriendForSidebar,
-        showRightPanel,
-        setShowRightPanel,
-        setRooms,
-        setFolders,
-        setMessages,
-        setUser,
-        setActiveRoomNicknames,
-        toggleFolder,
-        handleLogout,
-        handleSendMessage,
-        handleTyping,
-        handleUploadAttachments,
-        handleRecallMessage,
-        handleUpdateMessage,
-        handleUpdateProfile,
-        handleUpdatePreferences,
-        handleCreateRoom,
-        handleOpenPrivateRoom,
-        handleCreateFolder,
-        handleDeleteFolder,
-        handleRenameFolder,
-        handleCategorizeRoom,
-        handleModifyNickname,
-        handleLeaveOrBlock,
-        handleDeleteAccount,
-        loadGroupMembers,
-        saveGroupSettings,
-        approveGroupMember,
-        updateGroupMember,
-        kickGroupMember,
-        transferGroupOwner,
-        handleDeleteGroupRoom,
-        getReadAvatarsForMessage,
-        searchUsersForInvite,
-        handleJoinByInviteCode,
-        sendFriendRequest,
-        acceptFriendRequest,
-        rejectFriendRequest,
-        removeFriend,
-        blockFriend,
-        unblockUser,
-        saveEmergencySettings,
-        setUiLanguage,
-        typingUsers,
-        activeProfilePopover,
-        setActiveProfilePopover,
-        hasUnsavedChanges,
-        setHasUnsavedChanges,
-        refreshSocialData: handleRefreshSocialData,
-        updateRoomSorting,
-        markRoomAsRead,
-      }}
-    >
+    <ChatContext.Provider value={contextValue}>
       {children}
     </ChatContext.Provider>
   );

@@ -28,10 +28,11 @@ function TestRoutes(): React.ReactElement {
   return <div data-testid="route-placeholder" />;
 }
 
-function TestApp(): React.ReactElement {
+function TestApp({ probe }: { probe?: React.ReactNode }): React.ReactElement {
   return (
     <Profiler id="app" onRender={onAppRender}>
       <MainLayout>
+        {probe}
         <TestRoutes />
       </MainLayout>
     </Profiler>
@@ -62,13 +63,16 @@ export interface Harness {
 
 const appStats = (): RenderStats => getRenderStats("app");
 
-export async function mountChatApp(initialPath = "/chat/room-1"): Promise<Harness> {
+export async function mountChatApp(
+  initialPath = "/chat/room-1",
+  options: { probe?: React.ReactNode } = {},
+): Promise<Harness> {
   __resetApiMock();
   __resetSocket();
   __resetNavigation(initialPath);
   resetRenderStats();
 
-  const view = render(<TestApp />);
+  const view = render(<TestApp probe={options.probe} />);
 
   const settle = async (quietMs = 250, timeoutMs = 10_000): Promise<void> => {
     const startedAt = Date.now();
