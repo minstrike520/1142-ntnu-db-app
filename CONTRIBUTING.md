@@ -2,8 +2,6 @@
 
 English | [繁體中文](CONTRIBUTING.zh-TW.md)
 
----
-
 First off, thank you for taking the time to contribute to Near Chat! This project is a database course project, structured as a monorepo containing a React/Next.js frontend, a Node.js/Express backend API, and a PostgreSQL 18 database, orchestrated locally via Docker Compose.
 
 Please read through this guide to understand our development, testing, and contribution workflows.
