@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { ValidationError } from '../errors/AppError';
-import type { Room, RoomMember, RoomSummary } from '../../../shared/types';
+import type { Room, RoomInvitePreview, RoomMember, RoomSummary } from '../../../shared/types';
 import type { UpdateRoomInput } from '../validators/roomSchemas';
 
 interface RoomService {
@@ -13,6 +13,7 @@ interface RoomService {
   transferOwnership(roomId: string, callerId: string, targetUserId: string): Promise<void>;
   deleteGroup(roomId: string, callerId: string): Promise<void>;
   joinByCode(userId: string, inviteCode: string): Promise<Room>;
+  previewByCode(userId: string, inviteCode: string): Promise<RoomInvitePreview>;
   leave(userId: string, roomId: string): Promise<void>;
   approveMember(roomId: string, callerId: string, targetUserId: string): Promise<void>;
   updateMember(roomId: string, callerId: string, targetUserId: string, data: { role?: string; nickname?: string; isMuted?: boolean }): Promise<void>;
@@ -83,6 +84,15 @@ export const makeRoomController = (service: RoomService) => ({
       }
       const room = await service.update(req.params.id, req.user!.userId, req.body);
       res.status(200).json(room);
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  async previewByCode(req: Request<{ code: string }>, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const preview = await service.previewByCode(req.user!.userId, req.params.code);
+      res.status(200).json(preview);
     } catch (err) {
       next(err);
     }

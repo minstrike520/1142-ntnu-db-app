@@ -1,4 +1,4 @@
-import type { Room, RoomSummary } from '@shared/types';
+import type { Room, RoomInvitePreview, RoomSummary } from '@shared/types';
 import { randomBytes } from 'crypto';
 import { isUserOnline } from '../realtime/presence';
 import { removeManagedAvatar, saveAvatarUpload } from '../lib/avatarUpload';
@@ -166,6 +166,19 @@ export const makeRoomService = (
         emitRoomEvent(roomId, 'room_update', { type: 'ROOM_SETTINGS_UPDATED', data: updated });
       }
       return updated;
+    },
+
+    async previewByCode(userId: string, inviteCode: string): Promise<RoomInvitePreview> {
+      const room = await repo.findByInviteCode(inviteCode);
+      if (!room || room.type !== 'group') throw new NotFoundError('room', inviteCode);
+      const existing = await roomMemberRepo.findMember(room.roomId, userId);
+      return {
+        roomId: room.roomId,
+        name: room.name,
+        avatarUrl: room.avatarUrl,
+        requireApproval: room.requireApproval,
+        isMember: !!existing,
+      };
     },
 
     async joinByCode(userId: string, inviteCode: string): Promise<Room> {

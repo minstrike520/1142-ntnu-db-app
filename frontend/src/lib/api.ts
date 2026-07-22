@@ -10,6 +10,7 @@ import type {
   MyProfile,
   RegisterRequest,
   Room,
+  RoomInvitePreview,
   RoomMember,
   RoomSummary,
   SearchUserResult,
@@ -410,6 +411,9 @@ export const joinRoomByCode = (token: string, inviteCode: string): Promise<Room>
     },
     { token },
   );
+
+export const getRoomInvitePreview = (token: string, inviteCode: string): Promise<RoomInvitePreview> =>
+  requestJson<RoomInvitePreview>(`/rooms/invite/${encodeURIComponent(inviteCode)}`, {}, { token });
 
 export const updateRoom = (
   token: string,

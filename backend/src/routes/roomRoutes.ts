@@ -27,6 +27,7 @@ export const makeRoomRoutes = (ctrl: ReturnType<typeof makeRoomController>): Rou
   router.get('/', ctrl.list.bind(ctrl));
   router.post('/', ctrl.create.bind(ctrl));
   router.post('/join', ctrl.join.bind(ctrl));
+  router.get('/invite/:code', ctrl.previewByCode.bind(ctrl));
   router.get('/:id/members', ctrl.listMembers.bind(ctrl));
   router.post('/:id/members', ctrl.join.bind(ctrl));
   router.delete('/:id/members/me', ctrl.leave.bind(ctrl));

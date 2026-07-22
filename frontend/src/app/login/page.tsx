@@ -18,12 +18,26 @@ const getFriendlyLoginError = (error: unknown) => {
   return message || "Login failed, please try again later.";
 };
 
+// Only ever redirect to a same-origin relative path. Rejects protocol-relative
+// ("//evil.com") and backslash-normalized ("/\evil.com") open-redirect payloads.
+const sanitizeRedirect = (raw: string | null): string => {
+  if (raw && /^\/(?![/\\])/.test(raw) && raw !== "/login") {
+    return raw;
+  }
+  return "/";
+};
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [redirectTo] = useState(() =>
+    typeof window !== "undefined"
+      ? sanitizeRedirect(new URLSearchParams(window.location.search).get("redirect"))
+      : "/",
+  );
 
   useEffect(() => {
     document.title = "Near | Sign In";
@@ -53,7 +67,7 @@ export default function LoginPage() {
           avatar: result.user.avatarUrl ?? "",
         }),
       );
-      router.push("/");
+      router.push(redirectTo);
     } catch (err) {
       setError(getFriendlyLoginError(err));
     } finally {

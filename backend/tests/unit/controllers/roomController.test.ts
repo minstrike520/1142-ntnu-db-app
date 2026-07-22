@@ -37,6 +37,7 @@ describe('roomController', () => {
     update: vi.fn(),
     deleteGroup: vi.fn(),
     joinByCode: vi.fn(),
+    previewByCode: vi.fn(),
     leave: vi.fn(),
     approveMember: vi.fn(),
     updateMember: vi.fn(),
@@ -192,6 +193,31 @@ describe('roomController', () => {
       const next = vi.fn();
 
       await ctrl.update(authedReq({ params: { id: 'room-1' }, body: { name: 'X' } }), res, next);
+
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+    });
+  });
+
+  describe('previewByCode', () => {
+    it('returns 200 with the preview', async () => {
+      const preview = { roomId: 'room-1', name: 'Study Room', requireApproval: false, isMember: false };
+      service.previewByCode.mockResolvedValue(preview);
+      const res = mockRes();
+      const next = vi.fn();
+
+      await ctrl.previewByCode(authedReq({ params: { code: 'ABC123' } }), res, next);
+
+      expect(service.previewByCode).toHaveBeenCalledWith('user-1', 'ABC123');
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(preview);
+    });
+
+    it('calls next with error when service throws', async () => {
+      service.previewByCode.mockRejectedValue(new Error('not found'));
+      const res = mockRes();
+      const next = vi.fn();
+
+      await ctrl.previewByCode(authedReq({ params: { code: 'BOGUS' } }), res, next);
 
       expect(next).toHaveBeenCalledWith(expect.any(Error));
     });

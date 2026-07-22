@@ -411,6 +411,19 @@ export default function GroupSettings({ roomId, onClose }: GroupSettingsProps) {
     }
   };
 
+  const handleCopyInviteLink = async () => {
+    const code = activeRoom?.inviteCode;
+    if (!code) return;
+    const link = `${window.location.origin}/invite/${code}`;
+
+    try {
+      await navigator.clipboard.writeText(link);
+      setFeedback(t("groupSettings.inviteLinkCopied"));
+    } catch {
+      window.prompt(t("groupSettings.inviteLinkManualCopy"), link);
+    }
+  };
+
   const handleSearchQueryChange = (value: string) => {
     setSearchQuery(value);
 
@@ -570,14 +583,24 @@ export default function GroupSettings({ roomId, onClose }: GroupSettingsProps) {
             </code>
           </div>
           {activeRoom.inviteCode && (
-            <Button
-              type="button"
-              variant="secondary"
-              className="text-xs py-1 px-3 shrink-0"
-              onClick={() => void handleCopyInviteCode()}
-            >
-              {t("groupSettings.copyInviteCode")}
-            </Button>
+            <div className="flex flex-col gap-1 shrink-0">
+              <Button
+                type="button"
+                variant="secondary"
+                className="text-xs py-1 px-3"
+                onClick={() => void handleCopyInviteCode()}
+              >
+                {t("groupSettings.copyInviteCode")}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                className="text-xs py-1 px-3"
+                onClick={() => void handleCopyInviteLink()}
+              >
+                {t("groupSettings.copyInviteLink")}
+              </Button>
+            </div>
           )}
         </div>
 
