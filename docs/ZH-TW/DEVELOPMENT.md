@@ -259,3 +259,36 @@ describe('userRepository', () => {
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
   ```
+
+---
+
+## 8. Git 工作流程、PR 規範與自動化發布
+
+### Git 分支策略
+* **主要開發分支**：本專案主要開發分支為 **`dev`**。
+* **功能分支**：所有功能開發與 Bug 修復皆需自 `dev` 切出（例如：`feat/my-feature` 或 `fix/my-bug`）。
+* **Pull Request**：所有 Pull Request 皆需提交回 `dev` 分支。嚴禁直接 Push 至 `main` 或 `dev` 分支。
+
+### PR 合併規範：Squash and Merge
+為保持 Git 歷史乾淨並避免發布日誌（Changelog）雜亂，**所有 Merge 至 `dev` 的 Pull Request 必須採用 Squash and Merge**。
+* **PR 標題格式**：PR 標題必須遵循 [Conventional Commits](https://www.conventionalcommits.org/) 規範：
+  - `feat(scope): 英文簡述` — 新增功能 (feature)
+  - `fix(scope): 英文簡述` — 修正 Bug
+  - `docs: 英文簡述` — 修改文件 (documentation)
+  - `refactor(scope): 英文簡述` — 重構代碼
+  - `chore: 英文簡述` — 建置流程或雜務變更
+  - `BREAKING CHANGE:` 或 `feat!:` — 破壞性變更（重大 API / 資料庫架構調整）
+* **Squash Merge 優點**：在合併時將 Feature 分支中多個微小的提交（如修飾註解、修復排版）壓縮為單一精確的提交。
+
+### 自動化版本發布流程 (`dev` → `main`)
+當 `dev` 分支累積階段變更並合併回 `main` 分支時，GitHub Actions (`.github/workflows/ci.yml`) 會於 CI 測試全數通過後自動執行 `semantic-release` 發布工作：
+
+1. **語意化版本 (`a.b.c`) 計算**：
+   - `fix:` $\rightarrow$ 遞增 **Patch (`c`)**（如 `v1.0.1` $\rightarrow$ `v1.0.2`）
+   - `feat:` $\rightarrow$ 遞增 **Minor (`b`)**（如 `v1.0.1` $\rightarrow$ `v1.1.0`）
+   - `BREAKING CHANGE:` $\rightarrow$ 遞增 **Major (`a`)**（如 `v1.0.1` $\rightarrow$ `v2.0.0`）
+   - `docs:`, `chore:`, `refactor:` $\rightarrow$ 不遞增版本號
+2. **三方版本號同步**：自動執行 `scripts/update-versions.js` 同步更新根目錄 `package.json`、`frontend/package.json` 與 `backend/package.json` 的版本。
+3. **Changelog 與 Release 頁面**：自動更新 `CHANGELOG.md`，並**將格式化後的 Release Notes 直接發布於 GitHub Release 頁面**。
+4. **Stack 映像檔與部署包發布**：建立 `vX.Y.Z` 標籤並觸發 `.github/workflows/release-stack.yml`，自動建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，並附加 `near-chat-stack-vX.Y.Z.tar.gz` 部署包至 GitHub Release。
+
