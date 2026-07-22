@@ -248,3 +248,49 @@ jobs:
         with:
           sarif_file: frontend.sarif
           category: frontend
+
+  release:
+    needs:
+      - frontend-lint
+      - frontend-typecheck
+      - frontend-build
+      - backend-build
+      - unit-tests
+      - integration-tests
+      - e2e-tests
+      - security-scan
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      (needs.frontend-lint.result == 'success' || needs.frontend-lint.result == 'skipped') &&
+      (needs.frontend-typecheck.result == 'success' || needs.frontend-typecheck.result == 'skipped') &&
+      (needs.frontend-build.result == 'success' || needs.frontend-build.result == 'skipped') &&
+      (needs.backend-build.result == 'success' || needs.backend-build.result == 'skipped') &&
+      (needs.unit-tests.result == 'success' || needs.unit-tests.result == 'skipped') &&
+      (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped') &&
+      (needs.e2e-tests.result == 'success' || needs.e2e-tests.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run Semantic Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release
+
