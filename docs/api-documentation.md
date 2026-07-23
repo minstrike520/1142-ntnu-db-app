@@ -97,7 +97,7 @@ Except for `POST /auth/register`, `POST /auth/login`, and `POST /auth/refresh`, 
 1. **Bearer Token**: The client must include `Authorization: Bearer <token>` in the Request Header (where `<token>` is the access token returned after successful registration, login, or refresh).
 2. **HttpOnly Cookie (Refresh Token)**: After successful login or registration, the server automatically sets a Cookie named `refresh_token` in the browser. When the access token expires, a new access token can be obtained by sending a `POST /auth/refresh` request, which automatically includes this Cookie.
 
-Access tokens expire in `15m` by default (configurable via `JWT_EXPIRES_IN`). Refresh tokens expire in `7` days by default (configurable via `JWT_REFRESH_EXPIRES_IN_DAYS`).
+Access tokens expire in `15m` by default (configurable via `JWT_EXPIRES_IN`). Refresh tokens expire in `14` days by default (configurable via `JWT_REFRESH_EXPIRES_IN_DAYS`; see `backend/src/auth/refreshTokenTtl.ts`).
 
 ### Error Response Format
 

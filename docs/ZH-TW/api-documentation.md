@@ -97,7 +97,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 1. **Bearer Token**: 客戶端需在 Request Header 中包含 `Authorization: Bearer <token>`（`<token>` 為登入、註冊或刷新成功後回傳的存取權杖）。
 2. **HttpOnly Cookie (更新權杖)**: 登入或註冊成功後，伺服器會自動在瀏覽器中設置名為 `refresh_token` 的 Cookie。當存取權杖過期後，可透過發送 `POST /auth/refresh` 並自動帶上此 Cookie 來取得新的存取權杖。
 
-存取權杖預設有效期為 `15m`，可透過環境變數 `JWT_EXPIRES_IN` 調整。更新權杖預設有效期為 `7` 天，可透過環境變數 `JWT_REFRESH_EXPIRES_IN_DAYS` 調整。
+存取權杖預設有效期為 `15m`，可透過環境變數 `JWT_EXPIRES_IN` 調整。更新權杖預設有效期為 `14` 天，可透過環境變數 `JWT_REFRESH_EXPIRES_IN_DAYS` 調整（詳見 `backend/src/auth/refreshTokenTtl.ts`）。
 
 ### 錯誤回應格式
 
