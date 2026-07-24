@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { validate } from '../middlewares/validator';
 import { authMiddleware } from '../middlewares/authMiddleware';
-import { ValidationError } from '../errors/AppError';
+import { ValidationError } from '../utils/AppError';
 
 export interface MessageService {
   listForRoom(

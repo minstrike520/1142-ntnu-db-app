@@ -4,7 +4,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 async function seed() {
-  const { default: pool } = await import('../db');
+  const { default: pool } = await import('./db');
   console.log('Starting database seed...');
 
   try {

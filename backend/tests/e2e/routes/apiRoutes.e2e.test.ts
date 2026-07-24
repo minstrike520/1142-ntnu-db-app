@@ -4,7 +4,7 @@ import { resetDb } from '../../helpers/resetDb';
 import { testPool } from '../../helpers/testPool';
 
 let app: any;
-let appPool: typeof import('../../../src/db').default;
+let appPool: typeof import('../../../src/models/db').default;
 
 const registerUser = async (name = 'E2E User') => {
   const email = `e2e-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`;
@@ -25,7 +25,7 @@ describe('API routes E2E', () => {
     process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
     process.env.CORS_ORIGINS = 'http://allowed.example,http://localhost:3005';
     const indexModule = await import('../../../src/index');
-    const dbModule = await import('../../../src/db');
+    const dbModule = await import('../../../src/models/db');
     app = indexModule.app;
     appPool = dbModule.default;
   });

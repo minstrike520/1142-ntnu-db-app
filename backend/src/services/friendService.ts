@@ -1,5 +1,5 @@
-import { AppError, ValidationError } from '../errors/AppError';
-import type { makeFriendRepository } from '../repositories/friendRepository';
+import { AppError, ValidationError } from '../utils/AppError';
+import type { makeFriendRepository } from '../models/friendRepository';
 import { isUserOnline } from '../realtime/presence';
 
 export function makeFriendService(

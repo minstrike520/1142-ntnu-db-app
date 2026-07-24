@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { createRoomSchema, updateRoomSchema } from '../../../src/validators/roomSchemas';
+import { createRoomSchema, updateRoomSchema } from '../../../src/routes/roomSchemas';
 
 describe('room validation schemas', () => {
   it('validates create room payloads and applies defaults', () => {

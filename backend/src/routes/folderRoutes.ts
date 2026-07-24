@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { createFolderSchema, updateFolderRoomsSchema } from '../validators/folderSchemas';
+import { createFolderSchema, updateFolderRoomsSchema } from '../routes/folderSchemas';
 import { validate } from '../middlewares/validator';
 import { authMiddleware } from '../middlewares/authMiddleware';
 

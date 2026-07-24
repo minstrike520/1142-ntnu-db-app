@@ -1,20 +1,20 @@
 import { describe, it, expect, beforeEach, afterAll, mock, type Mock } from 'bun:test';
 
-import { ConflictError, NotFoundError, ValidationError } from '../../../src/errors/AppError';
-import type { IEmergencyContactRepository } from '../../../src/repositories/IEmergencyContactRepository';
-import type { IUserRepository } from '../../../src/repositories/IUserRepository';
+import { ConflictError, NotFoundError, ValidationError } from '../../../src/utils/AppError';
+import type { IEmergencyContactRepository } from '../../../src/models/IEmergencyContactRepository';
+import type { IUserRepository } from '../../../src/models/IUserRepository';
 import { makeUserService } from '../../../src/services/userService';
-import { loginSchema, registerSchema } from '../../../src/validators/userSchemas';
+import { loginSchema, registerSchema } from '../../../src/routes/userSchemas';
 import type { User } from '../../../../shared/types';
-import { saveAvatarUpload, removeManagedAvatar } from '../../../src/lib/avatarUpload';
+import { saveAvatarUpload, removeManagedAvatar } from '../../../src/utils/avatarUpload';
 
-mock.module('../../../src/lib/avatarUpload', () => ({
+mock.module('../../../src/utils/avatarUpload', () => ({
   saveAvatarUpload: mock(),
   removeManagedAvatar: mock().mockResolvedValue(undefined),
 }));
 
 afterAll(() => {
-  mock.module('../../../src/lib/avatarUpload', () => require('../../../src/lib/avatarUpload?original'));
+  mock.module('../../../src/utils/avatarUpload', () => require('../../../src/utils/avatarUpload?original'));
 });
 
 describe('userService', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { signToken, verifyToken, generateRefreshToken, hashToken } from '../../../src/auth/jwt';
+import { signToken, verifyToken, generateRefreshToken, hashToken } from '../../../src/utils/jwt';
 import type { JwtPayload } from '../../../../shared/types';
 
 const payload: JwtPayload = { userId: 'u1', name: 'Alice' };

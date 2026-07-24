@@ -1,6 +1,6 @@
 import { describe, it, expect, mock, type Mock } from 'bun:test';
 import { makeFriendService } from '../../../src/services/friendService';
-import { AppError } from '../../../src/errors/AppError';
+import { AppError } from '../../../src/utils/AppError';
 
 describe('friendService', () => {
   it('respondFriendRequest throws NOT_FOUND when accepting non-existent request', async () => {

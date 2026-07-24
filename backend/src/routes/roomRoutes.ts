@@ -4,12 +4,12 @@ import {
   updateRoomSchema,
   joinByCodeSchema,
   updateMemberSchema,
-} from '../validators/roomSchemas';
+} from '../routes/roomSchemas';
 import { validate } from '../middlewares/validator';
 import { authMiddleware } from '../middlewares/authMiddleware';
 import { parseSingleFile } from '../utils/fileUpload';
-import { ALLOWED_AVATAR_MIME_TYPES, AVATAR_UPLOAD_MAX_BYTES } from '../lib/avatarUpload';
-import { ValidationError } from '../errors/AppError';
+import { ALLOWED_AVATAR_MIME_TYPES, AVATAR_UPLOAD_MAX_BYTES } from '../utils/avatarUpload';
+import { ValidationError } from '../utils/AppError';
 
 export interface RoomService {
   list(userId: string): Promise<any>;

@@ -1,5 +1,5 @@
 import type { makeUserService } from '../services/userService';
-import type { IUserRepository } from '../repositories/IUserRepository';
+import type { IUserRepository } from '../models/IUserRepository';
 import { isUserOnline } from '../realtime/presence';
 
 export function startInactivityJob(

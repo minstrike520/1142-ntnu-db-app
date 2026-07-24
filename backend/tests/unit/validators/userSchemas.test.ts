@@ -5,7 +5,7 @@ import {
   searchQuerySchema,
   updateMeSchema,
   updateSettingsSchema,
-} from '../../../src/validators/userSchemas';
+} from '../../../src/routes/userSchemas';
 
 describe('user validation schemas', () => {
   it('validates register payloads and enforces password length', () => {

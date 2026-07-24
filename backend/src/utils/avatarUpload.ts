@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
-import { ValidationError } from '../errors/AppError';
+import { ValidationError } from '../utils/AppError';
 import { AVATARS_UPLOAD_DIR } from './uploads';
 
 export const AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;

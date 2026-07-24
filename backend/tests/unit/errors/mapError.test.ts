@@ -1,7 +1,7 @@
 import { describe, it, expect, spyOn } from 'bun:test';
 import multer from 'multer';
-import { mapErrorToApiShape } from '../../../src/errors/mapError';
-import { AppError, ValidationError, ForbiddenError, NotFoundError, ConflictError } from '../../../src/errors/AppError';
+import { mapErrorToApiShape } from '../../../src/utils/mapError';
+import { AppError, ValidationError, ForbiddenError, NotFoundError, ConflictError } from '../../../src/utils/AppError';
 
 describe('mapErrorToApiShape', () => {
   it('maps ValidationError (400)', () => {

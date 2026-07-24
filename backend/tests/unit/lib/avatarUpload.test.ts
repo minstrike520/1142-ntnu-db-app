@@ -2,9 +2,9 @@ import { describe, it, expect, afterEach } from 'bun:test';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import { ValidationError } from '../../../src/errors/AppError';
-import { assertValidAvatarUpload, removeManagedAvatar } from '../../../src/lib/avatarUpload';
-import { AVATARS_UPLOAD_DIR, ensureUploadDirectories } from '../../../src/lib/uploads';
+import { ValidationError } from '../../../src/utils/AppError';
+import { assertValidAvatarUpload, removeManagedAvatar } from '../../../src/utils/avatarUpload';
+import { AVATARS_UPLOAD_DIR, ensureUploadDirectories } from '../../../src/utils/uploads';
 
 const makeFile = (mimetype: string, bytes: number[]): Express.Multer.File =>
   ({

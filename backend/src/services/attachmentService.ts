@@ -1,5 +1,5 @@
-import { ValidationError } from '../errors/AppError';
-import { AttachmentRepository } from '../repositories/attachmentRepository';
+import { ValidationError } from '../utils/AppError';
+import { AttachmentRepository } from '../models/attachmentRepository';
 import type { Attachment } from '@shared/types';
 
 const containsEastAsianChars = (value: string) => /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/.test(value);

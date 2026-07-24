@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, mock, type Mock } from 'bun:test';
-import { ForbiddenError, NotFoundError } from '../../../src/errors/AppError';
+import { ForbiddenError, NotFoundError } from '../../../src/utils/AppError';
 import { attachSockets } from '../../../src/realtime/socketServer';
 import type { ChatServer } from '../../../src/realtime/authSocket';
 import type { MessageWithSender } from '../../../../shared/types';

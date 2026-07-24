@@ -6,7 +6,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { parsePositiveInt } from '../utils/parsePositiveInt';
-import { AppError } from '../errors/AppError';
+import { AppError } from '../utils/AppError';
 
 const rateLimitDisabled = (): boolean =>
   process.env.NODE_ENV === 'test' || process.env.RATE_LIMIT_DISABLED === 'true';

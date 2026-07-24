@@ -5,7 +5,7 @@ import {
   setRefreshCookie,
   clearRefreshCookie,
   readCookie,
-} from '../../../src/auth/cookies';
+} from '../../../src/utils/cookies';
 
 const makeRes = () =>
   ({ cookie: mock(), clearCookie: mock() }) as unknown as Response;

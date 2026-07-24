@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
 import type { Attachment, Message, MessageWithSender } from '@shared/types';
 import type { IMessageRepository } from './IMessageRepository';
-import { ValidationError } from '../errors/AppError';
+import { ValidationError } from '../utils/AppError';
 
 function mapRowToAttachment(row: any): Attachment {
   return {

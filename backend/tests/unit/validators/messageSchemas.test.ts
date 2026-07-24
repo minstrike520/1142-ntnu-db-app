@@ -3,7 +3,7 @@ import {
   listMessagesSchema,
   recallMessageSchema,
   sendMessageSchema,
-} from '../../../src/validators/messageSchemas';
+} from '../../../src/routes/messageSchemas';
 
 describe('message validation schemas', () => {
   it('validates send message payloads and trims content', () => {

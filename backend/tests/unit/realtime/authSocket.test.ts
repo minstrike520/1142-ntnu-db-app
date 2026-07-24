@@ -1,9 +1,9 @@
 import { describe, it, expect, mock, type Mock } from 'bun:test';
-import { signToken } from '../../../src/auth/jwt';
+import { signToken } from '../../../src/utils/jwt';
 import { attachSocketAuth, type ChatServer } from '../../../src/realtime/authSocket';
-import pool from '../../../src/db';
+import pool from '../../../src/models/db';
 
-mock.module('../../../src/db', () => ({
+mock.module('../../../src/models/db', () => ({
   default: { query: mock().mockResolvedValue({ rows: [{}] }) },
 }));
 

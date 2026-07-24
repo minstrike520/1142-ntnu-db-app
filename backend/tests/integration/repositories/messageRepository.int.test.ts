@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { MessageRepository } from '../../../src/repositories/messageRepository';
+import { MessageRepository } from '../../../src/models/messageRepository';
 import { testPool } from '../../helpers/testPool';
 import { resetDb } from '../../helpers/resetDb';
 

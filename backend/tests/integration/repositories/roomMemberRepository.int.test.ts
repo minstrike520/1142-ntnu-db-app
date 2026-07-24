@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { RoomMemberRepository } from '../../../src/repositories/roomMemberRepository';
+import { RoomMemberRepository } from '../../../src/models/roomMemberRepository';
 import { testPool } from '../../helpers/testPool';
 import { resetDb } from '../../helpers/resetDb';
 

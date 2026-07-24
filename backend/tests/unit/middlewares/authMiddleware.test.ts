@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
 import { Request, Response, NextFunction } from 'express';
 import { authMiddleware } from '../../../src/middlewares/authMiddleware';
-import * as jwtHelper from '../../../src/auth/jwt';
-import { AppError } from '../../../src/errors/AppError';
-import pool from '../../../src/db';
+import * as jwtHelper from '../../../src/utils/jwt';
+import { AppError } from '../../../src/utils/AppError';
+import pool from '../../../src/models/db';
 
-mock.module('../../../src/db', () => ({
+mock.module('../../../src/models/db', () => ({
   default: { query: mock() },
 }));
 
@@ -61,7 +61,7 @@ describe('authMiddleware', () => {
     expect(arg.message).toMatch(/Invalid token/);
   });
 
-  it('calls next() and populates req.user when token is valid and user is active', async () => {
+  it('calls next() and populates (req as any).user when token is valid and user is active', async () => {
     mockRequest.headers = { authorization: 'Bearer valid-token' };
     const mockPayload = { userId: '1', name: 'Test User' };
     
@@ -69,7 +69,7 @@ describe('authMiddleware', () => {
 
     await authMiddleware(mockRequest as Request, mockResponse as Response, nextFunction);
 
-    expect(mockRequest.user).toEqual(mockPayload);
+    expect((mockRequest as any).user).toEqual(mockPayload);
     expect(nextFunction).toHaveBeenCalledTimes(1);
     expect(nextFunction).toHaveBeenCalledWith(); // called with no args
   });
@@ -86,7 +86,7 @@ describe('authMiddleware', () => {
     await authMiddleware(mockRequest as Request, mockResponse as Response, nextFunction);
 
     expect(jwtHelper.verifyToken).toHaveBeenCalledWith('cookie-token');
-    expect(mockRequest.user).toEqual(mockPayload);
+    expect((mockRequest as any).user).toEqual(mockPayload);
     expect(nextFunction).toHaveBeenCalledTimes(1);
     expect(nextFunction).toHaveBeenCalledWith();
   });

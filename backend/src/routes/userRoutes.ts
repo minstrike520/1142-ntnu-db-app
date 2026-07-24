@@ -5,12 +5,12 @@ import {
   searchQuerySchema,
   addEmergencyContactSchema,
   checkInactivitySchema,
-} from '../validators/userSchemas';
+} from '../routes/userSchemas';
 import { validate } from '../middlewares/validator';
 import { authMiddleware } from '../middlewares/authMiddleware';
-import { clearRefreshCookie } from '../auth/cookies';
+import { clearRefreshCookie } from '../utils/cookies';
 import { parseSingleFile } from '../utils/fileUpload';
-import { ALLOWED_AVATAR_MIME_TYPES, AVATAR_UPLOAD_MAX_BYTES } from '../lib/avatarUpload';
+import { ALLOWED_AVATAR_MIME_TYPES, AVATAR_UPLOAD_MAX_BYTES } from '../utils/avatarUpload';
 
 export interface UserService {
   getMe(userId: string): Promise<any>;

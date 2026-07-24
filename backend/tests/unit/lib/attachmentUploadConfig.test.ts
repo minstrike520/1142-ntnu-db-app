@@ -4,7 +4,7 @@ import {
   DEFAULT_ATTACHMENT_ALLOWED_EXTENSIONS,
   DEFAULT_ATTACHMENT_ALLOWED_MIME_TYPES,
   DEFAULT_ATTACHMENT_MAX_BYTES,
-} from '../../../src/lib/attachmentUploadConfig';
+} from '../../../src/utils/attachmentUploadConfig';
 
 describe('createAttachmentUploadConfig', () => {
   it('uses type-open defaults when restriction is not configured', () => {

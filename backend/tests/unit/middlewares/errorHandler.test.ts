@@ -7,7 +7,7 @@ import {
   ForbiddenError,
   ValidationError,
   ConflictError,
-} from '../../../src/errors/AppError';
+} from '../../../src/utils/AppError';
 
 function makeRes() {
   const res = {

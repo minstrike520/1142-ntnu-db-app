@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, mock } from 'bun:test';
 
 // Mock the db module before other imports to prevent real DB connection in this specific test
-mock.module('../../../src/db', () => ({
+mock.module('../../../src/models/db', () => ({
   default: { query: mock().mockResolvedValue({ rows: [{}] }) },
 }));
 
@@ -9,8 +9,8 @@ import { createServer, type Server as HttpServer } from 'http';
 import { AddressInfo } from 'net';
 import { Server } from 'socket.io';
 import { io as createClient, type Socket as ClientSocket } from 'socket.io-client';
-import { signToken } from '../../../src/auth/jwt';
-import { ForbiddenError } from '../../../src/errors/AppError';
+import { signToken } from '../../../src/utils/jwt';
+import { ForbiddenError } from '../../../src/utils/AppError';
 import { attachSocketAuth, type ChatServer } from '../../../src/realtime/authSocket';
 import { attachSockets } from '../../../src/realtime/socketServer';
 import type { ClientToServerEvents, MessageWithSender, ServerToClientEvents } from '../../../../shared/types';

@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import fs from 'fs/promises';
 import path from 'path';
-import { NotFoundError } from '../errors/AppError';
+import { NotFoundError } from '../utils/AppError';
 import { authMiddleware } from '../middlewares/authMiddleware';
-import { attachmentUploadConfig } from '../lib/attachmentUploadConfig';
-import { ATTACHMENTS_UPLOAD_DIR, ensureUploadDirectories } from '../lib/uploads';
+import { attachmentUploadConfig } from '../utils/attachmentUploadConfig';
+import { ATTACHMENTS_UPLOAD_DIR, ensureUploadDirectories } from '../utils/uploads';
 import { parseSingleFile } from '../utils/fileUpload';
 
 ensureUploadDirectories();

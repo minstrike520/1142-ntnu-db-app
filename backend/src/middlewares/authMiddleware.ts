@@ -1,10 +1,10 @@
 import type { MiddlewareHandler } from 'hono';
 import type { Request, Response as ExpressResponse, NextFunction } from 'express';
-import { verifyToken } from '../auth/jwt';
-import { AUTH_COOKIE_NAME, readCookie } from '../auth/cookies';
-import { AppError } from '../errors/AppError';
-import pool from '../db';
-import { UserRepository } from '../repositories/userRepository';
+import { verifyToken } from '../utils/jwt';
+import { AUTH_COOKIE_NAME, readCookie } from '../utils/cookies';
+import { AppError } from '../utils/AppError';
+import pool from '../models/db';
+import { UserRepository } from '../models/userRepository';
 import type { JwtPayload } from '@shared/types';
 
 // ponytail: Type-safety extension for Hono Context variables
@@ -41,7 +41,7 @@ export const authMiddleware = (async (cOrReq: any, nextOrRes: any, maybeNext?: a
       if (!user) {
         return next(new AppError(401, 'Unauthorized: Account not found or deleted'));
       }
-      req.user = payload;
+      (req as any).user = payload;
       next();
     } catch (error) {
       if (error instanceof AppError) {

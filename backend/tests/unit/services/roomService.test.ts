@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterAll, mock, type Mock } from 'bun:test';
 import { makeRoomService } from '../../../src/services/roomService';
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../../src/errors/AppError';
-import type { IRoomRepository } from '../../../src/repositories/IRoomRepository';
-import type { IRoomMemberRepository } from '../../../src/repositories/IRoomMemberRepository';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../../src/utils/AppError';
+import type { IRoomRepository } from '../../../src/models/IRoomRepository';
+import type { IRoomMemberRepository } from '../../../src/models/IRoomMemberRepository';
 import type { Room, RoomMember } from '../../../../shared/types';
-import { saveAvatarUpload, removeManagedAvatar } from '../../../src/lib/avatarUpload';
+import { saveAvatarUpload, removeManagedAvatar } from '../../../src/utils/avatarUpload';
 
-mock.module('../../../src/lib/avatarUpload', () => ({
+mock.module('../../../src/utils/avatarUpload', () => ({
   saveAvatarUpload: mock(),
   removeManagedAvatar: mock(),
 }));
@@ -17,7 +17,7 @@ mock.module('../../../src/realtime/presence', () => ({
 
 afterAll(() => {
   mock.module('../../../src/realtime/presence', () => require('../../../src/realtime/presence?original'));
-  mock.module('../../../src/lib/avatarUpload', () => require('../../../src/lib/avatarUpload?original'));
+  mock.module('../../../src/utils/avatarUpload', () => require('../../../src/utils/avatarUpload?original'));
 });
 
 type Mocked<T> = {

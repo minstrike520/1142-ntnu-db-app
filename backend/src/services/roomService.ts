@@ -1,18 +1,18 @@
 import type { Room, RoomSummary } from '@shared/types';
 import { randomBytes } from 'crypto';
 import { isUserOnline } from '../realtime/presence';
-import { removeManagedAvatar, saveAvatarUpload } from '../lib/avatarUpload';
-import type { IRoomRepository } from '../repositories/IRoomRepository';
-import type { IRoomMemberRepository } from '../repositories/IRoomMemberRepository';
-import type { IUserRepository } from '../repositories/IUserRepository';
-import type { IMessageRepository } from '../repositories/IMessageRepository';
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors/AppError';
+import { removeManagedAvatar, saveAvatarUpload } from '../utils/avatarUpload';
+import type { IRoomRepository } from '../models/IRoomRepository';
+import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
+import type { IUserRepository } from '../models/IUserRepository';
+import type { IMessageRepository } from '../models/IMessageRepository';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../utils/AppError';
 import {
   createRoomSchema,
   updateRoomSchema,
   type CreateRoomInput,
   type UpdateRoomInput,
-} from '../validators/roomSchemas';
+} from '../routes/roomSchemas';
 
 const validationMessage = (issues: { message: string }[]) =>
   issues[0]?.message ?? 'Invalid room payload';

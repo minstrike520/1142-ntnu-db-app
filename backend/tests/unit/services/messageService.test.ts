@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { makeMessageService } from '../../../src/services/messageService';
-import { ForbiddenError, NotFoundError, ValidationError } from '../../../src/errors/AppError';
-import type { IMessageRepository } from '../../../src/repositories/IMessageRepository';
-import type { IRoomMemberRepository } from '../../../src/repositories/IRoomMemberRepository';
-import type { IRoomRepository } from '../../../src/repositories/IRoomRepository';
+import { ForbiddenError, NotFoundError, ValidationError } from '../../../src/utils/AppError';
+import type { IMessageRepository } from '../../../src/models/IMessageRepository';
+import type { IRoomMemberRepository } from '../../../src/models/IRoomMemberRepository';
+import type { IRoomRepository } from '../../../src/models/IRoomRepository';
 import type { Message, MessageWithSender, Room, RoomMember } from '../../../../shared/types';
 
 type Mocked<T> = {

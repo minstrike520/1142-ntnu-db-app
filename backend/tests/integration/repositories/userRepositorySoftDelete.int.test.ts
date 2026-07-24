@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from 'bun:test';
 import { testPool } from '../../helpers/testPool';
-import { UserRepository } from '../../../src/repositories/userRepository';
+import { UserRepository } from '../../../src/models/userRepository';
 
 const repo = new UserRepository(testPool);
 

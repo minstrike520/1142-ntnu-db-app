@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
-import { registerSchema, loginSchema } from '../validators/userSchemas';
+import { registerSchema, loginSchema } from '../routes/userSchemas';
 import { validate } from '../middlewares/validator';
-import { setRefreshCookie, clearRefreshCookie, REFRESH_COOKIE_NAME, readCookie } from '../auth/cookies';
-import { ValidationError } from '../errors/AppError';
+import { setRefreshCookie, clearRefreshCookie, REFRESH_COOKIE_NAME, readCookie } from '../utils/cookies';
+import { ValidationError } from '../utils/AppError';
 
 export interface AuthService {
   register(data: { email: string; name: string; password: string }): Promise<any>;

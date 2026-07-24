@@ -3,7 +3,7 @@ import {
   sendFriendRequestSchema,
   respondFriendRequestSchema,
   blockUserSchema,
-} from '../validators/userSchemas';
+} from '../routes/userSchemas';
 import { validate } from '../middlewares/validator';
 import { authMiddleware } from '../middlewares/authMiddleware';
 

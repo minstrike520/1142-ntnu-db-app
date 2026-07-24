@@ -1,8 +1,8 @@
 import type { Server } from 'socket.io';
 import type { ClientToServerEvents, JwtPayload, ServerToClientEvents } from '@shared/types';
-import { verifyToken } from '../auth/jwt';
-import pool from '../db';
-import { UserRepository } from '../repositories/userRepository';
+import { verifyToken } from '../utils/jwt';
+import pool from '../models/db';
+import { UserRepository } from '../models/userRepository';
 
 type SocketData = {
   user: JwtPayload;

@@ -1,5 +1,5 @@
-import type { IUserRepository } from '../repositories/IUserRepository';
-import type { IEmergencyContactRepository, EmergencyContact } from '../repositories/IEmergencyContactRepository';
+import type { IUserRepository } from '../models/IUserRepository';
+import type { IEmergencyContactRepository, EmergencyContact } from '../models/IEmergencyContactRepository';
 import type {
   RegisterRequest,
   LoginRequest,
@@ -13,18 +13,18 @@ import type {
   UserSettings,
 } from '../../../shared/types';
 
-import { ConflictError, NotFoundError, ValidationError } from '../errors/AppError';
-import { removeManagedAvatar, saveAvatarUpload } from '../lib/avatarUpload';
+import { ConflictError, NotFoundError, ValidationError } from '../utils/AppError';
+import { removeManagedAvatar, saveAvatarUpload } from '../utils/avatarUpload';
 import {
   updateMeSchema,
   updateSettingsSchema,
   searchQuerySchema,
   type UpdateMeInput,
   type UpdateSettingsInput,
-} from '../validators/userSchemas';
-import { getRefreshTokenTtlMs } from '../auth/refreshTokenTtl';
+} from '../routes/userSchemas';
+import { getRefreshTokenTtlMs } from '../utils/refreshTokenTtl';
 
-import type { IRefreshTokenRepository } from '../repositories/IRefreshTokenRepository';
+import type { IRefreshTokenRepository } from '../models/IRefreshTokenRepository';
 
 interface JwtHelper {
   signToken(payload: JwtPayload): Promise<string>;

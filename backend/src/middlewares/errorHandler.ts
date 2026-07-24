@@ -1,6 +1,6 @@
 import type { ErrorHandler, Context } from 'hono';
 import type { Response as ExpressResponse } from 'express';
-import { mapErrorToApiShape } from '../errors/mapError';
+import { mapErrorToApiShape } from '../utils/mapError';
 
 // ponytail: Dual-mode error handler supporting both Express (4 args: err, req, res, next) and Hono (2 args: err, c)
 export const errorHandler = ((err: any, cOrReq: any, resOrC?: any, maybeNext?: any) => {

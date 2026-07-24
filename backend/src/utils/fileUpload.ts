@@ -2,7 +2,7 @@ import type { Context } from 'hono';
 import fs from 'fs/promises';
 import path from 'path';
 import { randomBytes } from 'crypto';
-import { ValidationError } from '../errors/AppError';
+import { ValidationError } from '../utils/AppError';
 
 export interface ParseFileOptions {
   fieldName?: string;
