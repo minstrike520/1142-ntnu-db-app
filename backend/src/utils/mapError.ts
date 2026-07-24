@@ -1,4 +1,3 @@
-import multer from 'multer';
 import { AppError } from './AppError';
 import type { ApiError } from '@shared/types';
 
@@ -14,11 +13,12 @@ export const mapErrorToApiShape = (err: unknown): ApiError => {
     return apiError;
   }
 
-  if (err instanceof multer.MulterError) {
+  const errObj = err as any;
+  if (errObj && (errObj.name === 'MulterError' || errObj.code === 'LIMIT_FILE_SIZE')) {
     return {
-      statusCode: err.code === 'LIMIT_FILE_SIZE' ? 413 : 400,
-      message: err.code === 'LIMIT_FILE_SIZE' ? 'Attachment file exceeds the configured size limit' : err.message,
-      code: err.code,
+      statusCode: errObj.code === 'LIMIT_FILE_SIZE' ? 413 : 400,
+      message: errObj.code === 'LIMIT_FILE_SIZE' ? 'Attachment file exceeds the configured size limit' : (errObj.message || 'File upload error'),
+      code: errObj.code || 'UPLOAD_ERROR',
     };
   }
 

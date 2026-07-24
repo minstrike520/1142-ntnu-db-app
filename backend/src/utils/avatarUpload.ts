@@ -1,3 +1,4 @@
+import type { UploadedFile } from './fileUpload';
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
@@ -42,7 +43,7 @@ const detectAvatarExtension = (buffer: Buffer): string | null => {
   return null;
 };
 
-export const assertValidAvatarUpload = (file: Express.Multer.File): string => {
+export const assertValidAvatarUpload = (file: UploadedFile): string => {
   if (!file.buffer || file.buffer.length === 0) {
     throw new ValidationError('Avatar file is empty');
   }
@@ -63,7 +64,7 @@ export const assertValidAvatarUpload = (file: Express.Multer.File): string => {
 
 export const saveAvatarUpload = async (
   userId: string,
-  file: Express.Multer.File,
+  file: UploadedFile,
 ): Promise<string> => {
   const extension = assertValidAvatarUpload(file);
   const storedName = `${userId}-${crypto.randomUUID()}${extension}`;

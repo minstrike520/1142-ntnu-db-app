@@ -1,3 +1,4 @@
+import type { UploadedFile } from '../utils/fileUpload';
 import type { IUserRepository } from '../models/IUserRepository';
 import type { IEmergencyContactRepository, EmergencyContact } from '../models/IEmergencyContactRepository';
 import type {
@@ -239,7 +240,7 @@ export const makeUserService = (
       return profile;
     },
 
-    async uploadAvatar(userId: string, file: Express.Multer.File): Promise<MyProfile> {
+    async uploadAvatar(userId: string, file: UploadedFile): Promise<MyProfile> {
       const currentUser = await repo.findById(userId);
       if (!currentUser) {
         throw new NotFoundError('user', userId);

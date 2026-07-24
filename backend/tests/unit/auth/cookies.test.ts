@@ -1,5 +1,5 @@
-import { describe, it, expect, mock, type Mock } from 'bun:test';
-import type { Response } from 'express';
+import { describe, it, expect } from 'bun:test';
+import type { Context } from 'hono';
 import {
   REFRESH_COOKIE_NAME,
   setRefreshCookie,
@@ -7,24 +7,31 @@ import {
   readCookie,
 } from '../../../src/utils/cookies';
 
-const makeRes = () =>
-  ({ cookie: mock(), clearCookie: mock() }) as unknown as Response;
+const makeHonoContext = () => {
+  const resHeaders = new Headers();
+  const reqHeaders = new Headers();
+  return {
+    header: (name: string, value: string, options?: any) => {
+      resHeaders.append(name, value);
+    },
+    req: {
+      raw: {
+        headers: reqHeaders,
+      },
+    },
+    res: { headers: resHeaders },
+  } as unknown as Context;
+};
 
 describe('cookies', () => {
   describe('setRefreshCookie', () => {
     it('sets the refresh cookie with httpOnly and strict sameSite', () => {
-      const res = makeRes();
-      setRefreshCookie(res, 'token-123');
-      expect(res.cookie).toHaveBeenCalledWith(
-        REFRESH_COOKIE_NAME,
-        'token-123',
-        expect.objectContaining({
-          httpOnly: true,
-          sameSite: 'strict',
-          path: '/',
-          maxAge: expect.any(Number),
-        })
-      );
+      const c = makeHonoContext();
+      setRefreshCookie(c, 'token-123');
+      const setCookieHeader = c.res.headers.get('set-cookie') || '';
+      expect(setCookieHeader).toContain('refresh_token=token-123');
+      expect(setCookieHeader).toContain('HttpOnly');
+      expect(setCookieHeader).toContain('SameSite=Strict');
     });
 
     it('defaults the cookie maxAge to the refresh token TTL', () => {
@@ -33,10 +40,11 @@ describe('cookies', () => {
       delete process.env.REFRESH_COOKIE_MAX_AGE_MS;
       process.env.JWT_REFRESH_EXPIRES_IN_DAYS = '14';
       try {
-        const res = makeRes();
-        setRefreshCookie(res, 'token-123');
-        const options = (res.cookie as Mock<any>).mock.calls[0][2] as any;
-        expect(options.maxAge).toBe(14 * 24 * 60 * 60 * 1000);
+        const c = makeHonoContext();
+        setRefreshCookie(c, 'token-123');
+        const setCookieHeader = c.res.headers.get('set-cookie') || '';
+        const expectedMaxAgeSec = 14 * 24 * 60 * 60;
+        expect(setCookieHeader).toContain(`Max-Age=${expectedMaxAgeSec}`);
       } finally {
         if (originalMaxAge !== undefined) process.env.REFRESH_COOKIE_MAX_AGE_MS = originalMaxAge;
         if (originalDays !== undefined) {
@@ -50,12 +58,11 @@ describe('cookies', () => {
 
   describe('clearRefreshCookie', () => {
     it('clears the refresh cookie with matching options', () => {
-      const res = makeRes();
-      clearRefreshCookie(res);
-      expect(res.clearCookie).toHaveBeenCalledWith(
-        REFRESH_COOKIE_NAME,
-        expect.objectContaining({ httpOnly: true, sameSite: 'strict', path: '/' })
-      );
+      const c = makeHonoContext();
+      clearRefreshCookie(c);
+      const setCookieHeader = c.res.headers.get('set-cookie') || '';
+      expect(setCookieHeader).toContain('refresh_token=;');
+      expect(setCookieHeader).toContain('Max-Age=0');
     });
   });
 

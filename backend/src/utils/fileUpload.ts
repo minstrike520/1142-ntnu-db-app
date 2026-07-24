@@ -4,6 +4,19 @@ import path from 'path';
 import { randomBytes } from 'crypto';
 import { ValidationError } from '../utils/AppError';
 
+export interface UploadedFile {
+  fieldname?: string;
+  originalname: string;
+  encoding?: string;
+  mimetype: string;
+  size: number;
+  buffer: Buffer;
+  destination?: string;
+  filename?: string;
+  path?: string;
+  stream?: any;
+}
+
 export interface ParseFileOptions {
   fieldName?: string;
   maxBytes?: number;
@@ -16,7 +29,7 @@ export interface ParseFileOptions {
 export async function parseSingleFile(
   c: Context,
   options: ParseFileOptions = {}
-): Promise<Express.Multer.File> {
+): Promise<UploadedFile> {
   const fieldName = options.fieldName ?? 'file';
   const body = await c.req.parseBody();
   const file = body[fieldName];

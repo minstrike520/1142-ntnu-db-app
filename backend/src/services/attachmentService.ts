@@ -1,3 +1,4 @@
+import type { UploadedFile } from '../utils/fileUpload';
 import { ValidationError } from '../utils/AppError';
 import { AttachmentRepository } from '../models/attachmentRepository';
 import type { Attachment } from '@shared/types';
@@ -26,7 +27,7 @@ const mapAttachment = (row: any): Attachment => ({
 
 export function makeAttachmentService(attachmentRepo: AttachmentRepository) {
   return {
-    async uploadAttachment(uploadedBy: string, file: Express.Multer.File) {
+    async uploadAttachment(uploadedBy: string, file: UploadedFile) {
       if (!uploadedBy) {
         throw new ValidationError('uploadedBy is required');
       }
@@ -36,7 +37,7 @@ export function makeAttachmentService(attachmentRepo: AttachmentRepository) {
       const originalName = normalizeOriginalFilename(file.originalname);
       const attachment = await attachmentRepo.create({
         uploadedBy,
-        filePath: file.path,
+        filePath: file.path || '',
         fileType: file.mimetype,
         originalName,
       });

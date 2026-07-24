@@ -1,3 +1,4 @@
+import type { UploadedFile } from '../utils/fileUpload';
 import { Hono } from 'hono';
 import fs from 'fs/promises';
 import path from 'path';
@@ -19,7 +20,7 @@ const encodeDownloadFilename = (filename: string): string => {
 };
 
 export interface AttachmentService {
-  uploadAttachment(userId: string, file: Express.Multer.File): Promise<any>;
+  uploadAttachment(userId: string, file: UploadedFile): Promise<any>;
   getAttachment(attachmentId: string): Promise<any>;
 }
 

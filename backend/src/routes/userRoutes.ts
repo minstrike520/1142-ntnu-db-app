@@ -1,3 +1,4 @@
+import type { UploadedFile } from '../utils/fileUpload';
 import { Hono } from 'hono';
 import {
   updateMeSchema,
@@ -16,7 +17,7 @@ export interface UserService {
   getMe(userId: string): Promise<any>;
   getUserProfile(userId: string): Promise<any>;
   updateMe(userId: string, data: unknown): Promise<any>;
-  uploadAvatar(userId: string, file: Express.Multer.File): Promise<any>;
+  uploadAvatar(userId: string, file: UploadedFile): Promise<any>;
   getMySettings(userId: string): Promise<any>;
   updateMySettings(userId: string, data: unknown): Promise<any>;
   deleteMe(userId: string): Promise<void>;

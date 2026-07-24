@@ -1,3 +1,4 @@
+import type { UploadedFile } from '../utils/fileUpload';
 import type { Room, RoomSummary } from '@shared/types';
 import { randomBytes } from 'crypto';
 import { isUserOnline } from '../realtime/presence';
@@ -380,7 +381,7 @@ export const makeRoomService = (
       }
     },
 
-    async uploadAvatar(roomId: string, callerId: string, file: Express.Multer.File): Promise<Room> {
+    async uploadAvatar(roomId: string, callerId: string, file: UploadedFile): Promise<Room> {
       const room = await repo.findById(roomId);
       if (!room) throw new NotFoundError('room', roomId);
       if (room.type !== 'group') throw new ValidationError('Cannot upload avatar for a private room');

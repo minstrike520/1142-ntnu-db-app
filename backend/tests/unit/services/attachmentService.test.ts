@@ -1,3 +1,4 @@
+import type { UploadedFile } from '../../../src/utils/fileUpload';
 import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { makeAttachmentService } from '../../../src/services/attachmentService';
 
@@ -26,7 +27,7 @@ describe('AttachmentService', () => {
       path: '/tmp/file.pdf',
       mimetype: 'application/pdf',
       originalname: 'éç®æç¶­èç¨å¼è¨­è¨å¹³å° å¤åé é».pdf',
-    } as Express.Multer.File);
+    } as UploadedFile);
 
     expect(attachmentRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({

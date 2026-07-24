@@ -1,3 +1,4 @@
+import type { UploadedFile } from '../utils/fileUpload';
 import { Hono } from 'hono';
 import {
   createRoomSchema,
@@ -20,7 +21,7 @@ export interface RoomService {
   joinByCode(userId: string, inviteCode: string): Promise<any>;
   leave(userId: string, roomId: string): Promise<void>;
   deleteGroup(roomId: string, callerId: string): Promise<void>;
-  uploadAvatar(roomId: string, callerId: string, file: Express.Multer.File): Promise<any>;
+  uploadAvatar(roomId: string, callerId: string, file: UploadedFile): Promise<any>;
   listMembers(roomId: string, callerId: string): Promise<any>;
   approveMember(roomId: string, callerId: string, targetUserId: string): Promise<any>;
   updateMember(roomId: string, callerId: string, targetUserId: string, data: unknown): Promise<any>;

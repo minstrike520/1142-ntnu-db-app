@@ -1,5 +1,5 @@
 import { describe, it, expect, spyOn } from 'bun:test';
-import multer from 'multer';
+
 import { mapErrorToApiShape } from '../../../src/utils/mapError';
 import { AppError, ValidationError, ForbiddenError, NotFoundError, ConflictError } from '../../../src/utils/AppError';
 
@@ -73,7 +73,7 @@ describe('mapErrorToApiShape', () => {
   });
 
   it('maps attachment size overflow to 413', () => {
-    const err = new multer.MulterError('LIMIT_FILE_SIZE');
+    const err = { name: 'MulterError', code: 'LIMIT_FILE_SIZE', message: 'File too large' } as any;
 
     expect(mapErrorToApiShape(err)).toEqual({
       statusCode: 413,
@@ -83,7 +83,7 @@ describe('mapErrorToApiShape', () => {
   });
 
   it('maps non-size multer errors to 400', () => {
-    const err = new multer.MulterError('LIMIT_FILE_COUNT');
+    const err = { name: 'MulterError', code: 'LIMIT_FILE_COUNT', message: 'Too many files' } as any;
 
     const result = mapErrorToApiShape(err);
 

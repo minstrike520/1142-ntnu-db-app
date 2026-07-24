@@ -1,3 +1,4 @@
+import type { UploadedFile } from '../../../src/utils/fileUpload';
 import { describe, it, expect, beforeEach, afterAll, mock, type Mock } from 'bun:test';
 
 import { ConflictError, NotFoundError, ValidationError } from '../../../src/utils/AppError';
@@ -716,7 +717,7 @@ describe('userService', () => {
   });
 
   describe('uploadAvatar', () => {
-    const fakeFile = { originalname: 'avatar.png', buffer: Buffer.from('data') } as Express.Multer.File;
+    const fakeFile = { originalname: 'avatar.png', buffer: Buffer.from('data') } as UploadedFile;
 
     beforeEach(() => {
       ((saveAvatarUpload as any) as Mock<any>).mockClear();
@@ -825,7 +826,7 @@ describe('userService', () => {
   });
 
   describe('uploadAvatar with onUserUpdated and old avatar removal', () => {
-    const fakeFile = { originalname: 'avatar.png', buffer: Buffer.from('data') } as Express.Multer.File;
+    const fakeFile = { originalname: 'avatar.png', buffer: Buffer.from('data') } as UploadedFile;
 
     beforeEach(() => {
       ((saveAvatarUpload as any) as Mock<any>).mockClear();

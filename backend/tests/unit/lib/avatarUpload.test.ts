@@ -1,3 +1,4 @@
+import type { UploadedFile } from '../../../src/utils/fileUpload';
 import { describe, it, expect, afterEach } from 'bun:test';
 import fs from 'fs/promises';
 import path from 'path';
@@ -6,7 +7,7 @@ import { ValidationError } from '../../../src/utils/AppError';
 import { assertValidAvatarUpload, removeManagedAvatar } from '../../../src/utils/avatarUpload';
 import { AVATARS_UPLOAD_DIR, ensureUploadDirectories } from '../../../src/utils/uploads';
 
-const makeFile = (mimetype: string, bytes: number[]): Express.Multer.File =>
+const makeFile = (mimetype: string, bytes: number[]): UploadedFile =>
   ({
     fieldname: 'file',
     originalname: 'avatar',
@@ -14,7 +15,7 @@ const makeFile = (mimetype: string, bytes: number[]): Express.Multer.File =>
     mimetype,
     size: bytes.length,
     buffer: Buffer.from(bytes),
-  }) as Express.Multer.File;
+  }) as UploadedFile;
 
 describe('avatarUpload helpers', () => {
   it('accepts matching png content', () => {
