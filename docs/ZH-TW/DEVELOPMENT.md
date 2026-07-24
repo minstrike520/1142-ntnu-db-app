@@ -55,7 +55,7 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 | 服務 | 主機網址 / 連接埠 | 容器內部連接埠 | 說明 |
 |---|------------------|----------------|-------------|
 | **前端** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js 前端網頁應用程式 |
-| **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Express API 與 Socket.IO 伺服器 |
+| **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API 與 Socket.IO 伺服器 |
 | **資料庫** | `localhost:5435` | 5432 | PostgreSQL 18 實例 |
 
 對於瀏覽器端的前端請求，請將 API 環境變數設定為：
@@ -76,19 +76,19 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 首次設定專案時，您必須初始化資料庫 Schema。請確認 Docker 容器已正常啟動，然後套用遷移：
 
 ```bash
-docker compose exec backend pnpm run migrate:up
+docker compose exec backend bun run migrate:up
 ```
 
 將測試用的種子資料寫入資料庫：
 ```bash
-docker compose exec backend pnpm run db:seed
+docker compose exec backend bun run db:seed
 ```
 
 ### 常見指令
-- **建立新的遷移檔**：`docker compose exec backend pnpm run migrate:create <name>`
-- **執行資料庫遷移**：`docker compose exec backend pnpm run migrate:up`
-- **回滾資料庫遷移**：`docker compose exec backend pnpm run migrate:down`
-- **寫入種子資料**：`docker compose exec backend pnpm run db:seed`
+- **建立新的遷移檔**：`docker compose exec backend bun run migrate:create <name>`
+- **執行資料庫遷移**：`docker compose exec backend bun run migrate:up`
+- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`
+- **寫入種子資料**：`docker compose exec backend bun run db:seed`
 
 ### 修復損壞的開發資料庫
 如果遷移過程中遇到 `relation ... already exists` 錯誤，或者遷移狀態發生混亂：
@@ -101,7 +101,7 @@ docker compose down -v
 docker compose up -d
 
 # 3. 等待資料庫就緒後，再次執行遷移
-docker compose exec backend pnpm run migrate:up
+docker compose exec backend bun run migrate:up
 ```
 
 ---
@@ -140,17 +140,17 @@ docker compose exec backend pnpm run migrate:up
 ## 5. 測試指南
 
 ### 測試架構
-開發環境完全運行於 Docker 中，主機上沒有 `node_modules`。所有 Vitest 測試都必須在後端容器內部使用 `docker compose exec` 執行。
+開發環境完全運行於 Docker 中，主機上沒有 `node_modules`。所有 Bun 測試套件都必須在後端容器內部使用 `docker compose exec` 執行。
 
 測試資料庫設定：整合測試會在一台臨時的 Postgres 測試資料庫實例（`db-test`）上運行，該實例定義於 `docker-compose.test.yml` 中，以將開發數據與測試數據隔離開來。
 
 ### 執行 TypeScript 型別檢查
 ```bash
 # 後端檢查
-docker compose exec backend pnpm exec tsc --noEmit
+pnpm --prefix backend exec tsc --noEmit
 
 # 前端檢查
-docker compose exec frontend pnpm exec tsc --noEmit
+pnpm --prefix frontend exec tsc --noEmit
 ```
 
 ### 執行 ESLint 代碼品質與風格檢查
@@ -167,32 +167,27 @@ docker compose exec frontend pnpm run lint
 ### 執行單元測試
 單元測試不需要資料庫連線。
 ```bash
-docker compose exec backend pnpm run test:unit
+docker compose exec backend bun run test:unit
 ```
 
 ### 執行整合測試
-整合測試需要啟動臨時的測試資料庫並套用遷移：
+整合測試需要啟動臨時的測試資料庫（`test:db:up` 會自動啟動容器並完成資料庫遷移）：
 
 ```bash
-# 1. 啟動臨時測試資料庫
+# 1. 啟動臨時測試資料庫並自動套用遷移
 pnpm -C backend run test:db:up
-# 或：docker compose -f docker-compose.test.yml up -d --wait
 
-# 2. 套用遷移至測試資料庫（容器啟動時需要執行）
-docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
+# 2. 執行整合測試套件
+docker compose exec backend bun run test:integration
 
-# 3. 執行整合測試套件
-docker compose exec backend pnpm run test:integration
-
-# 4. 關閉測試資料庫
+# 3. 關閉測試資料庫
 pnpm -C backend run test:db:down
-# 或：docker compose -f docker-compose.test.yml down
 ```
 
 ### 執行所有測試
 ```bash
 pnpm -C backend run test:db:up
-docker compose exec backend pnpm run test
+docker compose exec backend bun run test
 pnpm -C backend run test:db:down
 ```
 
@@ -202,11 +197,11 @@ pnpm -C backend run test:db:down
 
 ### 單元測試
 * **路徑**：`backend/tests/unit/**/*.test.ts`
-* **指南**：使用 `vi.mock()` 模擬資料庫 Repository，在不建立真實資料庫連線的情況下，單獨測試業務邏輯。
+* **指南**：使用 `mock.module()` 模擬資料庫 Repository，在不建立真實資料庫連線的情況下，單獨測試業務邏輯。
 
 ```typescript
 // 範例：backend/tests/unit/services/userService.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 
 describe('userService', () => {
   it('adds two numbers', () => {
@@ -221,7 +216,7 @@ describe('userService', () => {
 
 ```typescript
 // 範例：backend/tests/integration/repositories/userRepository.test.ts
-import { beforeEach, afterAll, describe, it, expect } from 'vitest';
+import { beforeEach, afterAll, describe, it, expect } from 'bun:test';
 import { testPool } from '../helpers/testPool';
 import { resetDb } from '../helpers/resetDb';
 
@@ -245,7 +240,7 @@ describe('userRepository', () => {
 
 ## 7. 疑難排解
 
-* **`vitest: not found`**：後端容器的 `node_modules` 不同步。請重新建置容器：
+* **`bun test 錯誤`**：後端容器的 `node_modules` 不同步。請重新建置容器：
   ```bash
   docker compose rm -v -s -f backend
   docker compose up -d --build backend
@@ -257,5 +252,5 @@ describe('userRepository', () => {
 * **`db-test` 連線掛起或逾時**：請確認 `db-test` 正在運行，指令為：`docker compose -f docker-compose.test.yml ps`。如果沒啟動請將它啟動。
 * **`TRUNCATE` 失敗**：請確認已透過以下指令在測試資料庫中套用了遷移：
   ```bash
-  docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
+  docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
