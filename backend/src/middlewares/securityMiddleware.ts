@@ -35,6 +35,7 @@ export const securityHeaders = (async (cOrReq: any, nextOrRes: any, maybeNext?: 
     const next = nextOrRes;
     const isAvatar = c.req.path === '/uploads/avatars' || c.req.path.startsWith('/uploads/avatars/');
     const headersMiddleware = honoSecureHeaders({
+      contentSecurityPolicy: { defaultSrc: ["'self'"] },
       crossOriginResourcePolicy: isAvatar ? 'cross-origin' : 'same-origin',
     });
     return headersMiddleware(c, next);

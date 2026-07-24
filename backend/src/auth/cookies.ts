@@ -1,3 +1,5 @@
+import type { Context } from 'hono';
+import { setCookie, deleteCookie } from 'hono/cookie';
 import type { Response } from 'express';
 import { parsePositiveInt } from '../utils/parsePositiveInt';
 import { getRefreshTokenTtlMs } from './refreshTokenTtl';
@@ -17,15 +19,32 @@ const refreshCookieOptions = () => ({
   path: '/',
 });
 
-export const setRefreshCookie = (res: Response, token: string): void => {
-  res.cookie(REFRESH_COOKIE_NAME, token, {
-    ...refreshCookieOptions(),
-    maxAge: getRefreshCookieMaxAgeMs(),
-  });
+export const setRefreshCookie = (cOrRes: Context | Response | any, token: string): void => {
+  if (cOrRes && typeof cOrRes.cookie === 'function') {
+    cOrRes.cookie(REFRESH_COOKIE_NAME, token, {
+      ...refreshCookieOptions(),
+      maxAge: getRefreshCookieMaxAgeMs(),
+    });
+  } else if (cOrRes && typeof cOrRes.header === 'function') {
+    setCookie(cOrRes, REFRESH_COOKIE_NAME, token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test',
+      sameSite: 'Strict',
+      path: '/',
+      maxAge: Math.floor(getRefreshCookieMaxAgeMs() / 1000),
+    });
+  }
 };
 
-export const clearRefreshCookie = (res: Response): void => {
-  res.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions());
+export const clearRefreshCookie = (cOrRes: Context | Response | any): void => {
+  if (cOrRes && typeof cOrRes.clearCookie === 'function') {
+    cOrRes.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions());
+  } else if (cOrRes && typeof cOrRes.header === 'function') {
+    deleteCookie(cOrRes, REFRESH_COOKIE_NAME, {
+      path: '/',
+      secure: process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test',
+    });
+  }
 };
 
 export const readCookie = (cookieHeader: string | undefined, name: string): string | undefined => {

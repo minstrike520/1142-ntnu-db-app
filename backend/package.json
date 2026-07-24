@@ -22,6 +22,8 @@
     "migrate:test": "DATABASE_URL=postgresql://postgres:postgres@localhost:5436/ntnu_test node-pg-migrate up"
   },
   "dependencies": {
+    "@hono/node-server": "^2.0.11",
+    "@hono/zod-validator": "^0.9.0",
     "bcryptjs": "^3.0.3",
     "config": "^3.3.12",
     "cors": "^2.8.6",

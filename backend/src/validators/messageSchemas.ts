@@ -19,6 +19,7 @@ export const listMessagesSchema = z.object({
   beforeId: idSchema.optional(),
   limit: z.number().int().min(1).max(100).default(50),
 });
+export const listMessagesQuerySchema = listMessagesSchema;
 
 export const recallMessageSchema = z.object({
   roomId: idSchema,
