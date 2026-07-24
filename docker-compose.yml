@@ -25,6 +25,7 @@ services:
       - NODE_ENV=${NODE_ENV}
       - PORT=${PORT}
       - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgresql://postgres:postgres@db-test:5432/ntnu_test}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
