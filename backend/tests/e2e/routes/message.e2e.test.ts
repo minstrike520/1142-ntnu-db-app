@@ -1,15 +1,8 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import request from 'supertest';
-import { resetDb } from '../../helpers/resetDb';
+import { app } from '../../../src/index';
 import { testPool } from '../../helpers/testPool';
-
-let app: any;
-
-beforeAll(async () => {
-  process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
-  const indexModule = await import('../../../src/index');
-  app = indexModule.app;
-});
+import { resetDb } from '../../helpers/resetDb';
 
 describe('Message E2E', () => {
   let token: string;
@@ -18,14 +11,19 @@ describe('Message E2E', () => {
 
   beforeEach(async () => {
     await resetDb();
-    const authRes = await request(app).post('/api/v1/auth/register').send({
-      name: 'User',
-      email: 'user@example.com',
-      password: 'Password123!',
-    });
-    token = authRes.body.token;
-    userId = authRes.body.user.userId;
 
+    // Register User
+    const regRes = await request(app)
+      .post('/api/v1/auth/register')
+      .send({
+        name: 'Message User',
+        email: 'msguser@test.com',
+        password: 'password123',
+      });
+    token = regRes.body.token;
+    userId = regRes.body.user.userId;
+
+    // Create Room
     const roomRes = await request(app)
       .post('/api/v1/rooms')
       .set('Authorization', `Bearer ${token}`)
@@ -37,12 +35,10 @@ describe('Message E2E', () => {
   });
 
   it('should list messages for a room', async () => {
-    // Insert a dummy message directly into DB for testing the GET endpoint
-    // (since send_message is handled via Socket.IO, not HTTP)
-    await testPool.query(
-      "INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, 'Hello E2E!')",
-      [roomId, userId]
-    );
+    const msgContent = 'Hello E2E!';
+    await testPool`
+      INSERT INTO messages (room_id, sender_id, content) VALUES (${roomId}, ${userId}, ${msgContent})
+    `;
 
     const res = await request(app)
       .get(`/api/v1/rooms/${roomId}/messages`)
@@ -61,10 +57,11 @@ describe('Message E2E', () => {
       password: 'Password123!',
     });
 
-    await testPool.query(
-      "INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'pending')",
-      [roomId, pendingRes.body.user.userId],
-    );
+    const pendingUserId = pendingRes.body.user.userId;
+    const pendingRole = 'pending';
+    await testPool`
+      INSERT INTO room_members (room_id, user_id, role) VALUES (${roomId}, ${pendingUserId}, ${pendingRole})
+    `;
 
     const res = await request(app)
       .get(`/api/v1/rooms/${roomId}/messages`)
@@ -84,10 +81,11 @@ describe('Message E2E', () => {
       });
     const hiddenRoomId = hiddenRoomRes.body.roomId;
 
-    await testPool.query(
-      "INSERT INTO messages (room_id, sender_id, content, sent_at) VALUES ($1, $2, 'before join', '2026-01-01T00:00:00.000Z')",
-      [hiddenRoomId, userId],
-    );
+    const beforeContent = 'before join';
+    const beforeTime = '2026-01-01T00:00:00.000Z';
+    await testPool`
+      INSERT INTO messages (room_id, sender_id, content, sent_at) VALUES (${hiddenRoomId}, ${userId}, ${beforeContent}, ${beforeTime})
+    `;
 
     const newUserRes = await request(app).post('/api/v1/auth/register').send({
       name: 'New Member',
@@ -95,20 +93,25 @@ describe('Message E2E', () => {
       password: 'Password123!',
     });
 
-    await testPool.query(
-      "INSERT INTO room_members (room_id, user_id, role, join_time) VALUES ($1, $2, 'member', '2026-01-02T00:00:00.000Z')",
-      [hiddenRoomId, newUserRes.body.user.userId],
-    );
-    await testPool.query(
-      "INSERT INTO messages (room_id, sender_id, content, sent_at) VALUES ($1, $2, 'after join', '2026-01-03T00:00:00.000Z')",
-      [hiddenRoomId, userId],
-    );
+    const newUserId = newUserRes.body.user.userId;
+    const memberRole = 'member';
+    const joinTime = '2026-01-02T00:00:00.000Z';
+    await testPool`
+      INSERT INTO room_members (room_id, user_id, role, join_time) VALUES (${hiddenRoomId}, ${newUserId}, ${memberRole}, ${joinTime})
+    `;
+
+    const afterContent = 'after join';
+    const afterTime = '2026-01-03T00:00:00.000Z';
+    await testPool`
+      INSERT INTO messages (room_id, sender_id, content, sent_at) VALUES (${hiddenRoomId}, ${userId}, ${afterContent}, ${afterTime})
+    `;
 
     const res = await request(app)
       .get(`/api/v1/rooms/${hiddenRoomId}/messages`)
       .set('Authorization', `Bearer ${newUserRes.body.token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.map((message: { content: string }) => message.content)).toEqual(['after join']);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].content).toBe('after join');
   });
 });

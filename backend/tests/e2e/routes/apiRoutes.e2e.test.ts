@@ -36,7 +36,6 @@ describe('API routes E2E', () => {
 
   afterAll(async () => {
     await appPool.end();
-    await testPool.end();
   });
 
   it('covers auth routes', async () => {

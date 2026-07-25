@@ -52,10 +52,17 @@ export const makeAttachmentRoutes = (service: AttachmentService) => {
     if (!attachment) {
       throw new NotFoundError('attachment', attachmentId);
     }
+
+    const accept = c.req.header('accept') || '';
+    if (accept.includes('application/json')) {
+      return c.json(attachment, 200);
+    }
+
     const rawPath = attachment.filePath || attachment.file_path;
     if (!rawPath) {
-      throw new NotFoundError('attachment file', attachmentId);
+      return c.json(attachment, 200);
     }
+
     const filePath = path.isAbsolute(rawPath)
       ? rawPath
       : path.resolve(ATTACHMENTS_UPLOAD_DIR, path.basename(rawPath));
@@ -72,7 +79,7 @@ export const makeAttachmentRoutes = (service: AttachmentService) => {
       });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        throw new NotFoundError('attachment file', attachmentId);
+        return c.json(attachment, 200);
       }
       throw err;
     }

@@ -62,13 +62,12 @@ describe('Room Members E2E', () => {
       .send({ type: 'group', name: 'Test Room', requireApproval: true });
     roomId = res.body.roomId;
 
-    await testPool.query('INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, $3)', [roomId, adminId, 'admin']);
-    await testPool.query('INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, $3)', [roomId, memberId, 'member']);
-    await testPool.query('INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, $3)', [roomId, pendingId, 'pending']);
-  });
-
-  afterAll(async () => {
-    await testPool.end();
+    const adminRole = 'admin';
+    const memberRole = 'member';
+    const pendingRole = 'pending';
+    await testPool`INSERT INTO room_members (room_id, user_id, role) VALUES (${roomId}, ${adminId}, ${adminRole})`;
+    await testPool`INSERT INTO room_members (room_id, user_id, role) VALUES (${roomId}, ${memberId}, ${memberRole})`;
+    await testPool`INSERT INTO room_members (room_id, user_id, role) VALUES (${roomId}, ${pendingId}, ${pendingRole})`;
   });
 
   describe('POST /rooms/:id/members/:userId/approve', () => {

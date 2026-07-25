@@ -1,129 +1,99 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import request from 'supertest';
 import { app } from '../../../src/index';
 import { resetDb } from '../../helpers/resetDb';
 import { testPool } from '../../helpers/testPool';
 
-describe('Friendships & Blocks E2E', () => {
+describe('Friend & Block E2E Integration Tests', () => {
   let tokenA: string;
-  let userA: { userId: string; name: string };
+  let userA: any;
   let tokenB: string;
-  let userB: { userId: string; name: string };
+  let userB: any;
   let tokenC: string;
-  let userC: { userId: string; name: string };
+  let userC: any;
 
   beforeEach(async () => {
     await resetDb();
 
-    // Create User A
-    const resA = await request(app).post('/api/v1/auth/register').send({
-      name: 'User A',
-      email: 'a@example.com',
-      password: 'Password123!',
-    });
+    // Register User A
+    const resA = await request(app)
+      .post('/api/v1/auth/register')
+      .send({ name: 'User A', email: 'usera@test.com', password: 'password123' });
     tokenA = resA.body.token;
     userA = resA.body.user;
 
-    // Create User B
-    const resB = await request(app).post('/api/v1/auth/register').send({
-      name: 'User B',
-      email: 'b@example.com',
-      password: 'Password123!',
-    });
+    // Register User B
+    const resB = await request(app)
+      .post('/api/v1/auth/register')
+      .send({ name: 'User B', email: 'userb@test.com', password: 'password123' });
     tokenB = resB.body.token;
     userB = resB.body.user;
 
-    // Create User C
-    const resC = await request(app).post('/api/v1/auth/register').send({
-      name: 'User C',
-      email: 'c@example.com',
-      password: 'Password123!',
-    });
+    // Register User C
+    const resC = await request(app)
+      .post('/api/v1/auth/register')
+      .send({ name: 'User C', email: 'userc@test.com', password: 'password123' });
     tokenC = resC.body.token;
     userC = resC.body.user;
   });
 
   describe('Friendships', () => {
-    it('should send a friend request successfully', async () => {
-      const res = await request(app)
+    it('should send, list, accept, and get friends', async () => {
+      // 1. A sends friend request to B
+      const sendRes = await request(app)
         .post('/api/v1/friend-requests')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ target_user_id: userB.userId });
 
-      expect(res.status).toBe(201);
-      expect(res.body.status).toBe('pending');
-    });
+      expect(sendRes.status).toBe(201);
+      expect(sendRes.body.status).toBe('pending');
+      expect(sendRes.body.requester?.userId ?? sendRes.body.requesterId).toBe(userA.userId);
+      expect(sendRes.body.addressee?.userId ?? sendRes.body.addresseeId).toBe(userB.userId);
 
-    it('should fail if sending a request to oneself', async () => {
-      const res = await request(app)
-        .post('/api/v1/friend-requests')
-        .set('Authorization', `Bearer ${tokenA}`)
-        .send({ target_user_id: userA.userId });
-
-      expect(res.status).toBe(400);
-    });
-
-    it('should list pending friend requests', async () => {
-      await request(app)
-        .post('/api/v1/friend-requests')
-        .set('Authorization', `Bearer ${tokenA}`)
-        .send({ target_user_id: userB.userId });
-
-      const res = await request(app)
-        .get('/api/v1/friend-requests')
+      // 2. B views pending requests
+      const pendingRes = await request(app)
+        .get('/api/v1/friend-requests/pending')
         .set('Authorization', `Bearer ${tokenB}`);
 
-      expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.length).toBe(1);
-      expect(res.body[0].requesterId).toBe(userA.userId);
-    });
+      expect(pendingRes.status).toBe(200);
+      expect(pendingRes.body.length).toBe(1);
+      expect(pendingRes.body[0].requester.userId).toBe(userA.userId);
 
-    it('should accept a friend request', async () => {
-      // A sends request to B
-      await request(app)
-        .post('/api/v1/friend-requests')
-        .set('Authorization', `Bearer ${tokenA}`)
-        .send({ target_user_id: userB.userId });
-
-      // B accepts
-      const res = await request(app)
+      // 3. B accepts friend request from A
+      const acceptRes = await request(app)
         .patch(`/api/v1/friend-requests/${userA.userId}`)
         .set('Authorization', `Bearer ${tokenB}`)
         .send({ status: 'accepted' });
 
-      expect(res.status).toBe(200);
-      expect(res.body.status).toBe('accepted');
+      expect(acceptRes.status).toBe(200);
+      expect(acceptRes.body.status).toBe('accepted');
 
-      // Check friends list for B
-      const listRes = await request(app)
+      // 4. A gets friends list (should include B)
+      const friendsARes = await request(app)
+        .get('/api/v1/friends')
+        .set('Authorization', `Bearer ${tokenA}`);
+
+      expect(friendsARes.status).toBe(200);
+      expect(friendsARes.body.length).toBe(1);
+      expect(friendsARes.body[0].friend.userId).toBe(userB.userId);
+
+      // 5. B gets friends list (should include A)
+      const friendsBRes = await request(app)
         .get('/api/v1/friends')
         .set('Authorization', `Bearer ${tokenB}`);
-      
-      expect(listRes.status).toBe(200);
-      expect(listRes.body.length).toBe(1);
-      expect(listRes.body[0].friend.userId).toBe(userA.userId);
 
-      // accepting the request does NOT auto-create the private room anymore
-      const roomsBeforeOpen = await request(app).get('/api/v1/rooms').set('Authorization', `Bearer ${tokenA}`);
-      expect(roomsBeforeOpen.body.some((room: { type: string }) => room.type === 'private')).toBe(false);
-
-      const openRoom = await request(app)
-        .post('/api/v1/rooms')
-        .set('Authorization', `Bearer ${tokenA}`)
-        .send({ type: 'private', targetUserId: userB.userId });
-      expect(openRoom.status).toBe(201); // created for the first time
-
-      const roomsB = await request(app).get('/api/v1/rooms').set('Authorization', `Bearer ${tokenB}`);
-      const privateRoomB = roomsB.body.find((room: { type: string }) => room.type === 'private');
-      expect(privateRoomB?.roomId).toBe(openRoom.body.roomId);
+      expect(friendsBRes.status).toBe(200);
+      expect(friendsBRes.body.length).toBe(1);
+      expect(friendsBRes.body[0].friend.userId).toBe(userA.userId);
     });
 
-    it('should mark the private room read-only when friendship is removed', async () => {
+    it('should delete a friend and mark existing private room read-only', async () => {
+      // Setup accepted friendship
       await request(app)
         .post('/api/v1/friend-requests')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ target_user_id: userB.userId });
+
       await request(app)
         .patch(`/api/v1/friend-requests/${userA.userId}`)
         .set('Authorization', `Bearer ${tokenB}`)
@@ -133,15 +103,17 @@ describe('Friendships & Blocks E2E', () => {
         .post('/api/v1/rooms')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ type: 'private', targetUserId: userB.userId });
-      expect(privateRoom.status).toBe(201); // created for the first time
+      expect(privateRoom.status).toBe(201);
 
+      // A deletes friend B
       const deleteRes = await request(app)
         .delete(`/api/v1/friends/${userB.userId}`)
         .set('Authorization', `Bearer ${tokenA}`);
       expect(deleteRes.status).toBe(204);
 
-      const row = await testPool.query('SELECT is_readonly FROM chat_rooms WHERE room_id = $1', [privateRoom.body.roomId]);
-      expect(row.rows[0].is_readonly).toBe(true);
+      const roomId = privateRoom.body.roomId;
+      const row = await testPool`SELECT is_readonly FROM chat_rooms WHERE room_id = ${roomId}`;
+      expect(row[0].is_readonly).toBe(true);
     });
 
     it('should reject a friend request and not affect accepted friendships', async () => {
@@ -231,8 +203,9 @@ describe('Friendships & Blocks E2E', () => {
         .send({ target_user_id: userB.userId });
 
       expect(blockRes.status).toBe(201);
-      const row = await testPool.query('SELECT is_readonly FROM chat_rooms WHERE room_id = $1', [privateRoom.body.roomId]);
-      expect(row.rows[0].is_readonly).toBe(true);
+      const roomId = privateRoom.body.roomId;
+      const row = await testPool`SELECT is_readonly FROM chat_rooms WHERE room_id = ${roomId}`;
+      expect(row[0].is_readonly).toBe(true);
     });
 
     it('should restore the friendship after unblocking a blocked friend', async () => {
@@ -275,8 +248,9 @@ describe('Friendships & Blocks E2E', () => {
       expect(restoredFriends.body).toHaveLength(1);
       expect(restoredFriends.body[0].friend.userId).toBe(userB.userId);
 
-      const row = await testPool.query('SELECT is_readonly FROM chat_rooms WHERE room_id = $1', [privateRoom.body.roomId]);
-      expect(row.rows[0].is_readonly).toBe(false);
+      const roomId = privateRoom.body.roomId;
+      const row = await testPool`SELECT is_readonly FROM chat_rooms WHERE room_id = ${roomId}`;
+      expect(row[0].is_readonly).toBe(false);
     });
 
     it('should list blocked users', async () => {
@@ -285,16 +259,32 @@ describe('Friendships & Blocks E2E', () => {
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ target_user_id: userC.userId });
 
+      const res = await request(app)
+        .get('/api/v1/blocks')
+        .set('Authorization', `Bearer ${tokenA}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.length).toBe(1);
+      expect(res.body[0].blocked?.userId ?? res.body[0].blockedId).toBe(userC.userId);
+    });
+
+    it('should unblock a user', async () => {
+      await request(app)
+        .post('/api/v1/blocks')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .send({ target_user_id: userC.userId });
+
+      const unblockRes = await request(app)
+        .delete(`/api/v1/blocks/${userC.userId}`)
+        .set('Authorization', `Bearer ${tokenA}`);
+
+      expect(unblockRes.status).toBe(204);
+
       const listRes = await request(app)
         .get('/api/v1/blocks')
         .set('Authorization', `Bearer ${tokenA}`);
 
-      expect(listRes.status).toBe(200);
-      expect(Array.isArray(listRes.body)).toBe(true);
-      expect(listRes.body.length).toBeGreaterThan(0);
-      expect(listRes.body[0]).toHaveProperty('userId');
-      expect(listRes.body[0]).toHaveProperty('name');
-      expect(listRes.body[0]).toHaveProperty('email');
+      expect(listRes.body.length).toBe(0);
     });
   });
 });

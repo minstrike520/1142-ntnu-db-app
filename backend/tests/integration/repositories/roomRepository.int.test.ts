@@ -10,16 +10,11 @@ describe('RoomRepository (pg)', () => {
     await resetDb();
   });
 
-  afterAll(async () => {
-    await testPool.end();
-  });
-
   it('create → findById → findByMember → update → delete', async () => {
-    // create a user so we can add a room member
-    const userRes = await testPool.query(
-      "INSERT INTO users (name, email, password_hash) VALUES ('Alice', 'alice@test.com', 'hash') RETURNING user_id"
-    );
-    const userId: string = userRes.rows[0].user_id;
+    const userRes = await testPool`
+      INSERT INTO users (name, email, password_hash) VALUES ('Alice', 'alice@test.com', 'hash') RETURNING user_id
+    `;
+    const userId: string = userRes[0].user_id;
 
     // create
     const room = await repo.create({
@@ -42,10 +37,10 @@ describe('RoomRepository (pg)', () => {
     expect(fetched).toEqual(room);
 
     // findByMember — add membership first, then verify room appears
-    await testPool.query(
-      'INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, $3)',
-      [room.roomId, userId, 'owner']
-    );
+    const role = 'owner';
+    await testPool`
+      INSERT INTO room_members (room_id, user_id, role) VALUES (${room.roomId}, ${userId}, ${role})
+    `;
     const rooms = await repo.findByMember(userId);
     expect(rooms).toHaveLength(1);
     expect(rooms[0].roomId).toBe(room.roomId);
@@ -74,10 +69,10 @@ describe('RoomRepository (pg)', () => {
   });
 
   it('findByMember returns empty array when user has no rooms', async () => {
-    const userRes = await testPool.query(
-      "INSERT INTO users (name, email, password_hash) VALUES ('Bob', 'bob@test.com', 'hash') RETURNING user_id"
-    );
-    const result = await repo.findByMember(userRes.rows[0].user_id);
+    const userRes = await testPool`
+      INSERT INTO users (name, email, password_hash) VALUES ('Bob', 'bob@test.com', 'hash') RETURNING user_id
+    `;
+    const result = await repo.findByMember(userRes[0].user_id);
     expect(result).toEqual([]);
   });
 
@@ -93,14 +88,14 @@ describe('RoomRepository (pg)', () => {
   });
 
   it('findByMember unreadCount logic: unread count correctly reflects read status', async () => {
-    const user1Res = await testPool.query(
-      "INSERT INTO users (name, email, password_hash) VALUES ('Alice', 'alice@test.com', 'hash') RETURNING user_id"
-    );
-    const user2Res = await testPool.query(
-      "INSERT INTO users (name, email, password_hash) VALUES ('Bob', 'bob@test.com', 'hash') RETURNING user_id"
-    );
-    const aliceId = user1Res.rows[0].user_id;
-    const bobId = user2Res.rows[0].user_id;
+    const user1Res = await testPool`
+      INSERT INTO users (name, email, password_hash) VALUES ('Alice', 'alice@test.com', 'hash') RETURNING user_id
+    `;
+    const user2Res = await testPool`
+      INSERT INTO users (name, email, password_hash) VALUES ('Bob', 'bob@test.com', 'hash') RETURNING user_id
+    `;
+    const aliceId = user1Res[0].user_id;
+    const bobId = user2Res[0].user_id;
 
     const room = await repo.create({
       type: 'group',
@@ -109,41 +104,40 @@ describe('RoomRepository (pg)', () => {
       viewHistory: true,
     });
 
-    await testPool.query(
-      'INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, $3), ($1, $4, $5)',
-      [room.roomId, aliceId, 'owner', bobId, 'member']
-    );
+    const ownerRole = 'owner';
+    const memberRole = 'member';
+    await testPool`
+      INSERT INTO room_members (room_id, user_id, role) VALUES (${room.roomId}, ${aliceId}, ${ownerRole}), (${room.roomId}, ${bobId}, ${memberRole})
+    `;
 
     // 1. Bob sends a message, Alice's last_read_id is NULL (unread count should be 1)
-    const msg1Res = await testPool.query(
-      'INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, $3) RETURNING message_id',
-      [room.roomId, bobId, 'Hello from Bob']
-    );
-    const msg1Id = msg1Res.rows[0].message_id;
+    const contentBob = 'Hello from Bob';
+    const msg1Res = await testPool`
+      INSERT INTO messages (room_id, sender_id, content) VALUES (${room.roomId}, ${bobId}, ${contentBob}) RETURNING message_id
+    `;
+    const msg1Id = msg1Res[0].message_id;
 
     let rooms = await repo.findByMember(aliceId);
     expect(rooms).toHaveLength(1);
     expect(rooms[0].unreadCount).toBe(1);
 
     // 2. Alice updates last_read_id to Bob's message (unread count should be 0)
-    await testPool.query(
-      'UPDATE room_members SET last_read_id = $1 WHERE room_id = $2 AND user_id = $3',
-      [msg1Id, room.roomId, aliceId]
-    );
+    await testPool`
+      UPDATE room_members SET last_read_id = ${msg1Id} WHERE room_id = ${room.roomId} AND user_id = ${aliceId}
+    `;
     rooms = await repo.findByMember(aliceId);
     expect(rooms[0].unreadCount).toBe(0);
 
     // 3. Alice sends a message, and updates her last_read_id to her own message (unread count should be 0)
-    const msg2Res = await testPool.query(
-      'INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, $3) RETURNING message_id',
-      [room.roomId, aliceId, 'Hello from Alice']
-    );
-    const msg2Id = msg2Res.rows[0].message_id;
+    const contentAlice = 'Hello from Alice';
+    const msg2Res = await testPool`
+      INSERT INTO messages (room_id, sender_id, content) VALUES (${room.roomId}, ${aliceId}, ${contentAlice}) RETURNING message_id
+    `;
+    const msg2Id = msg2Res[0].message_id;
 
-    await testPool.query(
-      'UPDATE room_members SET last_read_id = $1 WHERE room_id = $2 AND user_id = $3',
-      [msg2Id, room.roomId, aliceId]
-    );
+    await testPool`
+      UPDATE room_members SET last_read_id = ${msg2Id} WHERE room_id = ${room.roomId} AND user_id = ${aliceId}
+    `;
     rooms = await repo.findByMember(aliceId);
     expect(rooms[0].unreadCount).toBe(0);
   });

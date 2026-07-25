@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, mock } from 'bun:test';
 
-// Mock the db module before other imports to prevent real DB connection in this specific test
+const mockSqlFn: any = mock().mockResolvedValue([{}]);
+mockSqlFn.unsafe = mock().mockResolvedValue([{}]);
 mock.module('../../../src/models/db', () => ({
-  default: { query: mock().mockResolvedValue({ rows: [{}] }) },
+  default: mockSqlFn,
 }));
 
 import { createServer, type Server as HttpServer } from 'http';

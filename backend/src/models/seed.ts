@@ -10,7 +10,7 @@ async function seed() {
   try {
     // 1. Clean tables
     console.log('Truncating tables...');
-    await pool.query(`
+    await pool.unsafe(`
       TRUNCATE TABLE 
         users, 
         chat_rooms, 
@@ -25,7 +25,6 @@ async function seed() {
 
     // 2. Create Users
     console.log('Inserting users...');
-    // ponytail: Using Bun's native password hashing for seeding
     const passwordHash = await Bun.password.hash('password123');
 
     const usersData = [
@@ -38,7 +37,7 @@ async function seed() {
     ];
 
     for (const u of usersData) {
-      await pool.query(
+      await pool.unsafe(
         `INSERT INTO users (user_id, name, email, password_hash, warning_enabled, warning_days, last_activity) 
          VALUES ($1, $2, $3, $4, true, 7, NOW())`,
         [u.id, u.name, u.email, passwordHash]
@@ -47,26 +46,22 @@ async function seed() {
 
     // 3. Create Friendships
     console.log('Inserting friendships...');
-    // Alice & Bob are friends
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO friendships (requester_id, addressee_id, status) VALUES ($1, $2, 'accepted')`,
       [usersData[0].id, usersData[1].id]
     );
-    // Alice & Charlie are friends
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO friendships (requester_id, addressee_id, status) VALUES ($1, $2, 'accepted')`,
       [usersData[0].id, usersData[2].id]
     );
-    // Dave requested Alice (pending)
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO friendships (requester_id, addressee_id, status) VALUES ($1, $2, 'pending')`,
       [usersData[3].id, usersData[0].id]
     );
 
     // 4. Create Blocks
     console.log('Inserting blocks...');
-    // Eve blocked Alice
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1, $2)`,
       [usersData[4].id, usersData[0].id]
     );
@@ -74,37 +69,36 @@ async function seed() {
     // 5. Create Group Room
     console.log('Inserting group room...');
     const groupRoomId = '77777777-7777-4777-a777-777777777777';
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO chat_rooms (room_id, type, name, invite_code, require_approval, view_history) 
        VALUES ($1, 'group', 'Study Group', 'STUDY123', false, true)`,
       [groupRoomId]
     );
 
-    // Alice is owner, Bob is admin, Charlie and Frank are members
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'owner')`,
       [groupRoomId, usersData[0].id]
     );
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'admin')`,
       [groupRoomId, usersData[1].id]
     );
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`,
       [groupRoomId, usersData[2].id]
     );
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`,
       [groupRoomId, usersData[5].id]
     );
 
     // 6. Create Messages in Group Room
     console.log('Inserting messages...');
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, $3)`,
       [groupRoomId, usersData[0].id, 'Hello everyone! Welcome to the study group.']
     );
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, $3)`,
       [groupRoomId, usersData[1].id, 'Hi Alice, thanks for inviting me!']
     );
@@ -114,7 +108,7 @@ async function seed() {
     console.error('Error seeding database:', err);
     process.exit(1);
   } finally {
-    await pool.end();
+    await pool.close();
   }
 }
 

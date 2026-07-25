@@ -5,8 +5,11 @@ import * as jwtHelper from '../../../src/utils/jwt';
 import { AppError } from '../../../src/utils/AppError';
 import pool from '../../../src/models/db';
 
+const mockSqlFn: any = mock().mockResolvedValue([{}]);
+mockSqlFn.unsafe = mock().mockResolvedValue([{}]);
+
 mock.module('../../../src/models/db', () => ({
-  default: { query: mock() },
+  default: mockSqlFn,
 }));
 
 const makeHonoContext = (headersRecord: Record<string, string> = {}) => {
@@ -27,7 +30,8 @@ describe('authMiddleware', () => {
 
   beforeEach(() => {
     nextFunction = mock();
-    ((pool.query as any) as Mock<any>).mockResolvedValue({ rows: [{}] } as any);
+    mockSqlFn.mockResolvedValue([{}]);
+    if (mockSqlFn.unsafe) mockSqlFn.unsafe.mockResolvedValue([{}]);
   });
 
   afterEach(() => {
@@ -85,7 +89,8 @@ describe('authMiddleware', () => {
   it('throws 401 when user is not found in the database', async () => {
     const c = makeHonoContext({ authorization: 'Bearer valid-token' });
     spyOn(jwtHelper, 'verifyToken').mockReturnValue({ userId: '1', name: 'Test User' } as any);
-    ((pool.query as any) as Mock<any>).mockResolvedValueOnce({ rows: [] } as any);
+    mockSqlFn.mockResolvedValueOnce([]);
+    if (mockSqlFn.unsafe) mockSqlFn.unsafe.mockResolvedValueOnce([]);
 
     expect(authMiddleware(c, nextFunction)).rejects.toThrow(/not found or deleted/);
   });

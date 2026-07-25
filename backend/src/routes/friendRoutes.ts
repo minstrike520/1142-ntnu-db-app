@@ -45,7 +45,10 @@ export const makeBlockRoutes = (service: FriendService) => {
   app.get('/', async (c) => {
     const userId = c.get('user').userId;
     const blocks = await service.getBlockedUsers(userId);
-    return c.json(blocks, 200);
+    const mapped = (blocks || []).map((b: any) => ({
+      blocked: b.blocked ?? b,
+    }));
+    return c.json(mapped, 200);
   });
 
   app.post('/', validate('json', blockUserSchema), async (c) => {
@@ -69,11 +72,14 @@ export const makeFriendRequestRoutes = (service: FriendService) => {
   const app = new Hono();
   app.use('*', authMiddleware);
 
-  app.get('/', async (c) => {
+  const getPending = async (c: any) => {
     const userId = c.get('user').userId;
     const requests = await service.getPendingRequests(userId);
     return c.json(requests, 200);
-  });
+  };
+
+  app.get('/', getPending);
+  app.get('/pending', getPending);
 
   app.post('/', validate('json', sendFriendRequestSchema), async (c) => {
     const userId = c.get('user').userId;

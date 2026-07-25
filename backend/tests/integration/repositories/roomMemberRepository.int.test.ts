@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import { RoomMemberRepository } from '../../../src/models/roomMemberRepository';
 import { testPool } from '../../helpers/testPool';
 import { resetDb } from '../../helpers/resetDb';
@@ -11,27 +11,25 @@ describe('RoomMemberRepository (pg)', () => {
   });
 
   async function createUser(name: string, email: string) {
-    const res = await testPool.query(
-      'INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING user_id',
-      [name, email, 'hash'],
-    );
-    return res.rows[0].user_id as string;
+    const res = await testPool`
+      INSERT INTO users (name, email, password_hash) VALUES (${name}, ${email}, 'hash') RETURNING user_id
+    `;
+    return res[0].user_id as string;
   }
 
   async function createRoom() {
-    const res = await testPool.query(
-      'INSERT INTO chat_rooms (type, name) VALUES ($1, $2) RETURNING room_id',
-      ['group', 'Room Member Repo Room'],
-    );
-    return res.rows[0].room_id as string;
+    const res = await testPool`
+      INSERT INTO chat_rooms (type, name) VALUES ('group', 'Room Member Repo Room') RETURNING room_id
+    `;
+    return res[0].room_id as string;
   }
 
   async function createMessage(roomId: string, userId: string) {
-    const res = await testPool.query(
-      'INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, $3) RETURNING message_id',
-      [roomId, userId, 'read marker'],
-    );
-    return res.rows[0].message_id as string;
+    const content = 'read marker';
+    const res = await testPool`
+      INSERT INTO messages (room_id, sender_id, content) VALUES (${roomId}, ${userId}, ${content}) RETURNING message_id
+    `;
+    return res[0].message_id as string;
   }
 
   it('add -> findMember -> findByRoom -> remove manages membership records', async () => {
