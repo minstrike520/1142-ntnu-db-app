@@ -284,6 +284,6 @@ describe('userRepository', () => {
    - `BREAKING CHANGE:` $\rightarrow$ 遞增 **Major (`a`)**（如 `v1.0.1` $\rightarrow$ `v2.0.0`）
    - `docs:`, `chore:`, `refactor:` $\rightarrow$ 不遞增版本號
 2. **三方版本號同步**：自動執行 `scripts/update-versions.js` 同步更新根目錄 `package.json`、`frontend/package.json` 與 `backend/package.json` 的版本。
-3. **Changelog 與 Release 頁面**：自動更新 `CHANGELOG.md`，並**將格式化後的 Release Notes 直接發布於 GitHub Release 頁面**。
+3. **Changelog 產生**：自動更新 `CHANGELOG.md` 並產生格式化的 Release Notes 內容。此步驟**不會**建立 GitHub Release 頁面——`.github/workflows/release-stack.yml` 是唯一的 Release 建立者（見步驟 4）。
 4. **Stack 映像檔與部署包發布**：建立 `vX.Y.Z` 標籤並觸發 `.github/workflows/release-stack.yml`，自動建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，並附加 `near-chat-stack-vX.Y.Z.tar.gz` 部署包至 GitHub Release。
 

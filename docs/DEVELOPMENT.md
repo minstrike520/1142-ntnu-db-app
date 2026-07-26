@@ -284,6 +284,6 @@ When milestone changes on `dev` are merged into `main`, GitHub Actions (`.github
    - `BREAKING CHANGE:` → Increments **Major (`a`)** (e.g. `v1.0.1` → `v2.0.0`)
    - `docs:`, `chore:`, `refactor:` → No version increment
 2. **Multi-Package Version Sync**: Runs `scripts/update-versions.js` to synchronize `"version"` in root `package.json`, `frontend/package.json`, and `backend/package.json`.
-3. **Changelog & GitHub Release**: Automatically generates `CHANGELOG.md` and publishes formatted **Release Notes directly on the GitHub Release page**.
+3. **Changelog Generation**: Automatically generates `CHANGELOG.md` and the formatted release notes content. The GitHub Release page itself is **not** created at this step - `.github/workflows/release-stack.yml` is the single owner of Release creation (see step 4).
 4. **Stack Image & Bundle Publication**: Creating tag `vX.Y.Z` triggers `.github/workflows/release-stack.yml`, building & pushing Docker images to GHCR, signing provenance attestations, and attaching `near-chat-stack-vX.Y.Z.tar.gz` deployment bundle to the GitHub Release.
 
