@@ -1,6 +1,5 @@
 import type { UploadedFile } from '../utils/fileUpload';
 import { Hono } from 'hono';
-import fs from 'fs/promises';
 import path from 'path';
 import { NotFoundError } from '../utils/AppError';
 import { authMiddleware } from '../middlewares/authMiddleware';
@@ -70,19 +69,17 @@ export const makeAttachmentRoutes = (service: AttachmentService) => {
     const originalName = attachment.originalName || attachment.original_name || 'download';
     const mimeType = attachment.fileType || attachment.mime_type || 'application/octet-stream';
 
-    try {
-      await fs.access(filePath);
-      const fileBuffer = await fs.readFile(filePath);
-      return c.newResponse(fileBuffer, 200, {
-        'Content-Type': mimeType,
-        'Content-Disposition': encodeDownloadFilename(originalName),
+    const file = Bun.file(filePath);
+    if (await file.exists()) {
+      return new Response(file, {
+        status: 200,
+        headers: {
+          'Content-Type': mimeType,
+          'Content-Disposition': encodeDownloadFilename(originalName),
+        },
       });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return c.json(attachment, 200);
-      }
-      throw err;
     }
+    return c.json(attachment, 200);
   });
 
   return app;

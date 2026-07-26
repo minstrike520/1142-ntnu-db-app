@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { getRequestListener } from "@hono/node-server";
 import { createServer } from "node:http";
-import fs from "fs";
 import path from "path";
 import { Server } from "socket.io";
 import pool from "./models/db";
@@ -56,20 +55,22 @@ honoApp.use('*', cors({
 honoApp.use('/api/*', makeGlobalRateLimiter());
 
 // Static uploads serving
-ensureUploadDirectories();
+void ensureUploadDirectories();
 honoApp.get('/uploads/avatars/*', async (c) => {
   const reqPath = c.req.path.replace('/uploads/avatars/', '');
   const filePath = path.join(AVATARS_UPLOAD_DIR, path.basename(reqPath));
-  try {
-    const data = await fs.promises.readFile(filePath);
-    return c.newResponse(data, 200, {
-      'Content-Type': 'image/jpeg',
-      'Cache-Control': 'public, max-age=604800, immutable',
-      'Cross-Origin-Resource-Policy': 'cross-origin',
+  const file = Bun.file(filePath);
+  if (await file.exists()) {
+    return new Response(file, {
+      status: 200,
+      headers: {
+        'Content-Type': 'image/jpeg',
+        'Cache-Control': 'public, max-age=604800, immutable',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+      },
     });
-  } catch {
-    return c.notFound();
   }
+  return c.notFound();
 });
 
 const userRepo = new UserRepository(pool);
@@ -192,20 +193,22 @@ attachSockets(io, {
 if (require.main === module) {
   startInactivityJob(userRepo, userService);
 
-  let version = "1.0.0";
-  try {
-    const rootPkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "../package.json"), "utf8"));
-    version = rootPkg.version;
-  } catch {
+  (async () => {
+    let version = "1.0.0";
     try {
-      const localPkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
-      version = localPkg.version;
-    } catch {}
-  }
+      const rootPkg = await Bun.file(path.join(process.cwd(), "../package.json")).json();
+      version = rootPkg.version;
+    } catch {
+      try {
+        const localPkg = await Bun.file(path.join(process.cwd(), "package.json")).json();
+        version = localPkg.version;
+      } catch {}
+    }
 
-  server.listen(PORT as number, "0.0.0.0", () =>
-    console.log(`Backend server (v${version}) successfully listening on port ${PORT} (0.0.0.0)`),
-  );
+    server.listen(PORT as number, "0.0.0.0", () =>
+      console.log(`Backend server (v${version}) successfully listening on port ${PORT} (0.0.0.0)`),
+    );
+  })();
 }
 
 export { app, honoApp, server, io };

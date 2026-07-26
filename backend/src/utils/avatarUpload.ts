@@ -1,6 +1,5 @@
 import type { UploadedFile } from './fileUpload';
 import crypto from 'crypto';
-import fs from 'fs/promises';
 import path from 'path';
 import { ValidationError } from '../utils/AppError';
 import { AVATARS_UPLOAD_DIR } from './uploads';
@@ -70,7 +69,7 @@ export const saveAvatarUpload = async (
   const storedName = `${userId}-${crypto.randomUUID()}${extension}`;
   const targetPath = path.join(AVATARS_UPLOAD_DIR, storedName);
 
-  await fs.writeFile(targetPath, file.buffer);
+  await Bun.write(targetPath, file.buffer);
 
   return `/uploads/avatars/${storedName}`;
 };
@@ -97,7 +96,7 @@ export const removeManagedAvatar = async (
   const targetPath = path.join(AVATARS_UPLOAD_DIR, fileName);
 
   try {
-    await fs.unlink(targetPath);
+    await Bun.file(targetPath).delete();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw error;

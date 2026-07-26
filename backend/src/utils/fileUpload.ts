@@ -1,7 +1,5 @@
 import type { Context } from 'hono';
-import fs from 'fs/promises';
 import path from 'path';
-import { randomBytes } from 'crypto';
 import { ValidationError } from '../utils/AppError';
 
 export interface UploadedFile {
@@ -70,10 +68,9 @@ export async function parseSingleFile(
 
   let filePath = '';
   if (options.saveToDir) {
-    await fs.mkdir(options.saveToDir, { recursive: true });
-    const fileName = `${Date.now()}_${randomBytes(4).toString('hex')}_${fileObj.name}`;
+    const fileName = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${fileObj.name}`;
     filePath = path.join(options.saveToDir, fileName);
-    await fs.writeFile(filePath, buffer);
+    await Bun.write(filePath, buffer);
   }
 
   return {
