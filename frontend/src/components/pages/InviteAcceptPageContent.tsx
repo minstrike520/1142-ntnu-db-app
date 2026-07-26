@@ -6,12 +6,13 @@ import Image from "next/image";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { getActiveAccessToken, getRoomInvitePreview, joinRoomByCode, refreshTokens } from "@/lib/api";
+import { getStoredLocale, translate } from "@/lib/i18n";
 import type { RoomInvitePreview } from "@shared/types";
 
-// This page intentionally mirrors the pre-auth `login`/`register` pages: it renders
-// outside the `(main)` route group (no `ChatProvider`, no i18n) so it can be visited
-// by a signed-out visitor and redirect them to `/login?redirect=...` without ever
-// mounting the full chat app shell.
+// This page renders outside the `(main)` route group (like `login`/`register`) so a
+// signed-out visitor can reach it and be redirected to `/login?redirect=...` without
+// mounting the full chat app shell. `useTranslation` is unavailable here because it
+// depends on `ChatProvider`, so the persisted locale is read directly instead.
 type Status = "checking" | "loading" | "ready" | "joining" | "pending" | "error";
 
 export default function InviteAcceptPageContent() {
@@ -23,6 +24,12 @@ export default function InviteAcceptPageContent() {
   const [preview, setPreview] = useState<RoomInvitePreview | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [token, setToken] = useState<string | null>(null);
+  const [locale] = useState(getStoredLocale);
+  const t = useCallback(
+    (key: string, replacements?: Record<string, string | number>) =>
+      translate(locale, `inviteAccept.${key}`, replacements),
+    [locale],
+  );
 
   useEffect(() => {
     document.title = "Near | Group Invite";
@@ -52,12 +59,12 @@ export default function InviteAcceptPageContent() {
         const result = await getRoomInvitePreview(activeToken, code);
         if (cancelled) return;
         setPreview(result);
-        setStatus("ready");
+        // A pending member has a membership row but cannot use the room yet, so
+        // show the awaiting-approval state rather than sending them into it.
+        setStatus(result.isPending ? "pending" : "ready");
       } catch (err) {
         if (cancelled) return;
-        setErrorMessage(
-          err instanceof Error ? err.message : "This invite link is invalid or has expired.",
-        );
+        setErrorMessage(err instanceof Error ? err.message : t("invalidInvite"));
         setStatus("error");
       }
     })();
@@ -65,7 +72,7 @@ export default function InviteAcceptPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [code]);
+  }, [code, t]);
 
   const handleAccept = useCallback(async () => {
     if (!token || !code || !preview) return;
@@ -85,10 +92,10 @@ export default function InviteAcceptPageContent() {
         router.push(`/chat/${preview.roomId}`);
         return;
       }
-      setErrorMessage(message || "Failed to join this room.");
+      setErrorMessage(message || t("joinFailed"));
       setStatus("ready");
     }
-  }, [token, code, preview, router]);
+  }, [token, code, preview, router, t]);
 
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center p-4 bg-background transition-colors overflow-y-auto">
@@ -98,14 +105,14 @@ export default function InviteAcceptPageContent() {
         </div>
 
         {(status === "checking" || status === "loading") && (
-          <p className="text-sm text-text-muted font-sans">Loading invite...</p>
+          <p className="text-sm text-text-muted font-sans">{t("loading")}</p>
         )}
 
         {status === "error" && (
           <>
             <p className="text-sm text-red-600 font-sans text-center mb-6">{errorMessage}</p>
             <Button variant="secondary" className="w-full" onClick={() => router.push("/")}>
-              Back to Near
+              {t("backToNear")}
             </Button>
           </>
         )}
@@ -113,25 +120,22 @@ export default function InviteAcceptPageContent() {
         {status === "pending" && (
           <>
             <p className="text-sm text-foreground font-sans text-center mb-6">
-              Your request to join {preview?.name ?? "this group"} has been sent. You&apos;ll be able to
-              open it once an admin approves your request.
+              {t("pendingApproval", { name: preview?.name ?? t("group") })}
             </p>
             <Button variant="secondary" className="w-full" onClick={() => router.push("/")}>
-              Back to Near
+              {t("backToNear")}
             </Button>
           </>
         )}
 
         {(status === "ready" || status === "joining") && preview && (
           <>
-            <Avatar name={preview.name ?? "Group"} src={preview.avatarUrl} size="lg" className="mb-4" />
+            <Avatar name={preview.name ?? t("group")} src={preview.avatarUrl} size="lg" className="mb-4" />
             <h1 className="text-lg font-bold text-foreground mb-1 text-center font-sans">
-              {preview.name ?? "Group"}
+              {preview.name ?? t("group")}
             </h1>
             <p className="text-xs text-text-muted select-none font-sans mb-8 text-center">
-              {preview.isMember
-                ? "You're already a member of this group."
-                : "You've been invited to join this group."}
+              {preview.isMember ? t("alreadyMember") : t("invited")}
             </p>
 
             {errorMessage && (
@@ -140,7 +144,7 @@ export default function InviteAcceptPageContent() {
 
             {preview.isMember ? (
               <Button variant="primary" className="w-full" onClick={() => router.push(`/chat/${preview.roomId}`)}>
-                Open Chat
+                {t("openChat")}
               </Button>
             ) : (
               <div className="w-full flex gap-3">
@@ -150,7 +154,7 @@ export default function InviteAcceptPageContent() {
                   disabled={status === "joining"}
                   onClick={() => router.push("/")}
                 >
-                  Cancel
+                  {t("cancel")}
                 </Button>
                 <Button
                   variant="primary"
@@ -158,7 +162,7 @@ export default function InviteAcceptPageContent() {
                   disabled={status === "joining"}
                   onClick={handleAccept}
                 >
-                  {status === "joining" ? "Joining..." : "Accept"}
+                  {status === "joining" ? t("joining") : t("accept")}
                 </Button>
               </div>
             )}

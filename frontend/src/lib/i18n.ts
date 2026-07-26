@@ -1,0 +1,77 @@
+import zhTW from "@/locales/zh-TW.json";
+import en from "@/locales/en.json";
+
+const translations = {
+  "zh-TW": zhTW,
+  en: en,
+} as const;
+
+export type Locale = keyof typeof translations;
+
+const isLocale = (value: unknown): value is Locale => value === "zh-TW" || value === "en";
+
+/**
+ * Resolve a dot-separated translation key against a locale, falling back to
+ * English and then Traditional Chinese. Pure lookup with no React dependency so
+ * pre-auth pages (which render outside `ChatProvider`) can localize too.
+ */
+export const translate = (
+  locale: string,
+  key: string,
+  replacements?: Record<string, string | number>,
+): string => {
+  const keys = key.split(".");
+  const localesToTry: Locale[] = [isLocale(locale) ? locale : "zh-TW", "en", "zh-TW"];
+
+  let current: unknown = null;
+  for (const candidateLocale of localesToTry) {
+    let candidate: unknown = translations[candidateLocale];
+    let found = true;
+
+    for (const k of keys) {
+      if (candidate && typeof candidate === "object" && k in candidate) {
+        candidate = (candidate as Record<string, unknown>)[k];
+      } else {
+        found = false;
+        break;
+      }
+    }
+
+    if (found) {
+      current = candidate;
+      break;
+    }
+  }
+
+  if (current === null) {
+    console.warn(`Translation key not found: ${key} for locale: ${locale}`);
+    return key;
+  }
+
+  if (typeof current !== "string") {
+    return key;
+  }
+
+  let text = current;
+  if (replacements) {
+    Object.entries(replacements).forEach(([k, v]) => {
+      text = text.replace(new RegExp(`{${k}}`, "g"), String(v));
+    });
+  }
+
+  return text;
+};
+
+/**
+ * Read the persisted UI language without React context. Mirrors the
+ * `localStorage` key written by `setUiLanguage` in ChatContext.
+ */
+export const getStoredLocale = (): Locale => {
+  if (typeof window === "undefined") return "zh-TW";
+  try {
+    const saved = localStorage.getItem("language");
+    return isLocale(saved) ? saved : "zh-TW";
+  } catch {
+    return "zh-TW";
+  }
+};

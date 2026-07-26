@@ -106,8 +106,10 @@ export interface RoomInvitePreview {
   name?: string;
   avatarUrl?: string;
   requireApproval: boolean;
-  /** True if the caller is already a member (pending or otherwise) of this room. */
+  /** True if the caller already has a membership row for this room, including a pending one. */
   isMember: boolean;
+  /** True if the caller has already requested to join and is still awaiting approval. */
+  isPending: boolean;
 }
 
 // ---------------------------------------------------------------------------

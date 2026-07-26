@@ -284,6 +284,29 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
   }
   ```
 
+#### RoomInvitePreview
+- **說明**: 以邀請碼解析出的群組唯讀預覽，用於使用者確認加入前顯示群組資訊。由 `GET /rooms/invite/:code` 回傳。
+- **欄位說明**:
+  | 欄位 | 型別 | 說明 |
+  | :--- | :--- | :--- |
+  | `roomId` | UUID | 聊天室唯一識別碼 |
+  | `name` | 字串 \| null | 群組名稱 |
+  | `avatarUrl` | 字串 \| null | 群組頭像網址 |
+  | `requireApproval` | 布林值 | 加入是否需要 owner/admin 審核 |
+  | `isMember` | 布林值 | 呼叫者是否已有成員資料列（含尚待審核者） |
+  | `isPending` | 布林值 | 呼叫者是否已送出加入申請、尚待審核 |
+- **範例**:
+  ```json
+  {
+    "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
+    "name": "Project Discussion Group",
+    "avatarUrl": "https://example.com/room-avatar.png",
+    "requireApproval": false,
+    "isMember": false,
+    "isPending": false
+  }
+  ```
+
 #### RoomMember
 - **欄位說明**:
   | 欄位 | 型別 | 說明 |
@@ -1005,6 +1028,30 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
     "viewHistory": true,
     "isArchived": false,
     "createdAt": "2026-06-14T22:18:13Z"
+  }
+  ```
+
+---
+
+#### `GET /rooms/invite/:code`
+- **說明**: 預覽邀請連結所指向的群組，但不會加入該群組。供接受邀請頁面在使用者確認前顯示群組名稱與頭像。
+- **驗證與權限**: 需驗證。任何已登入使用者皆可預覽有效的邀請碼，不需為該房間成員。
+- **路徑參數**:
+  | 參數 | 型別 | 說明 |
+  | :--- | :--- | :--- |
+  | `code` | 字串 | 取自邀請連結的邀請碼 |
+- **回應**:
+  - `200 OK`: 回傳 [`RoomInvitePreview`](#roominvitepreview)。此為唯讀操作，不會將呼叫者加入該房間。
+  - `404 Not Found`: 找不到符合此邀請碼的群組。
+- **回應範例**:
+  ```json
+  {
+    "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
+    "name": "New Project Chat",
+    "avatarUrl": null,
+    "requireApproval": true,
+    "isMember": false,
+    "isPending": false
   }
   ```
 

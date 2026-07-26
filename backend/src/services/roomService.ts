@@ -178,6 +178,7 @@ export const makeRoomService = (
         avatarUrl: room.avatarUrl,
         requireApproval: room.requireApproval,
         isMember: !!existing,
+        isPending: existing?.role === 'pending',
       };
     },
 

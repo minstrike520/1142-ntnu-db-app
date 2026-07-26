@@ -132,6 +132,7 @@ describe('Room E2E', () => {
       avatarUrl: 'https://example.com/group.png',
       requireApproval: false,
       isMember: false,
+      isPending: false,
     });
 
     await request(app)
@@ -145,6 +146,32 @@ describe('Room E2E', () => {
 
     expect(previewAfterJoinRes.status).toBe(200);
     expect(previewAfterJoinRes.body.isMember).toBe(true);
+  });
+
+  it('should report isPending when previewing an approval-required group already requested', async () => {
+    const createRes = await request(app)
+      .post('/api/v1/rooms')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        type: 'group',
+        name: 'Approval Room',
+        requireApproval: true,
+      });
+    const inviteCode = createRes.body.inviteCode;
+
+    await request(app)
+      .post(`/api/v1/rooms/${createRes.body.roomId}/members`)
+      .set('Authorization', `Bearer ${otherToken}`)
+      .send({ inviteCode });
+
+    const previewRes = await request(app)
+      .get(`/api/v1/rooms/invite/${inviteCode}`)
+      .set('Authorization', `Bearer ${otherToken}`);
+
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.requireApproval).toBe(true);
+    expect(previewRes.body.isMember).toBe(true);
+    expect(previewRes.body.isPending).toBe(true);
   });
 
   it('should 404 when previewing an unknown invite code', async () => {

@@ -223,6 +223,7 @@ describe('roomService', () => {
         avatarUrl: undefined,
         requireApproval: false,
         isMember: false,
+        isPending: false,
       });
       expect(mockMemberRepo.add).not.toHaveBeenCalled();
     });
@@ -234,6 +235,17 @@ describe('roomService', () => {
       const preview = await roomService.previewByCode('user-1', 'ABCDEF');
 
       expect(preview.isMember).toBe(true);
+      expect(preview.isPending).toBe(false);
+    });
+
+    it('flags isPending when the caller is still awaiting approval', async () => {
+      mockRepo.findByInviteCode.mockResolvedValue({ ...room, requireApproval: true });
+      mockMemberRepo.findMember.mockResolvedValue({ ...ownerMember, userId: 'user-2', role: 'pending' });
+
+      const preview = await roomService.previewByCode('user-2', 'ABCDEF');
+
+      expect(preview.isMember).toBe(true);
+      expect(preview.isPending).toBe(true);
     });
 
     it('throws NotFoundError for an unknown invite code', async () => {
