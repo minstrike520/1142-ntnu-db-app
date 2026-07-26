@@ -1,12 +1,12 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { getActiveAccessToken, getRoomInvitePreview, joinRoomByCode, refreshTokens } from "@/lib/api";
-import { getStoredLocale, translate } from "@/lib/i18n";
+import { getServerLocale, getStoredLocale, subscribeToLocale, translate } from "@/lib/i18n";
 import type { RoomInvitePreview } from "@shared/types";
 
 // This page renders outside the `(main)` route group (like `login`/`register`) so a
@@ -24,7 +24,11 @@ export default function InviteAcceptPageContent() {
   const [preview, setPreview] = useState<RoomInvitePreview | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [token, setToken] = useState<string | null>(null);
-  const [locale] = useState(getStoredLocale);
+  // The server has no access to the visitor's stored language, so it renders the
+  // default locale and React re-renders with the real one right after hydration.
+  // Reading localStorage directly in a `useState` initializer would instead make
+  // the server and client markup disagree.
+  const locale = useSyncExternalStore(subscribeToLocale, getStoredLocale, getServerLocale);
   const t = useCallback(
     (key: string, replacements?: Record<string, string | number>) =>
       translate(locale, `inviteAccept.${key}`, replacements),
@@ -79,7 +83,10 @@ export default function InviteAcceptPageContent() {
     setStatus("joining");
     try {
       const room = await joinRoomByCode(token, code);
-      if (preview.requireApproval) {
+      // Branch on the join response, not the preview: an admin may have toggled
+      // requireApproval since the preview was fetched, and the response carries
+      // the setting that actually decided our role.
+      if (room.requireApproval) {
         setStatus("pending");
       } else {
         router.push(`/chat/${room.roomId}`);
@@ -89,7 +96,13 @@ export default function InviteAcceptPageContent() {
       // Preview and accept aren't atomic (e.g. joined from another tab in between) —
       // treat "already a member" as success rather than surfacing a hard error.
       if (message.toLowerCase().includes("already a member")) {
-        router.push(`/chat/${preview.roomId}`);
+        // That concurrent join is still only pending on an approval-required
+        // room, so keep the waiting state instead of opening an unusable room.
+        if (preview.requireApproval) {
+          setStatus("pending");
+        } else {
+          router.push(`/chat/${preview.roomId}`);
+        }
         return;
       }
       setErrorMessage(message || t("joinFailed"));

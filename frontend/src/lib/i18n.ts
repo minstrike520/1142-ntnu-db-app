@@ -62,16 +62,33 @@ export const translate = (
   return text;
 };
 
+/** Locale assumed during server rendering, matching ChatContext's initial state. */
+export const DEFAULT_LOCALE: Locale = "zh-TW";
+
 /**
  * Read the persisted UI language without React context. Mirrors the
  * `localStorage` key written by `setUiLanguage` in ChatContext.
  */
 export const getStoredLocale = (): Locale => {
-  if (typeof window === "undefined") return "zh-TW";
+  if (typeof window === "undefined") return DEFAULT_LOCALE;
   try {
     const saved = localStorage.getItem("language");
-    return isLocale(saved) ? saved : "zh-TW";
+    return isLocale(saved) ? saved : DEFAULT_LOCALE;
   } catch {
-    return "zh-TW";
+    return DEFAULT_LOCALE;
   }
+};
+
+/** Server snapshot for `useSyncExternalStore`; always the SSR-stable default. */
+export const getServerLocale = (): Locale => DEFAULT_LOCALE;
+
+/**
+ * Subscribe to cross-tab language changes. Paired with `getStoredLocale` in
+ * `useSyncExternalStore` so server and client agree during hydration and React
+ * re-renders once the stored preference is readable.
+ */
+export const subscribeToLocale = (onStoreChange: () => void): (() => void) => {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("storage", onStoreChange);
+  return () => window.removeEventListener("storage", onStoreChange);
 };

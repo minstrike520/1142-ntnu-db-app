@@ -290,8 +290,8 @@ All errors return the following JSON structure:
   | Field | Type | Description |
   | :--- | :--- | :--- |
   | `roomId` | UUID | Unique chat room identifier |
-  | `name` | String \| null | Group name |
-  | `avatarUrl` | String \| null | Group avatar URL |
+  | `name` | String (optional) | Group name. Omitted from the response when unset |
+  | `avatarUrl` | String (optional) | Group avatar URL. Omitted from the response when the group has no avatar |
   | `requireApproval` | Boolean | Whether joining requires owner/admin approval |
   | `isMember` | Boolean | Whether the caller already has a membership row, including a pending one |
   | `isPending` | Boolean | Whether the caller has already requested to join and is awaiting approval |
@@ -301,6 +301,16 @@ All errors return the following JSON structure:
     "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
     "name": "Project Discussion Group",
     "avatarUrl": "https://example.com/room-avatar.png",
+    "requireApproval": false,
+    "isMember": false,
+    "isPending": false
+  }
+  ```
+- **Example (group without an avatar)**: optional fields are absent rather than `null`.
+  ```json
+  {
+    "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
+    "name": "Project Discussion Group",
     "requireApproval": false,
     "isMember": false,
     "isPending": false
@@ -1043,12 +1053,11 @@ All errors return the following JSON structure:
 - **Response**:
   - `200 OK`: Returns a [`RoomInvitePreview`](#roominvitepreview). This call is read-only and never adds the caller to the room.
   - `404 Not Found`: No group matches this invite code.
-- **Response Example**:
+- **Response Example** (this group has no avatar, so `avatarUrl` is absent):
   ```json
   {
     "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
     "name": "New Project Chat",
-    "avatarUrl": null,
     "requireApproval": true,
     "isMember": false,
     "isPending": false

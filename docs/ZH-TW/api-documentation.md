@@ -290,8 +290,8 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
   | 欄位 | 型別 | 說明 |
   | :--- | :--- | :--- |
   | `roomId` | UUID | 聊天室唯一識別碼 |
-  | `name` | 字串 \| null | 群組名稱 |
-  | `avatarUrl` | 字串 \| null | 群組頭像網址 |
+  | `name` | 字串（選填） | 群組名稱。未設定時不會出現在回應中 |
+  | `avatarUrl` | 字串（選填） | 群組頭像網址。群組沒有頭像時不會出現在回應中 |
   | `requireApproval` | 布林值 | 加入是否需要 owner/admin 審核 |
   | `isMember` | 布林值 | 呼叫者是否已有成員資料列（含尚待審核者） |
   | `isPending` | 布林值 | 呼叫者是否已送出加入申請、尚待審核 |
@@ -301,6 +301,16 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
     "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
     "name": "Project Discussion Group",
     "avatarUrl": "https://example.com/room-avatar.png",
+    "requireApproval": false,
+    "isMember": false,
+    "isPending": false
+  }
+  ```
+- **範例（沒有頭像的群組）**：選填欄位會直接省略，而不是回傳 `null`。
+  ```json
+  {
+    "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
+    "name": "Project Discussion Group",
     "requireApproval": false,
     "isMember": false,
     "isPending": false
@@ -1043,12 +1053,11 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 - **回應**:
   - `200 OK`: 回傳 [`RoomInvitePreview`](#roominvitepreview)。此為唯讀操作，不會將呼叫者加入該房間。
   - `404 Not Found`: 找不到符合此邀請碼的群組。
-- **回應範例**:
+- **回應範例**（此群組沒有頭像，因此不含 `avatarUrl` 欄位）:
   ```json
   {
     "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
     "name": "New Project Chat",
-    "avatarUrl": null,
     "requireApproval": true,
     "isMember": false,
     "isPending": false

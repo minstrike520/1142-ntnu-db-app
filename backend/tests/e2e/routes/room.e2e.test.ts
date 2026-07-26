@@ -172,6 +172,9 @@ describe('Room E2E', () => {
     expect(previewRes.body.requireApproval).toBe(true);
     expect(previewRes.body.isMember).toBe(true);
     expect(previewRes.body.isPending).toBe(true);
+    // This group was created without an avatar, so the optional field is omitted
+    // from the payload rather than serialized as null (see api-documentation.md).
+    expect(previewRes.body).not.toHaveProperty('avatarUrl');
   });
 
   it('should 404 when previewing an unknown invite code', async () => {
