@@ -1,5 +1,6 @@
 import { SQL } from "bun";
 import defaultSql from "./db";
+import type { FriendResponse } from "@shared/types";
 
 export interface FriendshipRow {
   requester_id: string;
@@ -135,7 +136,7 @@ export const makeFriendRepository = (sql: SQL = defaultSql) => {
       return rows.length > 0;
     },
 
-    async getFriends(userId: string): Promise<any[]> {
+    async getFriends(userId: string): Promise<FriendResponse[]> {
       const [sentFriendships, receivedFriendships] = await Promise.all([
         sql<FriendRow[]>`
           SELECT f.created_at as friendship_created_at, u.user_id, u.name, u.email, u.avatar_url

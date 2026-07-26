@@ -1,3 +1,4 @@
+import type { MessageWithSender } from '@shared/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validate } from '../middlewares/validator';
@@ -9,13 +10,13 @@ export interface MessageService {
     userId: string,
     roomId: string,
     opts?: { beforeId?: string; limit?: number }
-  ): Promise<any>;
+  ): Promise<MessageWithSender[]>;
   updateMessage?(
     userId: string,
     roomId: string,
     messageId: string,
     content: string
-  ): Promise<any>;
+  ): Promise<MessageWithSender>;
 }
 
 export const listMessagesQuerySchema = z.object({
@@ -38,7 +39,7 @@ export const makeMessageRoutes = (service: MessageService) => {
   app.get('/:roomId/messages', validate('query', listMessagesQuerySchema), async (c) => {
     const userId = c.get('user').userId;
     const roomId = c.req.param('roomId');
-    const query = c.req.valid('query') as any;
+    const query = c.req.valid('query') as { before_id?: string; beforeId?: string; limit?: number };
     const beforeId = query.before_id ?? query.beforeId;
     const limit = query.limit ?? 50;
 

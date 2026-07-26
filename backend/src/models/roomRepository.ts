@@ -1,6 +1,6 @@
 import { SQL } from "bun";
 import defaultSql from "./db";
-import type { Room, RoomSummary } from '@shared/types';
+import type { Room, RoomSummary, RoomMemberRole } from '@shared/types';
 import type { CreateRoomData, IRoomRepository, UpdateRoomData } from './IRoomRepository';
 
 export interface RoomRow {
@@ -46,7 +46,7 @@ function mapRowToRoomSummary(row: RoomRow & {
     unreadCount: Number(row.unread_count ?? 0),
     otherMemberId: row.other_member_id ?? undefined,
     lastReadId: row.last_read_id ?? undefined,
-    role: row.role as any ?? undefined,
+    role: (row.role as RoomMemberRole) ?? undefined,
   };
 
   if (row.latest_message_id) {

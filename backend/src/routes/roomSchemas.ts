@@ -3,10 +3,13 @@ import { z } from 'zod';
 const roomTypeSchema = z.enum(['private', 'group']);
 
 export const createRoomSchema = z.preprocess(
-  (data: any) => ({
-    ...data,
-    targetUserId: data?.targetUserId ?? data?.target_user_id,
-  }),
+  (raw: unknown) => {
+    const data = (raw && typeof raw === 'object' ? raw as Record<string, unknown> : {});
+    return {
+      ...data,
+      targetUserId: data.targetUserId ?? data.target_user_id,
+    };
+  },
   z.object({
     type: roomTypeSchema.default('group'),
     name: z.string().trim().min(1, 'Room name cannot be empty').optional(),

@@ -26,6 +26,6 @@ export const recallMessageSchema = z.object({
   messageId: idSchema,
 });
 
-type SendMessageInput = z.input<typeof sendMessageSchema>;
-type ListMessagesInput = z.input<typeof listMessagesSchema>;
-type RecallMessageInput = z.input<typeof recallMessageSchema>;
+export type SendMessageInput = z.input<typeof sendMessageSchema>;
+export type ListMessagesInput = z.input<typeof listMessagesSchema>;
+export type RecallMessageInput = z.input<typeof recallMessageSchema>;

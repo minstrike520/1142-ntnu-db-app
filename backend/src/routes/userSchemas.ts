@@ -58,50 +58,62 @@ export const searchQuerySchema = z.object({
   friendsOnly: z.preprocess((val) => val === 'true' || val === true, z.boolean()).optional(),
 });
 
-type RegisterSchema = z.infer<typeof registerSchema>;
-type LoginSchema = z.infer<typeof loginSchema>;
+export type RegisterSchema = z.infer<typeof registerSchema>;
+export type LoginSchema = z.infer<typeof loginSchema>;
 export type UpdateMeInput = z.input<typeof updateMeSchema>;
 export type UpdateSettingsInput = z.input<typeof updateSettingsSchema>;
-type SearchQueryInput = z.input<typeof searchQuerySchema>;
+export type SearchQueryInput = z.input<typeof searchQuerySchema>;
 
 export const addEmergencyContactSchema = z.preprocess(
-  (data: any) => ({
-    ...data,
-    contactId: data?.contactId ?? data?.contact_id,
-  }),
+  (raw: unknown) => {
+    const data = (raw && typeof raw === 'object' ? raw as Record<string, unknown> : {});
+    return {
+      ...data,
+      contactId: data.contactId ?? data.contact_id,
+    };
+  },
   z.object({
     contactId: z.string().uuid('Invalid contactId'),
     message: z.string().min(1, 'Message cannot be empty'),
   })
 );
-type AddEmergencyContactInput = z.input<typeof addEmergencyContactSchema>;
+export type AddEmergencyContactInput = z.input<typeof addEmergencyContactSchema>;
 
 export const checkInactivitySchema = z.object({
   now: z.union([z.string(), z.date()]).optional(),
 });
 
 export const sendFriendRequestSchema = z.preprocess(
-  (data: any) => ({
-    targetUserId: data?.targetUserId ?? data?.target_user_id,
-  }),
+  (raw: unknown) => {
+    const data = (raw && typeof raw === 'object' ? raw as Record<string, unknown> : {});
+    return {
+      targetUserId: data.targetUserId ?? data.target_user_id,
+    };
+  },
   z.object({
     targetUserId: z.string().uuid('Invalid targetUserId'),
   })
 );
 
 export const respondFriendRequestSchema = z.preprocess(
-  (data: any) => ({
-    action: data?.action ?? (data?.status === 'accepted' ? 'accept' : data?.status === 'rejected' ? 'reject' : data?.status),
-  }),
+  (raw: unknown) => {
+    const data = (raw && typeof raw === 'object' ? raw as Record<string, unknown> : {});
+    return {
+      action: data.action ?? (data.status === 'accepted' ? 'accept' : data.status === 'rejected' ? 'reject' : data.status),
+    };
+  },
   z.object({
     action: z.enum(['accept', 'reject']),
   })
 );
 
 export const blockUserSchema = z.preprocess(
-  (data: any) => ({
-    targetUserId: data?.targetUserId ?? data?.target_user_id,
-  }),
+  (raw: unknown) => {
+    const data = (raw && typeof raw === 'object' ? raw as Record<string, unknown> : {});
+    return {
+      targetUserId: data.targetUserId ?? data.target_user_id,
+    };
+  },
   z.object({
     targetUserId: z.string().uuid('Invalid targetUserId'),
   })

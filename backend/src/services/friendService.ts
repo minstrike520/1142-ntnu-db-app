@@ -4,7 +4,7 @@ import { isUserOnline } from '../realtime/presence';
 
 export function makeFriendService(
   repo: ReturnType<typeof makeFriendRepository>,
-  notifyUser?: (userId: string, eventName: string, payload: any) => void,
+  notifyUser?: (userId: string, eventName: string, payload: unknown) => void,
   privateRooms?: {
     markPrivateReadOnly(userA: string, userB: string): Promise<void>;
     createPrivate?(userA: string, userB: string): Promise<unknown>;
@@ -110,7 +110,7 @@ export function makeFriendService(
         notifyUser(friendId, 'friend_request', {
           requesterId: userId,
           addresseeId: friendId,
-          status: 'deleted' as any,
+          status: 'deleted',
           createdAt: new Date(),
         });
       }
@@ -126,7 +126,7 @@ export function makeFriendService(
         notifyUser(targetUserId, 'friend_request', {
           requesterId: userId,
           addresseeId: targetUserId,
-          status: 'blocked' as any,
+          status: 'blocked',
           createdAt: new Date(),
         });
       }
@@ -142,7 +142,7 @@ export function makeFriendService(
         notifyUser(blockedId, 'friend_request', {
           requesterId: userId,
           addresseeId: blockedId,
-          status: 'unblocked' as any,
+          status: 'unblocked',
           createdAt: new Date(),
         });
       }

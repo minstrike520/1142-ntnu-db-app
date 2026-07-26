@@ -16,7 +16,7 @@ export const securityHeaders: MiddlewareHandler = async (c, next) => {
   return headersMiddleware(c, next);
 };
 
-export const makeGlobalRateLimiter = (overrides: any = {}): MiddlewareHandler => {
+export const makeGlobalRateLimiter = (overrides: Record<string, unknown> = {}): MiddlewareHandler => {
   return honoRateLimiter({
     windowMs: parsePositiveInt(process.env.RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
     limit: parsePositiveInt(process.env.RATE_LIMIT_MAX, 1000),
@@ -30,7 +30,7 @@ export const makeGlobalRateLimiter = (overrides: any = {}): MiddlewareHandler =>
   });
 };
 
-export const makeAuthRateLimiter = (overrides: any = {}): MiddlewareHandler => {
+export const makeAuthRateLimiter = (overrides: Record<string, unknown> = {}): MiddlewareHandler => {
   return honoRateLimiter({
     windowMs: parsePositiveInt(process.env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
     limit: parsePositiveInt(process.env.AUTH_RATE_LIMIT_MAX, 10),

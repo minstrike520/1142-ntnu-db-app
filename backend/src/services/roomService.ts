@@ -23,14 +23,14 @@ const generateInviteCode = () => randomBytes(6).toString('base64url').slice(0, 8
 export const makeRoomService = (
   repo: IRoomRepository,
   roomMemberRepo: IRoomMemberRepository,
-  emitRoomEvent?: (roomId: string, eventName: string, payload: any) => void,
+  emitRoomEvent?: (roomId: string, eventName: string, payload: unknown) => void,
   socialRepo?: { isBlocked(userA: string, userB: string): Promise<boolean>; areFriends(userA: string, userB: string): Promise<boolean> },
   userRepo?: IUserRepository,
   messageRepo?: IMessageRepository,
   // Emits an event directly to a specific user's personal socket room (user_${userId}).
   // Used to notify users of events they cannot receive via room broadcast (e.g., being
   // approved into a group they haven't joined yet).
-  emitToUser?: (userId: string, eventName: string, payload: any) => void,
+  emitToUser?: (userId: string, eventName: string, payload: unknown) => void,
 ) => {
   const ensureMember = async (roomId: string, userId: string) => {
     const existing = await roomMemberRepo.findMember(roomId, userId);
@@ -336,9 +336,9 @@ export const makeRoomService = (
         }
       }
 
-      await roomMemberRepo.update(roomId, targetUserId, data as any);
+      await roomMemberRepo.update(roomId, targetUserId, data as Parameters<typeof roomMemberRepo.update>[2]);
       if (emitRoomEvent) {
-        emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_UPDATED', data: { userId: targetUserId, ...data } });
+        emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_UPDATED', data: { userId: targetUserId, ...data as Record<string, unknown> } });
       }
     },
 

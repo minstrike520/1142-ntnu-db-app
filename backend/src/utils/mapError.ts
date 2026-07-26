@@ -13,7 +13,7 @@ export const mapErrorToApiShape = (err: unknown): ApiError => {
     return apiError;
   }
 
-  const errObj = err as any;
+  const errObj = err as { name?: string; code?: string; message?: string } | null | undefined;
   if (errObj && (errObj.name === 'MulterError' || errObj.code === 'LIMIT_FILE_SIZE')) {
     return {
       statusCode: errObj.code === 'LIMIT_FILE_SIZE' ? 413 : 400,

@@ -1,14 +1,16 @@
+import type { Folder } from '@shared/types';
+import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { createFolderSchema, updateFolderRoomsSchema } from '../routes/folderSchemas';
 import { validate } from '../middlewares/validator';
 import { authMiddleware } from '../middlewares/authMiddleware';
 
 export interface FolderService {
-  createFolder(userId: string, name: string): Promise<any>;
-  getFolders(userId: string): Promise<any>;
+  createFolder(userId: string, name: string): Promise<Folder>;
+  getFolders(userId: string): Promise<Folder[]>;
   deleteFolder(folderId: string, userId: string): Promise<void>;
   updateFolderRooms(folderId: string, userId: string, roomIds: string[]): Promise<void>;
-  renameFolder(folderId: string, userId: string, name: string): Promise<any>;
+  renameFolder(folderId: string, userId: string, name: string): Promise<Folder>;
 }
 
 export const makeFolderRoutes = (service: FolderService) => {
@@ -23,7 +25,7 @@ export const makeFolderRoutes = (service: FolderService) => {
 
   app.post('/', validate('json', createFolderSchema), async (c) => {
     const userId = c.get('user').userId;
-    const body = c.req.valid('json') as any;
+    const body = c.req.valid('json') as { name: string };
     const folder = await service.createFolder(userId, body.name);
     return c.json(folder, 201);
   });
@@ -35,11 +37,11 @@ export const makeFolderRoutes = (service: FolderService) => {
     return c.body(null, 204);
   });
 
-  const handleUpdateRooms = async (c: any) => {
+  const handleUpdateRooms = async (c: Context) => {
     const userId = c.get('user').userId;
-    const folderId = c.req.param('id');
-    const body = c.req.valid('json') as any;
-    await service.updateFolderRooms(folderId, userId, body.roomIds);
+    const folderId = c.req.param('id') || '';
+    const body = (await c.req.json().catch(() => ({}))) as { roomIds?: string[] };
+    await service.updateFolderRooms(folderId, userId, body.roomIds || []);
     return c.json({ success: true }, 200);
   };
 
@@ -49,7 +51,7 @@ export const makeFolderRoutes = (service: FolderService) => {
   app.patch('/:id', validate('json', createFolderSchema), async (c) => {
     const userId = c.get('user').userId;
     const folderId = c.req.param('id');
-    const body = c.req.valid('json') as any;
+    const body = c.req.valid('json') as { name: string };
     const folder = await service.renameFolder(folderId, userId, body.name);
     return c.json(folder, 200);
   });

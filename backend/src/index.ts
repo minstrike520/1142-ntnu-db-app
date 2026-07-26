@@ -93,7 +93,7 @@ const userService = makeUserService(
     if (!room) {
       try {
         const result = await roomService.createPrivate(payload.userId, contactId, true);
-        room = result.room as any;
+        room = result.room;
       } catch (err) {
         console.error('Failed to auto-create private room for emergency contact:', err);
       }
@@ -133,16 +133,17 @@ const roomService = makeRoomService(
   roomMemberRepo,
   (roomId, eventName, payload) => {
     if (eventName === 'room_update') {
-      io.to(`room_${roomId}`).emit('room_update', { ...(payload as any), roomId });
+      const p = payload as { type: string; data: unknown };
+      io.to(`room_${roomId}`).emit('room_update', { ...p, roomId });
     } else {
-      io.to(`room_${roomId}`).emit(eventName as any, payload);
+      io.to(`room_${roomId}`).emit(eventName as keyof ServerToClientEvents, payload as never);
     }
   },
   friendRepo,
   userRepo,
   messageRepo,
   (userId, eventName, payload) => {
-    io.to(`user_${userId}`).emit(eventName as any, payload);
+    io.to(`user_${userId}`).emit(eventName as keyof ServerToClientEvents, payload as never);
   },
 );
 
@@ -151,7 +152,7 @@ const folderService = makeFolderService(folderRepo, roomMemberRepo);
 const attachmentService = makeAttachmentService(attachmentRepo);
 
 const friendService = makeFriendService(friendRepo, (userId, eventName, payload) => {
-  io.to(`user_${userId}`).emit(eventName as any, payload);
+  io.to(`user_${userId}`).emit(eventName as keyof ServerToClientEvents, payload as never);
 }, {
   markPrivateReadOnly: roomService.markPrivateReadOnly,
   createPrivate: (userA: string, userB: string, bypassFriendCheck?: boolean) => roomService.createPrivate(userA, userB, bypassFriendCheck),

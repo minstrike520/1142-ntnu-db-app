@@ -1,4 +1,12 @@
+import type {
+  MyProfile,
+  UserProfile,
+  UserSettings,
+  SearchUserResult,
+  EmergencyContactResponse,
+} from '@shared/types';
 import type { UploadedFile } from '../utils/fileUpload';
+import type { Context } from 'hono';
 import { Hono } from 'hono';
 import {
   updateMeSchema,
@@ -14,18 +22,18 @@ import { parseSingleFile } from '../utils/fileUpload';
 import { ALLOWED_AVATAR_MIME_TYPES, AVATAR_UPLOAD_MAX_BYTES } from '../utils/avatarUpload';
 
 export interface UserService {
-  getMe(userId: string): Promise<any>;
-  getUserProfile(userId: string): Promise<any>;
-  updateMe(userId: string, data: unknown): Promise<any>;
-  uploadAvatar(userId: string, file: UploadedFile): Promise<any>;
-  getMySettings(userId: string): Promise<any>;
-  updateMySettings(userId: string, data: unknown): Promise<any>;
+  getMe(userId: string): Promise<MyProfile>;
+  getUserProfile(userId: string): Promise<UserProfile>;
+  updateMe(userId: string, data: unknown): Promise<MyProfile>;
+  uploadAvatar(userId: string, file: UploadedFile): Promise<MyProfile>;
+  getMySettings(userId: string): Promise<UserSettings>;
+  updateMySettings(userId: string, data: unknown): Promise<UserSettings>;
   deleteMe(userId: string): Promise<void>;
-  search(query: string, mode?: 'name' | 'userId' | 'email', currentUserId?: string): Promise<any>;
-  getEmergencyContacts(userId: string): Promise<any>;
-  upsertEmergencyContact(userId: string, contactId: string, message: string): Promise<{ contact: any; isUpdate: boolean }>;
+  search(query: string, mode?: 'name' | 'userId' | 'email', currentUserId?: string): Promise<SearchUserResult[]>;
+  getEmergencyContacts(userId: string): Promise<EmergencyContactResponse[]>;
+  upsertEmergencyContact(userId: string, contactId: string, message: string): Promise<{ contact: EmergencyContactResponse; isUpdate: boolean }>;
   deleteEmergencyContact(userId: string, contactId: string): Promise<void>;
-  checkInactivity(userId: string, now?: Date): Promise<any>;
+  checkInactivity(userId: string, now?: Date): Promise<unknown>;
 }
 
 export const makeUserRoutes = (service: UserService) => {
@@ -78,7 +86,7 @@ export const makeUserRoutes = (service: UserService) => {
   });
 
   app.get('/search', validate('query', searchQuerySchema), async (c) => {
-    const queryData = c.req.valid('query') as any;
+    const queryData = c.req.valid('query') as { q: string; mode?: 'name' | 'userId' | 'email'; friendsOnly?: boolean | string };
     const currentUserId = queryData.friendsOnly === 'true' || queryData.friendsOnly === true
       ? c.get('user').userId
       : undefined;
@@ -94,7 +102,7 @@ export const makeUserRoutes = (service: UserService) => {
 
   app.post('/me/emergency-contacts', validate('json', addEmergencyContactSchema), async (c) => {
     const userId = c.get('user').userId;
-    const data = c.req.valid('json') as any;
+    const data = c.req.valid('json') as { contactId: string; message: string };
     const result = await service.upsertEmergencyContact(userId, data.contactId, data.message);
     return c.json(result.contact, result.isUpdate ? 200 : 201);
   });
@@ -106,9 +114,9 @@ export const makeUserRoutes = (service: UserService) => {
     return c.json({ message: 'Emergency contact removed' }, 200);
   });
 
-  const handleCheckInactivity = async (c: any) => {
+  const handleCheckInactivity = async (c: Context) => {
     const userId = c.get('user').userId;
-    const data = c.req.valid('json') as any;
+    const data = (await c.req.json().catch(() => ({}))) as { now?: string | Date };
     const now = data.now ? new Date(data.now) : undefined;
     const result = await service.checkInactivity(userId, now);
     return c.json(result, 200);
@@ -119,7 +127,7 @@ export const makeUserRoutes = (service: UserService) => {
 
   // Search without /search subpath (e.g. GET /api/v1/users?q=...)
   app.get('/', validate('query', searchQuerySchema), async (c) => {
-    const queryData = c.req.valid('query') as any;
+    const queryData = c.req.valid('query') as { q: string; mode?: 'name' | 'userId' | 'email'; friendsOnly?: boolean | string };
     const currentUserId = queryData.friendsOnly === 'true' || queryData.friendsOnly === true
       ? c.get('user').userId
       : undefined;

@@ -1,13 +1,18 @@
+import type { AuthResponse, LoginRequest, RegisterRequest } from '@shared/types';
 import { Hono } from 'hono';
 import { registerSchema, loginSchema } from '../routes/userSchemas';
 import { validate } from '../middlewares/validator';
 import { setRefreshCookie, clearRefreshCookie, REFRESH_COOKIE_NAME, readCookie } from '../utils/cookies';
 import { ValidationError } from '../utils/AppError';
 
+export interface AuthResult extends AuthResponse {
+  refreshToken: string;
+}
+
 export interface AuthService {
-  register(data: { email: string; name: string; password: string }): Promise<any>;
-  login(data: { email: string; password: string }): Promise<any>;
-  refresh(refreshToken: string): Promise<any>;
+  register(data: RegisterRequest): Promise<AuthResult>;
+  login(data: LoginRequest): Promise<AuthResult>;
+  refresh(refreshToken: string): Promise<AuthResult>;
   revokeToken(refreshToken: string): Promise<void>;
 }
 
@@ -15,7 +20,7 @@ export const makeAuthRoutes = (service: AuthService) => {
   const app = new Hono();
 
   app.post('/register', validate('json', registerSchema), async (c) => {
-    const data = c.req.valid('json') as any;
+    const data = c.req.valid('json') as RegisterRequest;
     const result = await service.register(data);
     setRefreshCookie(c, result.refreshToken);
     return c.json({
@@ -25,7 +30,7 @@ export const makeAuthRoutes = (service: AuthService) => {
   });
 
   app.post('/login', validate('json', loginSchema), async (c) => {
-    const data = c.req.valid('json') as any;
+    const data = c.req.valid('json') as LoginRequest;
     const result = await service.login(data);
     setRefreshCookie(c, result.refreshToken);
     return c.json({

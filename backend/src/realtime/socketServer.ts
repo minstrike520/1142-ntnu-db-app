@@ -1,5 +1,5 @@
-import type { ApiError, MessageWithSender } from '@shared/types';
-import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../utils/AppError';
+import type { MessageWithSender, FriendResponse } from '@shared/types';
+import { ForbiddenError, NotFoundError, ValidationError } from '../utils/AppError';
 import type { IMessageRepository } from '../models/IMessageRepository';
 import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
 import type { ChatServer } from './authSocket';
@@ -20,7 +20,7 @@ interface SocketDeps {
   messageService: MessageService;
   messageRepository: Pick<IMessageRepository, 'findById'>;
   roomMemberRepository: Pick<IRoomMemberRepository, 'update' | 'findMember'>;
-  friendRepository?: { getFriends(userId: string): Promise<any[]> };
+  friendRepository?: { getFriends(userId: string): Promise<FriendResponse[]> };
 }
 
 import { mapErrorToApiShape } from '../utils/mapError';

@@ -1,3 +1,4 @@
+import type { Attachment } from '@shared/types';
 import type { UploadedFile } from '../utils/fileUpload';
 import { Hono } from 'hono';
 import path from 'path';
@@ -19,8 +20,8 @@ const encodeDownloadFilename = (filename: string): string => {
 };
 
 export interface AttachmentService {
-  uploadAttachment(userId: string, file: UploadedFile): Promise<any>;
-  getAttachment(attachmentId: string): Promise<any>;
+  uploadAttachment(userId: string, file: UploadedFile): Promise<Attachment>;
+  getAttachment(attachmentId: string): Promise<(Attachment & { filePath?: string; file_path?: string; original_name?: string; mime_type?: string }) | null>;
 }
 
 export const makeAttachmentRoutes = (service: AttachmentService) => {

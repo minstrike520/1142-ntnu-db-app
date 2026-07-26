@@ -12,7 +12,7 @@ export interface UploadedFile {
   destination?: string;
   filename?: string;
   path?: string;
-  stream?: any;
+  stream?: ReadableStream | null;
 }
 
 export interface ParseFileOptions {
@@ -83,6 +83,6 @@ export async function parseSingleFile(
     destination: options.saveToDir || '',
     filename: fileObj.name,
     path: filePath,
-    stream: null as any,
+    stream: null,
   };
 }

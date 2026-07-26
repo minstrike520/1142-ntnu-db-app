@@ -12,6 +12,7 @@ import type {
   User,
   UserProfile,
   UserSettings,
+  FriendResponse,
 } from '../../../shared/types';
 
 import { ConflictError, NotFoundError, ValidationError } from '../utils/AppError';
@@ -78,7 +79,7 @@ export const makeUserService = (
   refreshTokenRepo: IRefreshTokenRepository,
   jwt: JwtHelper,
   notifyEmergencyContact?: (contactId: string, payload: { userId: string; message: string }) => void | Promise<void>,
-  friendRepo?: any,
+  friendRepo?: { getFriends(userId: string): Promise<FriendResponse[]> },
   onUserUpdated?: (userId: string, data: { name?: string; avatarUrl?: string }) => void | Promise<void>,
 ) => {
   const notifyContacts = async (userId: string, fallbackMessage: string): Promise<EmergencyAlertResult> => {
@@ -290,7 +291,7 @@ export const makeUserService = (
     },
 
     async deleteMe(userId: string): Promise<void> {
-      await repo.update(userId, { deletedAt: new Date() } as any);
+      await repo.update(userId, { deletedAt: new Date() });
     },
 
     
@@ -344,13 +345,13 @@ export const makeUserService = (
         throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid query');
       }
 
-      let users: any[] = [];
+      let users: SearchUserResult[] = [];
       if (currentUserId && friendRepo) {
         const friendships = await friendRepo.getFriends(currentUserId);
         const searchVal = parsed.data.q.toLowerCase();
 
-        const matchingFriends = friendships.filter((f: any) => {
-          const u = f.friend;
+        const matchingFriends = friendships.filter((f: FriendResponse) => {
+          const u = f.friend as PublicUser & { email?: string };
           if (parsed.data.mode === 'userId') {
             return u.userId.toLowerCase() === searchVal;
           } else if (parsed.data.mode === 'email') {
@@ -366,12 +367,15 @@ export const makeUserService = (
           }
         });
 
-        users = matchingFriends.map((f: any) => ({
-          userId: f.friend.userId,
-          name: f.friend.name,
-          email: f.friend.email,
-          avatarUrl: f.friend.avatarUrl,
-        }));
+        users = matchingFriends.map((f: FriendResponse) => {
+          const u = f.friend as PublicUser & { email?: string };
+          return {
+            userId: u.userId,
+            name: u.name,
+            email: u.email,
+            avatarUrl: u.avatarUrl,
+          };
+        });
       } else {
         const dbUsers = await repo.search(parsed.data.q, parsed.data.mode);
         users = dbUsers.map((u) => ({

@@ -19,7 +19,7 @@ export interface UserRow {
   last_activity: Date;
   created_at: Date;
   deleted_at?: Date | null;
-  room_order?: any;
+  room_order?: Record<string, string[]> | null;
 }
 
 function mapRowToUser(row: UserRow): User {
@@ -137,7 +137,7 @@ export class UserRepository implements IUserRepository {
     >,
   ): Promise<User> {
     const fields: string[] = [];
-    const values: any[] = [];
+    const values: unknown[] = [];
     let idx = 1;
 
     if (data.name !== undefined) { fields.push(`name = $${idx++}`); values.push(data.name); }
@@ -162,10 +162,10 @@ export class UserRepository implements IUserRepository {
     }
 
     values.push(userId);
-    const rows = await (this.sql as any).unsafe(
+    const rows = (await this.sql.unsafe(
       `UPDATE users SET ${fields.join(', ')} WHERE user_id = $${idx} RETURNING *`,
       values
-    ) as UserRow[];
+    )) as UserRow[];
 
     if (rows.length === 0) {
       throw new Error("User not found");
