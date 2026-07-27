@@ -233,14 +233,17 @@ export function ChatBubble({
       if (Date.now() - menuOpenedAtRef.current < 300) return;
       setMenuPosition(null);
     };
-    const closeImmediately = () => setMenuPosition(null);
+    const closeOnScroll = () => setMenuPosition(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuPosition(null);
+    };
     window.addEventListener("click", closeOnClick);
-    window.addEventListener("keydown", closeImmediately);
-    window.addEventListener("scroll", closeImmediately, true);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("scroll", closeOnScroll, true);
     return () => {
       window.removeEventListener("click", closeOnClick);
-      window.removeEventListener("keydown", closeImmediately);
-      window.removeEventListener("scroll", closeImmediately, true);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("scroll", closeOnScroll, true);
     };
   }, [menuPosition]);
 
@@ -416,6 +419,24 @@ export function ChatBubble({
             </div>
           )}
 
+          {isOutgoing && !isRecalled && (
+            <button
+              type="button"
+              aria-label={t("chatroom.messageActions")}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                openMenuAt(rect.left, rect.bottom + 4);
+              }}
+              className="hidden md:inline-flex opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0 self-center p-1 rounded-sm text-text-muted hover:text-foreground hover:bg-surface-muted mb-0.5"
+            >
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                <circle cx="5" cy="12" r="2" />
+                <circle cx="12" cy="12" r="2" />
+                <circle cx="19" cy="12" r="2" />
+              </svg>
+            </button>
+          )}
+
           <div
             onContextMenu={(event) => {
               event.preventDefault();
@@ -551,6 +572,24 @@ export function ChatBubble({
               </div>
             )}
           </div>
+
+          {!isOutgoing && !isRecalled && (
+            <button
+              type="button"
+              aria-label={t("chatroom.messageActions")}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                openMenuAt(rect.left, rect.bottom + 4);
+              }}
+              className="hidden md:inline-flex opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0 self-center p-1 rounded-sm text-text-muted hover:text-foreground hover:bg-surface-muted mb-0.5"
+            >
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                <circle cx="5" cy="12" r="2" />
+                <circle cx="12" cy="12" r="2" />
+                <circle cx="19" cy="12" r="2" />
+              </svg>
+            </button>
+          )}
 
           {menuPosition && (
             <div

@@ -210,6 +210,7 @@
     "pendingApproval": "審核中",
     "pendingApprovalBanner": "您加入此群組的申請正在審核中。在 owner 或 admin 核准您的申請後，您就可以閱讀與傳送訊息。",
     "editingMessageBanner": "正在修改訊息 (按 Esc 取消)",
+    "messageActions": "訊息操作",
     "replyMessage": "回覆訊息",
     "editMessage": "修改訊息",
     "recallMessage": "收回訊息",
