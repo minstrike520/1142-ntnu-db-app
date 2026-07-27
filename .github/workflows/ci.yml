@@ -80,6 +80,23 @@ jobs:
       - run: pnpm --prefix frontend install --frozen-lockfile
       - run: pnpm --prefix frontend exec tsc --noEmit
 
+  frontend-test:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm --prefix frontend install --frozen-lockfile
+      - run: pnpm --prefix frontend run test
+
   frontend-build:
     needs: changes
     if: (needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')
