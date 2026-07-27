@@ -337,6 +337,7 @@
     "confirmAction": "Confirm"
   },
   "inviteAccept": {
+    "pageTitle": "Near | Group Invite",
     "loading": "Loading invite...",
     "invalidInvite": "This invite link is invalid or has expired.",
     "backToNear": "Back to Near",

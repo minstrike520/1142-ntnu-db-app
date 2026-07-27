@@ -337,6 +337,7 @@
     "confirmAction": "確定"
   },
   "inviteAccept": {
+    "pageTitle": "Near | 群組邀請",
     "loading": "正在載入邀請…",
     "invalidInvite": "此邀請連結無效或已失效。",
     "backToNear": "返回 Near",

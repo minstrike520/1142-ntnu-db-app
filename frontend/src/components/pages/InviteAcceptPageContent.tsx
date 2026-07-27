@@ -49,8 +49,8 @@ export default function InviteAcceptPageContent() {
   );
 
   useEffect(() => {
-    document.title = "Near | Group Invite";
-  }, []);
+    document.title = t("pageTitle");
+  }, [t]);
 
   useEffect(() => {
     if (!code) return;

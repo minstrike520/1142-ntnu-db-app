@@ -1,13 +1,17 @@
+/** Pages that must never be a post-auth destination, or the user loops back to them. */
+const AUTH_PATHNAMES = new Set(["/login", "/register"]);
+
 /**
  * Only ever redirect to a same-origin relative path. Rejects protocol-relative
  * ("//evil.com") and backslash-normalized ("/\evil.com") open-redirect payloads,
- * plus the auth pages themselves so a redirect cannot loop back on them.
+ * plus every spelling of the auth pages — comparing the raw string alone would
+ * still let "/login?next=x" or "/login/" through.
  */
 export const sanitizeRedirect = (raw: string | null): string => {
-  if (raw && /^\/(?![/\\])/.test(raw) && raw !== "/login" && raw !== "/register") {
-    return raw;
-  }
-  return "/";
+  if (!raw || !/^\/(?![/\\])/.test(raw)) return "/";
+
+  const pathname = raw.split(/[?#]/)[0].replace(/\/+$/, "") || "/";
+  return AUTH_PATHNAMES.has(pathname) ? "/" : raw;
 };
 
 /** Read and sanitize the `redirect` query parameter of the current URL. */
