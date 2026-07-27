@@ -114,11 +114,25 @@ docker compose exec backend pnpm run db:seed
 ### 1. 配置生產環境變數
 請確保 `.env` 檔案中已填寫所有生產環境所需的變數（例如 `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB`、`DATABASE_URL`、`JWT_SECRET`、`NEXT_PUBLIC_API_URL` 以及 Cloudflare Tunnel 的 `TUNNEL_TOKEN`）。
 
+Docker Compose 會用同一份 `.env` 對 `docker-compose.prod.yml` 進行插值，因此從 `.env.example` 複製過來的值同樣會套用到正式環境。上線前請務必調整下列項目：
+
+| 參數名稱 | `.env.example` 的值 | 正式環境應設為 | 原因 |
+| :--- | :--- | :--- | :--- |
+| `RATE_LIMIT_DISABLED` | `true` | `false` | 維持 `true` 會使正式環境完全沒有速率限制。 |
+| `NODE_ENV` | `development` | `production` | 會影響 refresh cookie 的 `Secure` 屬性等行為。 |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:4005` | 對外的後端網址 | 於前端建置時就被寫入映像檔。 |
+
 ### 2. 啟動生產服務容器
 在生產模式下建置並啟動所有容器：
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
 ```
+
+正式環境的 compose 會固定網段，讓後端能辨識出 `cloudflared` 容器就是它信任的代理（詳見下方[來源 IP 判定與速率限制](#來源-ip-判定與速率限制)）。若先前已用舊版設定啟動過，請先關閉再重新啟動——Docker 不會沿用 IPAM 設定已變更的既有網路：
+```bash
+docker compose -f docker-compose.prod.yml down
+```
+若 `10.83.71.0/24` 與主機既有的網路衝突，`docker compose up` 會直接報錯。此時請同時設定 `TUNNEL_SUBNET` 與 `TUNNEL_IP`（位址必須落在該網段內）以改用其他範圍。
 
 ### 3. 執行資料庫遷移
 於生產容器中套用最新的資料庫遷移：
@@ -131,6 +145,16 @@ docker compose -f docker-compose.prod.yml exec backend pnpm run migrate:up
 ```bash
 docker compose -f docker-compose.prod.yml down
 ```
+
+### 來源 IP 判定與速率限制
+速率限制以來源 IP 分桶。後端一律以 TCP 連線的對端位址為準，只有當該對端是它信任的代理時，才會採信 `CF-Connecting-IP` / `X-Forwarded-For`：
+
+* `TRUSTED_PROXY_IPS` — 可信任代理的來源位址（逗號分隔，需完全相符，不接受網段）。`docker-compose.prod.yml` 會透過 `TUNNEL_IP` 將其設為 tunnel 容器的固定位址，因此經 Cloudflare 進來的請求會依真實使用者分桶；而直接連到已發佈的 `4005` 埠的請求，其對端位址不同，無法自行挑選限流桶。
+* `TRUST_PROXY=true` — 無條件信任所有對端。只有在後端埠不可能被直接連線時才適用。
+
+`X-Forwarded-For` 一律由右往左讀取：代理會把它實際收到連線的來源位址附加在最後，左側則是呼叫端自己送進來的內容。
+
+若要確認經 tunnel 的流量確實被正確歸屬，可觀察後端日誌是否出現 `[clientIp] Ignoring forwarded client-IP header from untrusted peer …`。正式環境出現這行，代表 tunnel 的 ingress 並未指向 `http://backend:4000`，所有外部使用者仍然共用同一個限流桶。
 
 ---
 

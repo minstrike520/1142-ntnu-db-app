@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, expect, afterEach, spyOn } from 'bun:test';
 import { Hono } from 'hono';
 import {
   makeAuthRateLimiter,
@@ -11,6 +11,7 @@ describe('security middleware', () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalRateLimitDisabled = process.env.RATE_LIMIT_DISABLED;
   const originalTrustProxy = process.env.TRUST_PROXY;
+  const originalTrustedProxyIps = process.env.TRUSTED_PROXY_IPS;
 
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
@@ -23,6 +24,11 @@ describe('security middleware', () => {
       process.env.TRUST_PROXY = originalTrustProxy;
     } else {
       delete process.env.TRUST_PROXY;
+    }
+    if (originalTrustedProxyIps !== undefined) {
+      process.env.TRUSTED_PROXY_IPS = originalTrustedProxyIps;
+    } else {
+      delete process.env.TRUSTED_PROXY_IPS;
     }
   });
 
@@ -137,15 +143,66 @@ describe('security middleware', () => {
       expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '10.0.0.1' } })).status).toBe(429);
     });
 
-    it('uses only the first hop of a forwarded chain', async () => {
+    it('uses the last hop of a forwarded chain, not the caller-supplied prefix', async () => {
       process.env.NODE_ENV = 'production';
       process.env.TRUST_PROXY = 'true';
       delete process.env.RATE_LIMIT_DISABLED;
       const app = makeApp();
 
+      // A proxy appends the address it actually received the connection from,
+      // so only the rightmost hop is outside the caller's control. Prefixing
+      // the header must not let a caller move itself to a fresh bucket.
       const headers = { 'x-forwarded-for': '10.0.0.9, 172.16.0.1, 192.168.0.1' };
       expect((await app.request('/api/ping', { headers })).status).toBe(200);
-      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '10.0.0.9' } })).status).toBe(429);
+      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '192.168.0.1' } })).status).toBe(429);
+      // The spoofable prefix is not a bucket of its own.
+      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': 'evil, 192.168.0.1' } })).status).toBe(429);
+    });
+
+    it('separates buckets per visitor behind a listed trusted proxy', async () => {
+      process.env.NODE_ENV = 'production';
+      delete process.env.TRUST_PROXY;
+      process.env.TRUSTED_PROXY_IPS = '10.83.71.250';
+      delete process.env.RATE_LIMIT_DISABLED;
+      const app = makeApp();
+
+      const viaTunnel = (visitorIp: string) =>
+        app.request(
+          '/api/ping',
+          { headers: { 'cf-connecting-ip': visitorIp } },
+          { incoming: { socket: { remoteAddress: '10.83.71.250' } } },
+        );
+
+      expect((await viaTunnel('203.0.113.7')).status).toBe(200);
+      // One visitor exhausting their budget must not lock anyone else out.
+      expect((await viaTunnel('203.0.113.8')).status).toBe(200);
+      expect((await viaTunnel('203.0.113.7')).status).toBe(429);
+    });
+
+    it('ignores forwarded headers from a peer that is not the listed proxy', async () => {
+      process.env.NODE_ENV = 'production';
+      delete process.env.TRUST_PROXY;
+      process.env.TRUSTED_PROXY_IPS = '10.83.71.250';
+      delete process.env.RATE_LIMIT_DISABLED;
+      const app = makeApp();
+
+      // Anything reaching the published port has a different peer address, so
+      // it stays pinned to that address' bucket however it labels itself.
+      const direct = (visitorIp: string) =>
+        app.request(
+          '/api/ping',
+          { headers: { 'cf-connecting-ip': visitorIp, 'x-forwarded-for': visitorIp } },
+          { incoming: { socket: { remoteAddress: '10.83.71.1' } } },
+        );
+
+      // Silences the (expected) diagnostic this path emits outside NODE_ENV=test.
+      const warn = spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect((await direct('203.0.113.7')).status).toBe(200);
+        expect((await direct('203.0.113.8')).status).toBe(429);
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it('ignores X-Forwarded-For when the proxy is not trusted', async () => {

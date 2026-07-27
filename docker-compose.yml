@@ -34,6 +34,10 @@ services:
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
       - TRUST_PROXY=${TRUST_PROXY:-false}
+      # Exact peer addresses allowed to name the caller via CF-Connecting-IP /
+      # X-Forwarded-For. Empty by default: nothing sits in front of the backend
+      # in the development stack. docker-compose.prod.yml sets its own value.
+      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-}
       - CORS_ORIGINS=${CORS_ORIGINS}
       - ATTACHMENT_TYPE_RESTRICTION_ENABLED=${ATTACHMENT_TYPE_RESTRICTION_ENABLED:-false}
       - ATTACHMENT_ALLOWED_MIME_TYPES=${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}

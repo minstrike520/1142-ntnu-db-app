@@ -67,6 +67,14 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 1. **Frontend prefix**: Any environment variable that must be readable on the browser-side of Next.js must be prefixed with `NEXT_PUBLIC_`.
 2. **Production injection**: Production should not depend on a checked-in `.env` file. Inject settings through your hosting platform configuration instead (e.g. Vercel, AWS Secrets Manager).
 3. **Template maintenance**: When adding new environment variables, update `.env.example` to document them, leaving values blank or using placeholders.
+4. **Interpolation precedence**: Compose reads `.env` when interpolating *every* compose file, including `docker-compose.prod.yml`. A value set in `.env` therefore wins over a `${VAR:-default}` written in the compose file — a development-convenience default in `.env.example` silently becomes the production value. Variables that must not be overridable this way (currently the `cloudflared` container's pinned address, consumed as `TRUSTED_PROXY_IPS`) are interpolated from a differently-named variable that `.env.example` leaves commented out. When adding a setting whose production value is load-bearing, either follow that pattern or list it in the production checklist in [README.md](../README.md#1-configure-production-environment).
+
+### Client IP resolution
+`backend/src/utils/clientIp.ts` decides which address the rate limiter buckets on, and it is used at exactly one call site (`rateLimitKeyGenerator` in `backend/src/middlewares/securityMiddleware.ts`). Socket.IO is not rate limited and does not go through it.
+
+The TCP peer address is authoritative. `CF-Connecting-IP` and `X-Forwarded-For` are read only when the peer address is listed in `TRUSTED_PROXY_IPS` (exact match, no CIDR) or when `TRUST_PROXY=true` trusts every peer. `X-Forwarded-For` is walked right to left, skipping listed proxies, because a proxy appends the address it actually received the connection from — everything to the left of that is whatever the caller chose to send.
+
+When neither applies, an unattributable request gets a unique key rather than a shared one, so it goes unlimited instead of taking every other caller down with it.
 
 ---
 

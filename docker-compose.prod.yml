@@ -29,6 +29,17 @@ services:
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
       - TRUST_PROXY=${TRUST_PROXY:-false}
+      # The cloudflared container is the only proxy in front of this service, so
+      # it is the only peer allowed to name the caller via CF-Connecting-IP /
+      # X-Forwarded-For. Anything reaching the published 4005 port arrives with
+      # a different peer address and stays pinned to that address' bucket.
+      # Deliberately an exact address, never the network CIDR: the bridge
+      # gateway lives in that range and is what every host-local caller looks
+      # like, so a CIDR would let them pick their own bucket by header.
+      # Shares TUNNEL_IP with the tunnel's static address below so the two can
+      # never drift apart. Not read from .env under its own name, so the
+      # documented .env cannot silently switch production off this behaviour.
+      - TRUSTED_PROXY_IPS=${TUNNEL_IP:-10.83.71.250}
       - CORS_ORIGINS=${CORS_ORIGINS}
       - ATTACHMENT_TYPE_RESTRICTION_ENABLED=${ATTACHMENT_TYPE_RESTRICTION_ENABLED:-false}
       - ATTACHMENT_ALLOWED_MIME_TYPES=${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
@@ -66,6 +77,24 @@ services:
     depends_on:
       - frontend
       - backend
+    networks:
+      # Pinned so the backend can recognise this container as its proxy. Sits
+      # high in the subnet, clear of the addresses Docker hands out from the
+      # bottom. Override together with TUNNEL_SUBNET, never on its own.
+      default:
+        ipv4_address: ${TUNNEL_IP:-10.83.71.250}
+
+networks:
+  default:
+    ipam:
+      config:
+        # Fixed so the tunnel's address is predictable. If this range collides
+        # with an existing network on the host, `docker compose up` fails
+        # loudly; set TUNNEL_SUBNET and TUNNEL_IP (in the same range) to move
+        # it. An already-running stack must be taken down before the first up
+        # with this configuration, otherwise Docker reports the pre-existing
+        # network as having incorrect ipam configuration.
+        - subnet: ${TUNNEL_SUBNET:-10.83.71.0/24}
 
 volumes:
   pgdata:
