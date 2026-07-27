@@ -2,7 +2,6 @@ import type { MessageWithSender } from '@shared/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validate } from '../middlewares/validator';
-import { authMiddleware } from '../middlewares/authMiddleware';
 import { ValidationError } from '../utils/AppError';
 
 export interface MessageService {
@@ -33,8 +32,6 @@ export const listMessagesQuerySchema = z.object({
 
 export const makeMessageRoutes = (service: MessageService) => {
   const app = new Hono();
-
-  app.use('*', authMiddleware);
 
   app.get('/:roomId/messages', validate('query', listMessagesQuerySchema), async (c) => {
     const userId = c.get('user').userId;

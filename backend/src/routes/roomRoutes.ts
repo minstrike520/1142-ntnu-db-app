@@ -9,7 +9,6 @@ import {
   type PatchRoomInput,
 } from '../routes/roomSchemas';
 import { validate } from '../middlewares/validator';
-import { authMiddleware } from '../middlewares/authMiddleware';
 import { parseSingleFile } from '../utils/fileUpload';
 import { ALLOWED_AVATAR_MIME_TYPES, AVATAR_UPLOAD_MAX_BYTES } from '../utils/avatarUpload';
 import { ValidationError } from '../utils/AppError';
@@ -33,8 +32,6 @@ export interface RoomService {
 
 export const makeRoomRoutes = (service: RoomService) => {
   const app = new Hono();
-
-  app.use('*', authMiddleware);
 
   app.get('/', async (c) => {
     const userId = c.get('user').userId;

@@ -28,18 +28,21 @@ export const authMiddleware: MiddlewareHandler = async (c, next) => {
     throw new AppError(401, 'Unauthorized: Missing authentication token');
   }
 
+  let payload: JwtPayload;
   try {
-    const payload = await verifyToken(token);
-    const user = await userRepo.findById(payload.userId);
-    if (!user) {
-      throw new AppError(401, 'Unauthorized: Account not found or deleted');
-    }
-    c.set('user', payload);
-    await next();
+    payload = await verifyToken(token);
   } catch (error) {
     if (error instanceof AppError) {
       throw error;
     }
     throw new AppError(401, 'Unauthorized: Invalid token');
   }
+
+  const user = await userRepo.findById(payload.userId);
+  if (!user) {
+    throw new AppError(401, 'Unauthorized: Account not found or deleted');
+  }
+
+  c.set('user', payload);
+  await next();
 };

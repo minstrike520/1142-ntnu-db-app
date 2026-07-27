@@ -102,4 +102,17 @@ describe('authMiddleware', () => {
 
     expect(authMiddleware(c, nextFunction)).rejects.toThrow(customErr);
   });
+
+  it('preserves errors thrown by downstream handlers', async () => {
+    const c = makeHonoContext({
+      authorization: 'Bearer valid-token',
+    });
+    const downstreamError = new Error('database unavailable');
+    spyOn(jwtHelper, 'verifyToken').mockReturnValue({
+      userId: '1',
+      name: 'Test User',
+    } as any);
+    nextFunction.mockRejectedValue(downstreamError);
+    expect(authMiddleware(c, nextFunction)).rejects.toBe(downstreamError);
+  });
 });

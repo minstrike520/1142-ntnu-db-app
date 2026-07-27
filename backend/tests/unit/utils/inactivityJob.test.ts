@@ -36,13 +36,15 @@ describe('inactivityJob', () => {
     ];
     mockUserRepo.findAllWarningEnabled.mockResolvedValue(mockUsers as any);
     
-    // Simulate a slow checkInactivity to test lock
-    let checkPromiseResolve: () => void;
-    mockUserService.checkInactivity.mockImplementation(() => {
-      return new Promise<void>((resolve) => {
-        checkPromiseResolve = resolve;
-      });
-    });
+    let releaseFirstCheck!: () => void;
+    mockUserService.checkInactivity
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirstCheck = resolve;
+          })
+      )
+      .mockResolvedValue(undefined);
 
     const intervalId = startInactivityJob(mockUserRepo, mockUserService, 2);
     activeIntervals.push(intervalId);
@@ -59,6 +61,12 @@ describe('inactivityJob', () => {
     
     // It should not call findAllWarningEnabled again because the lock is held
     expect(mockUserRepo.findAllWarningEnabled).toHaveBeenCalledTimes(1);
+
+    clearInterval(intervalId);
+    activeIntervals = activeIntervals.filter((id) => id !== intervalId);
+    releaseFirstCheck();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockUserService.checkInactivity).toHaveBeenCalledTimes(2);
   });
 
   it('continues with remaining users when checkInactivity fails for one user', async () => {

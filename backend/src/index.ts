@@ -8,6 +8,7 @@ import pool from "./models/db";
 import { signToken, generateRefreshToken, hashToken } from "./utils/jwt";
 import { RefreshTokenRepository } from "./models/refreshTokenRepository";
 import { errorHandler } from "./middlewares/errorHandler";
+import { authMiddleware } from "./middlewares/authMiddleware";
 import { makeAuthRateLimiter, makeGlobalRateLimiter, securityHeaders } from "./middlewares/securityMiddleware";
 import { UserRepository } from "./models/userRepository";
 import { EmergencyContactRepository } from "./models/emergencyContactRepository";
@@ -165,8 +166,13 @@ const friendService = makeFriendService(friendRepo, (userId, eventName, payload)
 honoApp.use('/api/v1/auth/*', makeAuthRateLimiter());
 honoApp.route('/api/v1/auth', makeAuthRoutes(userService));
 honoApp.route('/api/v1/users', makeUserRoutes(userService));
-honoApp.route('/api/v1/rooms', makeRoomRoutes(roomService));
-honoApp.route('/api/v1/rooms', makeMessageRoutes(messageService));
+
+const roomApi = new Hono();
+roomApi.use('*', authMiddleware);
+roomApi.route('/', makeRoomRoutes(roomService));
+roomApi.route('/', makeMessageRoutes(messageService));
+honoApp.route('/api/v1/rooms', roomApi);
+
 honoApp.route('/api/v1/folders', makeFolderRoutes(folderService));
 honoApp.route('/api/v1/attachments', makeAttachmentRoutes(attachmentService));
 honoApp.route('/api/v1/friends', makeFriendRoutes(friendService));

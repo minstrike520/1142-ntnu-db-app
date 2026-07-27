@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, mock } from 'bun:test';
 import { Hono } from 'hono';
 import { makeRoomRoutes } from '../../../src/routes/roomRoutes';
+import { authMiddleware } from '../../../src/middlewares/authMiddleware';
 import { errorHandler } from '../../../src/middlewares/errorHandler';
 import { signToken } from '../../../src/utils/jwt';
 
@@ -21,6 +22,7 @@ describe('PATCH /rooms/:id', () => {
   const makeApp = () => {
     const app = new Hono();
     app.onError(errorHandler);
+    app.use('/rooms/*', authMiddleware);
     app.route('/rooms', makeRoomRoutes(service));
     return app;
   };
@@ -103,6 +105,7 @@ describe('PATCH /rooms/:id/members/:targetUserId', () => {
   const makeApp = () => {
     const app = new Hono();
     app.onError(errorHandler);
+    app.use('/rooms/*', authMiddleware);
     app.route('/rooms', makeRoomRoutes(service));
     return app;
   };
