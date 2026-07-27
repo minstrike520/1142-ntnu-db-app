@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs/promises';
 import { parseSingleFile, sanitizeStoredFileName } from '../../../src/utils/fileUpload';
+import { errorHandler } from '../../../src/middlewares/errorHandler';
 
 describe('sanitizeStoredFileName', () => {
   it('keeps an ordinary filename usable', () => {
@@ -119,5 +120,63 @@ describe('parseSingleFile storage containment', () => {
 
     expect(first.body.path).not.toBe(second.body.path);
     expect((await fs.readdir(uploadDir)).length).toBe(2);
+  });
+});
+
+describe('parseSingleFile size limits', () => {
+  const makeApp = (maxBytes: number) => {
+    const app = new Hono();
+    app.onError(errorHandler);
+    app.post('/upload', async (c) => {
+      const file = await parseSingleFile(c, { maxBytes });
+      return c.json({ size: file.size });
+    });
+    return app;
+  };
+
+  const uploadOfSize = (app: Hono, bytes: number) => {
+    const form = new FormData();
+    form.append('file', new File(['x'.repeat(bytes)], 'blob.bin', { type: 'application/octet-stream' }));
+    return app.request('/upload', { method: 'POST', body: form });
+  };
+
+  it('accepts a file within the limit', async () => {
+    const res = await uploadOfSize(makeApp(1024), 512);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ size: 512 });
+  });
+
+  it('rejects a file over the limit', async () => {
+    const res = await uploadOfSize(makeApp(1024), 4096);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects on the declared Content-Length before parsing the body', async () => {
+    const maxBytes = 1024;
+    const app = makeApp(maxBytes);
+    // Well past maxBytes + the multipart overhead allowance, so the early exit
+    // fires without the request body ever being buffered and decoded.
+    const res = await app.request('/upload', {
+      method: 'POST',
+      headers: {
+        'content-type': 'multipart/form-data; boundary=----test',
+        'content-length': String(maxBytes + 10 * 1024 * 1024),
+      },
+      body: '------test--',
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { message?: string };
+    expect(body.message).toBe('File size limit exceeded');
+  });
+
+  it('does not reject a valid upload on multipart overhead alone', async () => {
+    // The declared length always exceeds the raw file size because of boundaries
+    // and part headers; a file at exactly the limit must still be accepted.
+    const maxBytes = 4096;
+    const res = await uploadOfSize(makeApp(maxBytes), maxBytes);
+
+    expect(res.status).toBe(200);
   });
 });

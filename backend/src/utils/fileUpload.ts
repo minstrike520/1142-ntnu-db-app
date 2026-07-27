@@ -32,6 +32,13 @@ export const sanitizeStoredFileName = (rawName: string): string => {
   return safe.length > 0 ? safe.slice(-100) : 'upload';
 };
 
+/**
+ * Slack allowed between the declared Content-Length and the file's own size, to
+ * cover multipart boundaries, part headers and other field values. Generous on
+ * purpose: this check only exists to reject the clearly-too-large early.
+ */
+const MULTIPART_OVERHEAD_ALLOWANCE = 64 * 1024;
+
 export interface ParseFileOptions {
   fieldName?: string;
   maxBytes?: number;
@@ -46,6 +53,18 @@ export async function parseSingleFile(
   options: ParseFileOptions = {}
 ): Promise<UploadedFile> {
   const fieldName = options.fieldName ?? 'file';
+
+  // Reject obviously oversized uploads before `parseBody()` buffers the whole
+  // request. This is a declared-size check only, so it is a cheap early exit
+  // rather than a real streaming limit; the authoritative check on the decoded
+  // file still runs below. Enforcing the cap at the stream level is issue #411.
+  if (options.maxBytes) {
+    const declaredLength = Number(c.req.header('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > options.maxBytes + MULTIPART_OVERHEAD_ALLOWANCE) {
+      throw new ValidationError('File size limit exceeded');
+    }
+  }
+
   const body = await c.req.parseBody();
   const file = body[fieldName];
 

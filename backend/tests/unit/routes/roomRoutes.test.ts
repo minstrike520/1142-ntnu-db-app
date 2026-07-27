@@ -93,3 +93,63 @@ describe('PATCH /rooms/:id', () => {
     expect(service.transferOwnership).not.toHaveBeenCalled();
   });
 });
+
+describe('PATCH /rooms/:id/members/:targetUserId', () => {
+  let service: any;
+  let token: string;
+
+  const makeApp = () => {
+    const app = new Hono();
+    app.onError(errorHandler);
+    app.route('/rooms', makeRoomRoutes(service));
+    return app;
+  };
+
+  const patchMember = (body: unknown) =>
+    makeApp().request(`/rooms/${ROOM_ID}/members/${NEW_OWNER_ID}`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  beforeEach(async () => {
+    token = await signToken({ userId: CALLER_ID, email: 'caller@test.com' } as any);
+    service = {
+      approveMember: mock().mockResolvedValue(undefined),
+      updateMember: mock().mockResolvedValue(undefined),
+      transferOwnership: mock().mockResolvedValue(undefined),
+    };
+  });
+
+  it('returns the documented message when approving', async () => {
+    const res = await patchMember({ status: 'approved' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ message: 'Member approved' });
+    expect(service.approveMember).toHaveBeenCalledWith(ROOM_ID, CALLER_ID, NEW_OWNER_ID);
+  });
+
+  it('returns the documented message when updating', async () => {
+    const res = await patchMember({ role: 'admin' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ message: 'Member updated' });
+  });
+
+  it('forwards isMuted through to the service', async () => {
+    const res = await patchMember({ isMuted: true });
+
+    expect(res.status).toBe(200);
+    // The old schema declared `muted`, so this arrived as an empty object and the
+    // mute change was silently dropped.
+    expect(service.updateMember).toHaveBeenCalledWith(ROOM_ID, CALLER_ID, NEW_OWNER_ID, { isMuted: true });
+  });
+
+  it('does not treat ownerId here as an ownership transfer', async () => {
+    const res = await patchMember({ ownerId: NEW_OWNER_ID, role: 'admin' });
+
+    expect(res.status).toBe(200);
+    expect(service.transferOwnership).not.toHaveBeenCalled();
+    expect(service.updateMember).toHaveBeenCalledWith(ROOM_ID, CALLER_ID, NEW_OWNER_ID, { role: 'admin' });
+  });
+});

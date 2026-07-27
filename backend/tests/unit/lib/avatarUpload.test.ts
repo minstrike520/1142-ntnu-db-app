@@ -4,7 +4,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { ValidationError } from '../../../src/utils/AppError';
-import { assertValidAvatarUpload, removeManagedAvatar } from '../../../src/utils/avatarUpload';
+import { assertValidAvatarUpload, removeManagedAvatar , avatarContentType } from '../../../src/utils/avatarUpload';
 import { AVATARS_UPLOAD_DIR, ensureUploadDirectories } from '../../../src/utils/uploads';
 
 const makeFile = (mimetype: string, bytes: number[]): UploadedFile =>
@@ -87,5 +87,28 @@ describe('removeManagedAvatar', () => {
     ).resolves.toBeUndefined();
     await expect(removeManagedAvatar('', 'anyone')).resolves.toBeUndefined();
     await expect(removeManagedAvatar(undefined, 'anyone')).resolves.toBeUndefined();
+  });
+
+  describe('avatarContentType', () => {
+    it('maps every allowed avatar extension to its real type', () => {
+      expect(avatarContentType('a.png')).toBe('image/png');
+      expect(avatarContentType('a.jpg')).toBe('image/jpeg');
+      expect(avatarContentType('a.jpeg')).toBe('image/jpeg');
+      expect(avatarContentType('a.gif')).toBe('image/gif');
+      expect(avatarContentType('a.webp')).toBe('image/webp');
+    });
+
+    it('does not label a PNG avatar as JPEG', () => {
+      expect(avatarContentType('user-uuid.png')).not.toBe('image/jpeg');
+    });
+
+    it('is case-insensitive', () => {
+      expect(avatarContentType('A.PNG')).toBe('image/png');
+    });
+
+    it('falls back to a neutral type for unknown or missing extensions', () => {
+      expect(avatarContentType('noext')).toBe('application/octet-stream');
+      expect(avatarContentType('a.svg')).toBe('application/octet-stream');
+    });
   });
 });

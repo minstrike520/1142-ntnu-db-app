@@ -111,7 +111,8 @@ export const makeUserRoutes = (service: UserService) => {
     const userId = c.get('user').userId;
     const contactId = c.req.param('contactId');
     await service.deleteEmergencyContact(userId, contactId);
-    return c.json({ message: 'Emergency contact removed' }, 200);
+    // Contract is { success: true } — the frontend types this endpoint that way.
+    return c.json({ success: true }, 200);
   });
 
   const handleCheckInactivity = async (c: Context) => {

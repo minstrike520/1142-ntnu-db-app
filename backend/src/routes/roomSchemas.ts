@@ -10,14 +10,21 @@ export const createRoomSchema = z.preprocess(
       targetUserId: data.targetUserId ?? data.target_user_id,
     };
   },
-  z.object({
-    type: roomTypeSchema.default('group'),
-    name: z.string().trim().min(1, 'Room name cannot be empty').optional(),
-    avatarUrl: z.string().url('Invalid avatar URL').optional(),
-    requireApproval: z.boolean().default(false),
-    viewHistory: z.boolean().default(true),
-    targetUserId: z.string().uuid().optional(),
-  })
+  z
+    .object({
+      type: roomTypeSchema.default('group'),
+      name: z.string().trim().min(1, 'Room name cannot be empty').optional(),
+      avatarUrl: z.string().url('Invalid avatar URL').optional(),
+      requireApproval: z.boolean().default(false),
+      viewHistory: z.boolean().default(true),
+      targetUserId: z.string().uuid().optional(),
+    })
+    // `type` defaults to 'group', so without this an empty body would create a
+    // group with name = NULL. Only private rooms may omit the name.
+    .refine((value) => value.type !== 'group' || Boolean(value.name), {
+      message: 'Room name cannot be empty',
+      path: ['name'],
+    })
 );
 
 const roomSettingsFields = {
@@ -62,11 +69,13 @@ export const joinByCodeSchema = z.object({
   inviteCode: z.string().trim().min(1, 'inviteCode is required'),
 });
 
+// `isMuted` matches the API contract, the frontend request type and
+// RoomService.updateMember. Declaring it as `muted` made Zod strip the field, so
+// the handler silently answered 200 without ever touching is_muted.
 export const updateMemberSchema = z.object({
   role: z.enum(['owner', 'admin', 'member', 'pending']).optional(),
   nickname: z.string().trim().optional(),
-  muted: z.boolean().optional(),
+  isMuted: z.boolean().optional(),
   status: z.string().optional(),
-  ownerId: z.string().uuid().optional(),
 });
 

@@ -34,6 +34,7 @@ import { makeFriendRoutes, makeBlockRoutes, makeFriendRequestRoutes } from "./ro
 import { attachSocketAuth } from "./realtime/authSocket";
 import { attachSockets } from "./realtime/socketServer";
 import { AVATARS_UPLOAD_DIR, ensureUploadDirectories } from "./utils/uploads";
+import { avatarContentType } from "./utils/avatarUpload";
 import type { ClientToServerEvents, ServerToClientEvents } from "../../shared/types";
 
 const honoApp = new Hono();
@@ -58,13 +59,14 @@ honoApp.use('/api/*', makeGlobalRateLimiter());
 void ensureUploadDirectories();
 honoApp.get('/uploads/avatars/*', async (c) => {
   const reqPath = c.req.path.replace('/uploads/avatars/', '');
-  const filePath = path.join(AVATARS_UPLOAD_DIR, path.basename(reqPath));
+  const fileName = path.basename(reqPath);
+  const filePath = path.join(AVATARS_UPLOAD_DIR, fileName);
   const file = Bun.file(filePath);
   if (await file.exists()) {
     return new Response(file, {
       status: 200,
       headers: {
-        'Content-Type': 'image/jpeg',
+        'Content-Type': avatarContentType(fileName),
         'Cache-Control': 'public, max-age=604800, immutable',
         'Cross-Origin-Resource-Policy': 'cross-origin',
       },

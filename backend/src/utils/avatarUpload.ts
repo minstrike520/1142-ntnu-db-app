@@ -15,6 +15,26 @@ const ALLOWED_AVATAR_TYPES: Record<(typeof ALLOWED_AVATAR_MIME_TYPES)[number], s
   'image/webp': '.webp',
 };
 
+const AVATAR_EXTENSION_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+/**
+ * Content-Type for a stored avatar, derived from its extension.
+ *
+ * Avatar uploads accept PNG, GIF, WebP and JPEG, so serving everything as
+ * `image/jpeg` mislabels most of them — a mismatch that clients enforcing
+ * `nosniff` may reject or cache wrongly.
+ */
+export const avatarContentType = (fileName: string): string => {
+  const extension = fileName.toLowerCase().match(/\.[^.]+$/)?.[0];
+  return (extension && AVATAR_EXTENSION_MIME_TYPES[extension]) || 'application/octet-stream';
+};
+
 const hasPrefix = (buffer: Buffer, prefix: number[]): boolean =>
   prefix.every((value, index) => buffer[index] === value);
 

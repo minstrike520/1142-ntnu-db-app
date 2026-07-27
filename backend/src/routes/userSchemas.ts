@@ -79,8 +79,14 @@ export const addEmergencyContactSchema = z.preprocess(
 );
 export type AddEmergencyContactInput = z.input<typeof addEmergencyContactSchema>;
 
+// The handler feeds `now` straight into `new Date(...)`; an unvalidated string
+// yields an Invalid Date, which makes the service's inactiveMs NaN, skips the
+// below-threshold branch and can fire a real emergency alert.
 export const checkInactivitySchema = z.object({
-  now: z.union([z.string(), z.date()]).optional(),
+  now: z.union([
+    z.iso.datetime({ offset: true, message: 'now must be an ISO 8601 datetime' }),
+    z.date(),
+  ]).optional(),
 });
 
 export const sendFriendRequestSchema = z.preprocess(
