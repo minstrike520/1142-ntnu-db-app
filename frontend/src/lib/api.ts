@@ -148,6 +148,15 @@ const runExclusiveRefresh = <T,>(task: () => Promise<T>): Promise<T> => {
   return task();
 };
 
+/**
+ * Refresh the session while holding the cross-tab lock. Callers outside the
+ * automatic 401 retry (e.g. a page bootstrapping its own token) must use this
+ * rather than `refreshTokens`, or two tabs can present the same pre-rotation
+ * cookie and trip the server's reuse detection, revoking every session.
+ */
+export const refreshTokensExclusive = (): Promise<AuthResponse> =>
+  runExclusiveRefresh(() => refreshTokens());
+
 let isRefreshing = false;
 let refreshSubscribers: { resolve: (token: string) => void; reject: (err: unknown) => void }[] = [];
 

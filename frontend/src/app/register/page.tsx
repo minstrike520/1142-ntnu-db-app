@@ -7,6 +7,7 @@ import Image from "next/image";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { register } from "@/lib/api";
+import { readRedirectParam, withRedirectParam } from "@/lib/redirect";
 
 const getFriendlyRegisterError = (error: unknown) => {
   const message = error instanceof Error ? error.message : "";
@@ -26,6 +27,7 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [redirectTo] = useState(readRedirectParam);
 
   useEffect(() => {
     document.title = "Near | Register";
@@ -60,7 +62,7 @@ export default function RegisterPage() {
         }),
       );
       localStorage.setItem("just_registered", "true");
-      router.push("/");
+      router.push(redirectTo);
     } catch (err) {
       setError(getFriendlyRegisterError(err));
     } finally {
@@ -157,7 +159,7 @@ export default function RegisterPage() {
           <p className="text-xs text-text-muted font-sans select-none">
             Already have an account?{" "}
             <Link
-              href="/login"
+              href={withRedirectParam("/login", redirectTo)}
               className="text-primary font-semibold hover:underline"
             >
               Sign in

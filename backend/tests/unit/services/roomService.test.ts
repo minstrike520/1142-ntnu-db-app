@@ -271,6 +271,22 @@ describe('roomService', () => {
       mockMemberRepo.findMember.mockResolvedValue({} as RoomMember);
       await expect(roomService.joinByCode('user-2', 'ABCDEF')).rejects.toThrow(ConflictError);
     });
+
+    it('converts a concurrent-insert unique violation into ConflictError', async () => {
+      mockRepo.findByInviteCode.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue(null);
+      mockMemberRepo.add.mockRejectedValue(Object.assign(new Error('duplicate key'), { code: '23505' }));
+
+      await expect(roomService.joinByCode('user-2', 'ABCDEF')).rejects.toThrow(ConflictError);
+    });
+
+    it('rethrows non-unique-violation database errors', async () => {
+      mockRepo.findByInviteCode.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue(null);
+      mockMemberRepo.add.mockRejectedValue(Object.assign(new Error('connection lost'), { code: '08006' }));
+
+      await expect(roomService.joinByCode('user-2', 'ABCDEF')).rejects.toThrow('connection lost');
+    });
   });
 
   describe('leave', () => {

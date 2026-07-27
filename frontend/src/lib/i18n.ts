@@ -8,7 +8,7 @@ const translations = {
 
 export type Locale = keyof typeof translations;
 
-const isLocale = (value: unknown): value is Locale => value === "zh-TW" || value === "en";
+export const isLocale = (value: unknown): value is Locale => value === "zh-TW" || value === "en";
 
 /**
  * Resolve a dot-separated translation key against a locale, falling back to
@@ -82,13 +82,33 @@ export const getStoredLocale = (): Locale => {
 /** Server snapshot for `useSyncExternalStore`; always the SSR-stable default. */
 export const getServerLocale = (): Locale => DEFAULT_LOCALE;
 
+const localeListeners = new Set<() => void>();
+
 /**
- * Subscribe to cross-tab language changes. Paired with `getStoredLocale` in
+ * Persist the UI language and notify subscribers. The `storage` event only fires
+ * in *other* tabs, so same-tab writes have to notify explicitly.
+ */
+export const setStoredLocale = (locale: Locale): void => {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem("language", locale);
+  } catch {
+    // Ignore quota/privacy-mode failures; the in-memory notification still runs.
+  }
+  localeListeners.forEach((listener) => listener());
+};
+
+/**
+ * Subscribe to language changes. Paired with `getStoredLocale` in
  * `useSyncExternalStore` so server and client agree during hydration and React
  * re-renders once the stored preference is readable.
  */
 export const subscribeToLocale = (onStoreChange: () => void): (() => void) => {
   if (typeof window === "undefined") return () => {};
+  localeListeners.add(onStoreChange);
   window.addEventListener("storage", onStoreChange);
-  return () => window.removeEventListener("storage", onStoreChange);
+  return () => {
+    localeListeners.delete(onStoreChange);
+    window.removeEventListener("storage", onStoreChange);
+  };
 };

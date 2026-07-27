@@ -5,8 +5,21 @@ import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
-import { getActiveAccessToken, getRoomInvitePreview, joinRoomByCode, refreshTokens } from "@/lib/api";
-import { getServerLocale, getStoredLocale, subscribeToLocale, translate } from "@/lib/i18n";
+import {
+  getActiveAccessToken,
+  getMySettings,
+  getRoomInvitePreview,
+  joinRoomByCode,
+  refreshTokensExclusive,
+} from "@/lib/api";
+import {
+  getServerLocale,
+  getStoredLocale,
+  isLocale,
+  setStoredLocale,
+  subscribeToLocale,
+  translate,
+} from "@/lib/i18n";
 import type { RoomInvitePreview } from "@shared/types";
 
 // This page renders outside the `(main)` route group (like `login`/`register`) so a
@@ -47,7 +60,10 @@ export default function InviteAcceptPageContent() {
       let activeToken = getActiveAccessToken();
       if (!activeToken) {
         try {
-          activeToken = (await refreshTokens()).token;
+          // Must hold the cross-tab lock: two invite tabs bootstrapping at once
+          // would otherwise present the same pre-rotation cookie and trip the
+          // server's reuse detection, revoking every session.
+          activeToken = (await refreshTokensExclusive()).token;
         } catch {
           if (!cancelled) {
             window.location.replace(`/login?redirect=${encodeURIComponent(`/invite/${code}`)}`);
@@ -58,6 +74,15 @@ export default function InviteAcceptPageContent() {
       if (cancelled) return;
       setToken(activeToken);
       setStatus("loading");
+
+      // On a browser that has never run the main app there is no stored language,
+      // and this page never mounts the ChatProvider that would load it, so pull
+      // the account preference directly. Failure here only affects wording.
+      void getMySettings(activeToken)
+        .then((settings) => {
+          if (!cancelled && isLocale(settings?.language)) setStoredLocale(settings.language);
+        })
+        .catch(() => {});
 
       try {
         const result = await getRoomInvitePreview(activeToken, code);
