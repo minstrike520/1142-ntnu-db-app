@@ -1,6 +1,6 @@
-import bcrypt from 'bcryptjs';
-import type { IUserRepository } from '../repositories/IUserRepository';
-import type { IEmergencyContactRepository, EmergencyContact } from '../repositories/IEmergencyContactRepository';
+import type { UploadedFile } from '../utils/fileUpload';
+import type { IUserRepository } from '../models/IUserRepository';
+import type { IEmergencyContactRepository, EmergencyContact } from '../models/IEmergencyContactRepository';
 import type {
   RegisterRequest,
   LoginRequest,
@@ -12,23 +12,24 @@ import type {
   User,
   UserProfile,
   UserSettings,
+  FriendResponse,
 } from '../../../shared/types';
 
-import { ConflictError, NotFoundError, ValidationError } from '../errors/AppError';
-import { removeManagedAvatar, saveAvatarUpload } from '../lib/avatarUpload';
+import { ConflictError, NotFoundError, ValidationError } from '../utils/AppError';
+import { removeManagedAvatar, saveAvatarUpload } from '../utils/avatarUpload';
 import {
   updateMeSchema,
   updateSettingsSchema,
   searchQuerySchema,
   type UpdateMeInput,
   type UpdateSettingsInput,
-} from '../validators/userSchemas';
-import { getRefreshTokenTtlMs } from '../auth/refreshTokenTtl';
+} from '../routes/userSchemas';
+import { getRefreshTokenTtlMs } from '../utils/refreshTokenTtl';
 
-import type { IRefreshTokenRepository } from '../repositories/IRefreshTokenRepository';
+import type { IRefreshTokenRepository } from '../models/IRefreshTokenRepository';
 
 interface JwtHelper {
-  signToken(payload: JwtPayload): string;
+  signToken(payload: JwtPayload): Promise<string>;
   generateRefreshToken(): string;
   hashToken(token: string): string;
 }
@@ -78,7 +79,7 @@ export const makeUserService = (
   refreshTokenRepo: IRefreshTokenRepository,
   jwt: JwtHelper,
   notifyEmergencyContact?: (contactId: string, payload: { userId: string; message: string }) => void | Promise<void>,
-  friendRepo?: any,
+  friendRepo?: { getFriends(userId: string): Promise<FriendResponse[]> },
   onUserUpdated?: (userId: string, data: { name?: string; avatarUrl?: string }) => void | Promise<void>,
 ) => {
   const notifyContacts = async (userId: string, fallbackMessage: string): Promise<EmergencyAlertResult> => {
@@ -122,8 +123,8 @@ export const makeUserService = (
         throw new ConflictError('Email already in use');
       }
 
-      const salt = await bcrypt.genSalt(10);
-      const passwordHash = await bcrypt.hash(data.password, salt);
+      // ponytail: Using Bun's native high-performance password hashing
+      const passwordHash = await Bun.password.hash(data.password);
 
       const user = await repo.create({
         email: data.email,
@@ -131,7 +132,7 @@ export const makeUserService = (
         passwordHash
       });
 
-      const token = jwt.signToken({
+      const token = await jwt.signToken({
         userId: user.userId,
         name: user.name
       });
@@ -151,14 +152,20 @@ export const makeUserService = (
         throw new ValidationError('Invalid email or password');
       }
 
-      const isMatch = await bcrypt.compare(data.password, user.passwordHash);
+      // ponytail: Using Bun's native password verification with robust safety catch
+      let isMatch = false;
+      try {
+        isMatch = await Bun.password.verify(data.password, user.passwordHash);
+      } catch {
+        isMatch = false;
+      }
       if (!isMatch) {
         throw new ValidationError('Invalid email or password');
       }
 
       await repo.update(user.userId, { lastActivity: new Date() });
 
-      const token = jwt.signToken({
+      const token = await jwt.signToken({
         userId: user.userId,
         name: user.name
       });
@@ -211,13 +218,19 @@ export const makeUserService = (
         const currentUser = await repo.findById(userId);
         if (!currentUser) throw new NotFoundError('user', userId);
 
-        const isMatch = await bcrypt.compare(parsed.data.currentPassword, currentUser.passwordHash);
+        // ponytail: Using Bun's native password verification with robust safety catch
+        let isMatch = false;
+        try {
+          isMatch = await Bun.password.verify(parsed.data.currentPassword, currentUser.passwordHash);
+        } catch {
+          isMatch = false;
+        }
         if (!isMatch) {
           throw new ValidationError('Incorrect current password');
         }
 
-        const salt = await bcrypt.genSalt(10);
-        updateData.passwordHash = await bcrypt.hash(parsed.data.password, salt);
+        // ponytail: Using Bun's native high-performance password hashing
+        updateData.passwordHash = await Bun.password.hash(parsed.data.password);
       }
 
       const updated = await repo.update(userId, updateData);
@@ -228,7 +241,7 @@ export const makeUserService = (
       return profile;
     },
 
-    async uploadAvatar(userId: string, file: Express.Multer.File): Promise<MyProfile> {
+    async uploadAvatar(userId: string, file: UploadedFile): Promise<MyProfile> {
       const currentUser = await repo.findById(userId);
       if (!currentUser) {
         throw new NotFoundError('user', userId);
@@ -278,7 +291,7 @@ export const makeUserService = (
     },
 
     async deleteMe(userId: string): Promise<void> {
-      await repo.update(userId, { deletedAt: new Date() } as any);
+      await repo.update(userId, { deletedAt: new Date() });
     },
 
     
@@ -332,13 +345,13 @@ export const makeUserService = (
         throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid query');
       }
 
-      let users: any[] = [];
+      let users: SearchUserResult[] = [];
       if (currentUserId && friendRepo) {
         const friendships = await friendRepo.getFriends(currentUserId);
         const searchVal = parsed.data.q.toLowerCase();
 
-        const matchingFriends = friendships.filter((f: any) => {
-          const u = f.friend;
+        const matchingFriends = friendships.filter((f: FriendResponse) => {
+          const u = f.friend as PublicUser & { email?: string };
           if (parsed.data.mode === 'userId') {
             return u.userId.toLowerCase() === searchVal;
           } else if (parsed.data.mode === 'email') {
@@ -354,12 +367,15 @@ export const makeUserService = (
           }
         });
 
-        users = matchingFriends.map((f: any) => ({
-          userId: f.friend.userId,
-          name: f.friend.name,
-          email: f.friend.email,
-          avatarUrl: f.friend.avatarUrl,
-        }));
+        users = matchingFriends.map((f: FriendResponse) => {
+          const u = f.friend as PublicUser & { email?: string };
+          return {
+            userId: u.userId,
+            name: u.name,
+            email: u.email,
+            avatarUrl: u.avatarUrl,
+          };
+        });
       } else {
         const dbUsers = await repo.search(parsed.data.q, parsed.data.mode);
         users = dbUsers.map((u) => ({
@@ -407,7 +423,7 @@ export const makeUserService = (
         throw new ValidationError('User not found or deleted');
       }
 
-      const newAccessToken = jwt.signToken({
+      const newAccessToken = await jwt.signToken({
         userId: user.userId,
         name: user.name,
       });

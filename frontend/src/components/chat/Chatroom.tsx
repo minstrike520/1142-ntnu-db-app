@@ -778,7 +778,9 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
         <div className="bg-surface-muted border-t border-border-primary px-3 md:px-6 py-2 flex items-center justify-between text-xs select-none">
           <div className="flex-1 min-w-0 border-l-2 border-primary pl-2">
             <span className="font-bold text-foreground block">{t("chatroom.replyTo", { name: activeRoom.members?.find((m) => m.userId === replyTarget.senderId)?.nickname || replyTarget.senderName })}</span>
-            <p className="text-text-muted truncate mt-0.5">{replyTarget.content}</p>
+            <p className="text-text-muted truncate mt-0.5">
+              {replyTarget.content || replyTarget.attachments?.[0]?.filename}
+            </p>
           </div>
           <button
             onClick={() => setReplyTarget(null)}

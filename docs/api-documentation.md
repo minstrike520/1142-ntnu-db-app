@@ -48,7 +48,6 @@ This document defines the RESTful API and Socket.IO real-time communication inte
 | **Emergency Contacts** | `GET` | [`/users/me/emergency-contacts`](#get-usersmeemergency-contacts) | Yes | Get emergency contacts list |
 | | `POST` | [`/users/me/emergency-contacts`](#post-usersmeemergency-contacts) | Yes | Add or update emergency contact |
 | | `DELETE` | [`/users/me/emergency-contacts/:contactId`](#delete-usersmeemergency-contactscontactid) | Yes | Delete emergency contact |
-| | `POST` | [`/users/me/emergency-alert`](#post-usersmeemergency-alert) | Yes | Trigger emergency alert immediately to contacts |
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | Yes | Check inactivity to trigger alert automatically |
 
 ### Socket.IO Real-Time Communication
@@ -1316,24 +1315,6 @@ All errors return the following JSON structure:
 
 ---
 
-#### `POST /users/me/emergency-alert`
-- **Description**: Instantly trigger an emergency alert and send a message to all emergency contacts.
-- **Authentication & Authorization**: Authentication required.
-- **Request Body**:
-  | Field | Type | Required | Description |
-  | :--- | :--- | :---: | :--- |
-  | `message` | String | No | Custom message to override the default template |
-- **Request Example**:
-  ```json
-  {
-    "message": "This is a manually triggered instant emergency alert!"
-  }
-  ```
-- **Response**:
-  - `202 Accepted`: Request accepted for processing in the background.
-
----
-
 #### `POST /users/me/emergency-alert/check-inactivity`
 - **Description**: Check if the current user has crossed the inactivity threshold. If met, an alert is automatically dispatched.
 - **Authentication & Authorization**: Authentication required.
@@ -1367,7 +1348,7 @@ All errors return the following JSON structure:
 | :--- | :--- | :--- |
 | `join_room` | `{ roomId: string }` | Subscribe to message broadcasts of a chat room (must be a member) |
 | `leave_room` | `{ roomId: string }` | Unsubscribe |
-| `send_message` | `{ roomId: string, content: string, replyTo?: string, attachmentIds?: string[] }` | Send message; `replyTo` is the referenced message ID; `attachmentIds` is the array of attachment IDs |
+| `send_message` | `{ roomId: string, content: string, replyTo?: string, attachmentIds?: string[] }` | Send message; `replyTo` is the referenced message ID; `attachmentIds` is the array of attachment IDs. Note: `content` can be empty only if at least one attachment ID is provided; otherwise `content` must not be empty. |
 | `recall_message` | `{ messageId: string }` | Recall message (Sender only) |
 | `typing` | `{ roomId: string, isTyping: boolean }` | Broadcast typing state |
 | `read_receipt` | `{ roomId: string, messageId: string }` | Update read receipt cursor to specified message |

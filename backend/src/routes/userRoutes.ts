@@ -1,46 +1,147 @@
-import { Router } from 'express';
-import multer from 'multer';
-import { ValidationError } from '../errors/AppError';
-import { ALLOWED_AVATAR_MIME_TYPES, AVATAR_UPLOAD_MAX_BYTES } from '../lib/avatarUpload';
+import type {
+  MyProfile,
+  UserProfile,
+  UserSettings,
+  SearchUserResult,
+  EmergencyContactResponse,
+} from '@shared/types';
+import type { UploadedFile } from '../utils/fileUpload';
+import type { Context } from 'hono';
+import { Hono } from 'hono';
+import {
+  updateMeSchema,
+  updateSettingsSchema,
+  searchQuerySchema,
+  addEmergencyContactSchema,
+  checkInactivitySchema,
+} from '../routes/userSchemas';
+import { validate } from '../middlewares/validator';
 import { authMiddleware } from '../middlewares/authMiddleware';
 import { testOnlyMiddleware } from '../middlewares/securityMiddleware';
-import type { makeUserController } from '../controllers/userController';
+import { clearRefreshCookie } from '../utils/cookies';
+import { parseSingleFile } from '../utils/fileUpload';
+import { ALLOWED_AVATAR_MIME_TYPES, AVATAR_UPLOAD_MAX_BYTES } from '../utils/avatarUpload';
 
-const avatarUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: AVATAR_UPLOAD_MAX_BYTES,
-    files: 1,
-  },
-  fileFilter: (_req, file, cb) => {
-    if (!ALLOWED_AVATAR_MIME_TYPES.includes(file.mimetype as (typeof ALLOWED_AVATAR_MIME_TYPES)[number])) {
-      return cb(new ValidationError('Unsupported avatar file type'));
-    }
-    cb(null, true);
-  },
-});
+export interface UserService {
+  getMe(userId: string): Promise<MyProfile>;
+  getUserProfile(userId: string): Promise<UserProfile>;
+  updateMe(userId: string, data: unknown): Promise<MyProfile>;
+  uploadAvatar(userId: string, file: UploadedFile): Promise<MyProfile>;
+  getMySettings(userId: string): Promise<UserSettings>;
+  updateMySettings(userId: string, data: unknown): Promise<UserSettings>;
+  deleteMe(userId: string): Promise<void>;
+  search(query: string, mode?: 'name' | 'userId' | 'email', currentUserId?: string): Promise<SearchUserResult[]>;
+  getEmergencyContacts(userId: string): Promise<EmergencyContactResponse[]>;
+  upsertEmergencyContact(userId: string, contactId: string, message: string): Promise<{ contact: EmergencyContactResponse; isUpdate: boolean }>;
+  deleteEmergencyContact(userId: string, contactId: string): Promise<void>;
+  checkInactivity(userId: string, now?: Date): Promise<unknown>;
+}
 
-export const makeUserRoutes = (ctrl: ReturnType<typeof makeUserController>): Router => {
-  const router = Router();
+export const makeUserRoutes = (service: UserService) => {
+  const app = new Hono();
 
-  router.use(authMiddleware);
+  app.use('*', authMiddleware);
 
-  router.get('/me', ctrl.getMe.bind(ctrl));
-  router.post('/me/avatar', avatarUpload.single('file'), ctrl.uploadAvatar.bind(ctrl));
-  router.patch('/me', ctrl.updateMe.bind(ctrl));
-  router.get('/me/settings', ctrl.getMySettings.bind(ctrl));
-  router.patch('/me/settings', ctrl.updateMySettings.bind(ctrl));
-  router.delete('/me', ctrl.deleteMe.bind(ctrl));
-  router.get('/:id', ctrl.getUserProfile.bind(ctrl));
-  router.get('/', ctrl.search.bind(ctrl));
-  router.get('/me/emergency-contacts', ctrl.getEmergencyContacts.bind(ctrl));
-  router.post('/me/emergency-contacts', ctrl.addEmergencyContact.bind(ctrl));
-  router.delete('/me/emergency-contacts/:contactId', ctrl.deleteEmergencyContact.bind(ctrl));
-  router.post(
-    '/me/emergency-alert/check-inactivity',
-    testOnlyMiddleware,
-    ctrl.checkEmergencyInactivity.bind(ctrl),
-  );
+  app.get('/me', async (c) => {
+    const userId = c.get('user').userId;
+    const user = await service.getMe(userId);
+    return c.json(user, 200);
+  });
 
-  return router;
+  app.patch('/me', validate('json', updateMeSchema), async (c) => {
+    const userId = c.get('user').userId;
+    const data = c.req.valid('json');
+    const updated = await service.updateMe(userId, data);
+    return c.json(updated, 200);
+  });
+
+  app.post('/me/avatar', async (c) => {
+    const userId = c.get('user').userId;
+    const file = await parseSingleFile(c, {
+      fieldName: 'file',
+      maxBytes: AVATAR_UPLOAD_MAX_BYTES,
+      allowedMimeTypes: ALLOWED_AVATAR_MIME_TYPES as unknown as string[],
+    });
+    const updated = await service.uploadAvatar(userId, file);
+    return c.json(updated, 200);
+  });
+
+  app.delete('/me', async (c) => {
+    const userId = c.get('user').userId;
+    await service.deleteMe(userId);
+    clearRefreshCookie(c);
+    return c.body(null, 204);
+  });
+
+  app.get('/me/settings', async (c) => {
+    const userId = c.get('user').userId;
+    const settings = await service.getMySettings(userId);
+    return c.json(settings, 200);
+  });
+
+  app.patch('/me/settings', validate('json', updateSettingsSchema), async (c) => {
+    const userId = c.get('user').userId;
+    const data = c.req.valid('json');
+    const updated = await service.updateMySettings(userId, data);
+    return c.json(updated, 200);
+  });
+
+  app.get('/search', validate('query', searchQuerySchema), async (c) => {
+    const queryData = c.req.valid('query') as { q: string; mode?: 'name' | 'userId' | 'email'; friendsOnly?: boolean | string };
+    const currentUserId = queryData.friendsOnly === 'true' || queryData.friendsOnly === true
+      ? c.get('user').userId
+      : undefined;
+    const users = await service.search(queryData.q, queryData.mode, currentUserId);
+    return c.json(users, 200);
+  });
+
+  app.get('/me/emergency-contacts', async (c) => {
+    const userId = c.get('user').userId;
+    const contacts = await service.getEmergencyContacts(userId);
+    return c.json(contacts, 200);
+  });
+
+  app.post('/me/emergency-contacts', validate('json', addEmergencyContactSchema), async (c) => {
+    const userId = c.get('user').userId;
+    const data = c.req.valid('json') as { contactId: string; message: string };
+    const result = await service.upsertEmergencyContact(userId, data.contactId, data.message);
+    return c.json(result.contact, result.isUpdate ? 200 : 201);
+  });
+
+  app.delete('/me/emergency-contacts/:contactId', async (c) => {
+    const userId = c.get('user').userId;
+    const contactId = c.req.param('contactId');
+    await service.deleteEmergencyContact(userId, contactId);
+    // Contract is { success: true } — the frontend types this endpoint that way.
+    return c.json({ success: true }, 200);
+  });
+
+  const handleCheckInactivity = async (c: Context) => {
+    const userId = c.get('user').userId;
+    const data = (await c.req.json().catch(() => ({}))) as { now?: string | Date };
+    const now = data.now ? new Date(data.now) : undefined;
+    const result = await service.checkInactivity(userId, now);
+    return c.json(result, 200);
+  };
+
+  app.post('/me/emergency-alert/check-inactivity', testOnlyMiddleware, validate('json', checkInactivitySchema), handleCheckInactivity);
+  app.post('/me/emergency-contacts/check-inactivity', testOnlyMiddleware, validate('json', checkInactivitySchema), handleCheckInactivity);
+
+  // Search without /search subpath (e.g. GET /api/v1/users?q=...)
+  app.get('/', validate('query', searchQuerySchema), async (c) => {
+    const queryData = c.req.valid('query') as { q: string; mode?: 'name' | 'userId' | 'email'; friendsOnly?: boolean | string };
+    const currentUserId = queryData.friendsOnly === 'true' || queryData.friendsOnly === true
+      ? c.get('user').userId
+      : undefined;
+    const users = await service.search(queryData.q, queryData.mode, currentUserId);
+    return c.json(users, 200);
+  });
+
+  app.get('/:id', async (c) => {
+    const id = c.req.param('id');
+    const user = await service.getUserProfile(id);
+    return c.json(user, 200);
+  });
+
+  return app;
 };

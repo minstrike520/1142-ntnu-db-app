@@ -1,24 +1,22 @@
-FROM node:lts-slim
+FROM oven/bun:1.2-slim
 
 RUN apt-get update -y && apt-get install -y openssl
-RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
 
 RUN mkdir -p /app/uploads/attachments /app/uploads/avatars
 
-# Give the built-in node user ownership of /app before switching
-RUN chown -R node:node /app
+# Give the built-in bun user ownership of /app before switching
+RUN chown -R bun:bun /app
 
-USER node
+USER bun
 
-COPY --chown=node:node package.json pnpm-lock.yaml ./
+COPY --chown=bun:bun package.json pnpm-lock.yaml ./
 
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
-    pnpm install --store-dir /pnpm/store --no-frozen-lockfile --ignore-scripts
+RUN bun install
 
-COPY --chown=node:node . .
+COPY --chown=bun:bun . .
 
 EXPOSE 4000
 
-CMD ["pnpm", "dev"]
+CMD ["bun", "dev"]
