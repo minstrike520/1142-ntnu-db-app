@@ -33,6 +33,20 @@ describe('parseDurationSeconds', () => {
       expect(parseDurationSeconds(value, 900)).toBe(900);
     }
   });
+
+  it('falls back for a value large enough to parse as Infinity', () => {
+    // Number('9'.repeat(400)) is Infinity, which passes a bare `> 0` check and
+    // would serialize the JWT's exp as null instead of expiring the token.
+    for (const digits of [400, 1000]) {
+      const result = parseDurationSeconds('9'.repeat(digits), 900);
+      expect(Number.isFinite(result)).toBe(true);
+      expect(result).toBe(900);
+    }
+  });
+
+  it('still accepts a large but finite duration', () => {
+    expect(parseDurationSeconds('100000', 900)).toBe(100000);
+  });
 });
 
 describe('getAccessTokenTtlSeconds', () => {

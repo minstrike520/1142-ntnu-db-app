@@ -20,8 +20,11 @@ export const parseDurationSeconds = (
   const match = value.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)(s|m|h|d)?$/);
   if (!match) return fallbackSeconds;
 
+  // A long-enough digit string parses to Infinity, which would otherwise sail
+  // past `> 0` and serialize the JWT's `exp` as null — a token with no usable
+  // expiry rather than the documented fallback.
   const seconds = Math.floor(Number(match[1]) * UNIT_SECONDS[match[2] ?? 's']);
-  return seconds > 0 ? seconds : fallbackSeconds;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : fallbackSeconds;
 };
 
 export const getAccessTokenTtlSeconds = (): number =>
