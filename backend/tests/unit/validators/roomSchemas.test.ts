@@ -37,6 +37,13 @@ describe('room validation schemas', () => {
       expect(patchRoomSchema.parse({ owner_id: OWNER_ID })).toEqual({ ownerId: OWNER_ID });
     });
 
+    it('rejects ownerId combined with settings fields', () => {
+      expect(patchRoomSchema.safeParse({ ownerId: OWNER_ID, name: 'X' }).success).toBe(false);
+      expect(patchRoomSchema.safeParse({ ownerId: OWNER_ID, isArchived: true }).success).toBe(false);
+      // Alias form must be rejected too.
+      expect(patchRoomSchema.safeParse({ owner_id: OWNER_ID, name: 'X' }).success).toBe(false);
+    });
+
     it('rejects a malformed ownerId', () => {
       expect(patchRoomSchema.safeParse({ ownerId: 'not-a-uuid' }).success).toBe(false);
     });

@@ -59,6 +59,16 @@ export const patchRoomSchema = z.preprocess(
       ownerId: z.string().uuid('Invalid ownerId').optional(),
     })
     .refine((value) => Object.keys(value).length > 0, atLeastOneField)
+    // The handler transfers ownership and returns immediately, so settings sent
+    // alongside ownerId would be dropped behind a 200. Documented as two separate
+    // requests, and no client combines them — reject rather than lose the update.
+    .refine(
+      (value) => value.ownerId === undefined || Object.keys(value).length === 1,
+      {
+        message: 'ownerId cannot be combined with room setting fields',
+        path: ['ownerId'],
+      }
+    )
 );
 
 export type CreateRoomInput = z.input<typeof createRoomSchema>;

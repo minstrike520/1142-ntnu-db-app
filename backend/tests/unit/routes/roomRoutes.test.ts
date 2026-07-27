@@ -77,12 +77,14 @@ describe('PATCH /rooms/:id', () => {
     expect(service.transferOwnership).not.toHaveBeenCalled();
   });
 
-  it('never forwards ownerId into the settings update payload', async () => {
+  it('rejects ownerId combined with settings instead of dropping them', async () => {
     const res = await patchRoom({ ownerId: NEW_OWNER_ID, name: 'Updated' });
 
-    expect(res.status).toBe(200);
+    // The transfer branch returns immediately, so accepting this would answer 200
+    // while silently discarding `name`.
+    expect(res.status).toBe(400);
+    expect(service.transferOwnership).not.toHaveBeenCalled();
     expect(service.update).not.toHaveBeenCalled();
-    expect(service.transferOwnership).toHaveBeenCalledWith(ROOM_ID, CALLER_ID, NEW_OWNER_ID);
   });
 
   it('still rejects an empty body', async () => {
