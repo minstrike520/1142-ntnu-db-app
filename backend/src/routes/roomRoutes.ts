@@ -3,9 +3,10 @@ import type { UploadedFile } from '../utils/fileUpload';
 import { Hono } from 'hono';
 import {
   createRoomSchema,
-  updateRoomSchema,
+  patchRoomSchema,
   joinByCodeSchema,
   updateMemberSchema,
+  type PatchRoomInput,
 } from '../routes/roomSchemas';
 import { validate } from '../middlewares/validator';
 import { authMiddleware } from '../middlewares/authMiddleware';
@@ -140,11 +141,17 @@ export const makeRoomRoutes = (service: RoomService) => {
     return c.json(room, 200);
   });
 
-  app.patch('/:id', validate('json', updateRoomSchema), async (c) => {
+  app.patch('/:id', validate('json', patchRoomSchema), async (c) => {
     const userId = c.get('user').userId;
     const roomId = c.req.param('id');
-    const body = c.req.valid('json');
-    const updated = await service.update(roomId, userId, body);
+    const { ownerId, ...settings } = c.req.valid('json') as PatchRoomInput;
+
+    if (ownerId) {
+      await service.transferOwnership(roomId, userId, ownerId);
+      return c.json({ message: 'Ownership transferred' }, 200);
+    }
+
+    const updated = await service.update(roomId, userId, settings);
     return c.json(updated, 200);
   });
 

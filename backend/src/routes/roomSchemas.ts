@@ -20,20 +20,43 @@ export const createRoomSchema = z.preprocess(
   })
 );
 
+const roomSettingsFields = {
+  name: z.string().trim().min(1, 'Room name cannot be empty').optional(),
+  avatarUrl: z.string().url('Invalid avatar URL').optional(),
+  requireApproval: z.boolean().optional(),
+  viewHistory: z.boolean().optional(),
+  isArchived: z.boolean().optional(),
+};
+
+const atLeastOneField = {
+  message: 'At least one room field must be provided',
+};
+
 export const updateRoomSchema = z
-  .object({
-    name: z.string().trim().min(1, 'Room name cannot be empty').optional(),
-    avatarUrl: z.string().url('Invalid avatar URL').optional(),
-    requireApproval: z.boolean().optional(),
-    viewHistory: z.boolean().optional(),
-    isArchived: z.boolean().optional(),
-  })
-  .refine((value) => Object.keys(value).length > 0, {
-    message: 'At least one room field must be provided',
-  });
+  .object(roomSettingsFields)
+  .refine((value) => Object.keys(value).length > 0, atLeastOneField);
+
+// PATCH /rooms/:id doubles as the ownership-transfer endpoint, so the route-level
+// schema also accepts `ownerId`; the settings-only shape stays in updateRoomSchema
+// because that is what the service hands to the repository.
+export const patchRoomSchema = z.preprocess(
+  (raw: unknown) => {
+    const data = (raw && typeof raw === 'object' ? raw as Record<string, unknown> : {});
+    const { owner_id: snakeOwnerId, ...rest } = data;
+    const ownerId = data.ownerId ?? snakeOwnerId;
+    return ownerId === undefined ? rest : { ...rest, ownerId };
+  },
+  z
+    .object({
+      ...roomSettingsFields,
+      ownerId: z.string().uuid('Invalid ownerId').optional(),
+    })
+    .refine((value) => Object.keys(value).length > 0, atLeastOneField)
+);
 
 export type CreateRoomInput = z.input<typeof createRoomSchema>;
 export type UpdateRoomInput = z.input<typeof updateRoomSchema>;
+export type PatchRoomInput = z.output<typeof patchRoomSchema>;
 
 export const joinByCodeSchema = z.object({
   inviteCode: z.string().trim().min(1, 'inviteCode is required'),

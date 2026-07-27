@@ -170,4 +170,58 @@ describe('Room Members E2E', () => {
       expect(res.status).toBe(403);
     });
   });
+
+  describe('PATCH /rooms/:id (ownership transfer)', () => {
+    const rolesOf = async () => {
+      const rows = await testPool`
+        SELECT user_id, role FROM room_members WHERE room_id = ${roomId}
+      `;
+      return Object.fromEntries(rows.map((row: { user_id: string; role: string }) => [row.user_id, row.role]));
+    };
+
+    it('should transfer ownership from owner to admin', async () => {
+      const res = await request(app)
+        .patch(`/api/v1/rooms/${roomId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ ownerId: adminId });
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe('Ownership transferred');
+
+      const roles = await rolesOf();
+      expect(roles[adminId]).toBe('owner');
+      expect(roles[ownerId]).toBe('admin');
+    });
+
+    it('should not allow a non-owner to transfer ownership', async () => {
+      const res = await request(app)
+        .patch(`/api/v1/rooms/${roomId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ ownerId: memberId });
+
+      expect(res.status).toBe(403);
+      expect((await rolesOf())[ownerId]).toBe('owner');
+    });
+
+    it('should reject transferring ownership to a pending member', async () => {
+      const res = await request(app)
+        .patch(`/api/v1/rooms/${roomId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ ownerId: pendingId });
+
+      expect(res.status).toBe(400);
+      expect((await rolesOf())[ownerId]).toBe('owner');
+    });
+
+    it('should still update room settings when no ownerId is sent', async () => {
+      const res = await request(app)
+        .patch(`/api/v1/rooms/${roomId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ name: 'Renamed Room' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('Renamed Room');
+      expect((await rolesOf())[ownerId]).toBe('owner');
+    });
+  });
 });
