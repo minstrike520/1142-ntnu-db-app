@@ -10,6 +10,7 @@ import { errorHandler } from '../../../src/middlewares/errorHandler';
 describe('security middleware', () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalRateLimitDisabled = process.env.RATE_LIMIT_DISABLED;
+  const originalTrustProxy = process.env.TRUST_PROXY;
 
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
@@ -17,6 +18,11 @@ describe('security middleware', () => {
       process.env.RATE_LIMIT_DISABLED = originalRateLimitDisabled;
     } else {
       delete process.env.RATE_LIMIT_DISABLED;
+    }
+    if (originalTrustProxy !== undefined) {
+      process.env.TRUST_PROXY = originalTrustProxy;
+    } else {
+      delete process.env.TRUST_PROXY;
     }
   });
 
@@ -34,6 +40,7 @@ describe('security middleware', () => {
 
   it('limits baseline API request volume when enabled', async () => {
     process.env.NODE_ENV = 'production';
+    process.env.TRUST_PROXY = 'true';
     delete process.env.RATE_LIMIT_DISABLED;
     const app = new Hono();
     app.onError(errorHandler);
@@ -91,6 +98,7 @@ describe('security middleware', () => {
 
   it('uses a stricter auth limiter message when enabled', async () => {
     process.env.NODE_ENV = 'production';
+    process.env.TRUST_PROXY = 'true';
     delete process.env.RATE_LIMIT_DISABLED;
     const app = new Hono();
     app.onError(errorHandler);
@@ -105,5 +113,64 @@ describe('security middleware', () => {
 
     const body = await res2.json();
     expect(body.message).toBe('Too many authentication attempts, please try again later');
+  });
+
+  describe('rate limit bucketing', () => {
+    const makeApp = () => {
+      const app = new Hono();
+      app.onError(errorHandler);
+      app.use('/api/ping', makeGlobalRateLimiter({ windowMs: 60_000, limit: 1 }));
+      app.get('/api/ping', (c) => c.json({ ok: true }));
+      return app;
+    };
+
+    it('separates buckets per forwarded IP when the proxy is trusted', async () => {
+      process.env.NODE_ENV = 'production';
+      process.env.TRUST_PROXY = 'true';
+      delete process.env.RATE_LIMIT_DISABLED;
+      const app = makeApp();
+
+      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '10.0.0.1' } })).status).toBe(200);
+      // A different client must not inherit the first client's exhausted budget.
+      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '10.0.0.2' } })).status).toBe(200);
+      // ...while the first one stays limited.
+      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '10.0.0.1' } })).status).toBe(429);
+    });
+
+    it('uses only the first hop of a forwarded chain', async () => {
+      process.env.NODE_ENV = 'production';
+      process.env.TRUST_PROXY = 'true';
+      delete process.env.RATE_LIMIT_DISABLED;
+      const app = makeApp();
+
+      const headers = { 'x-forwarded-for': '10.0.0.9, 172.16.0.1, 192.168.0.1' };
+      expect((await app.request('/api/ping', { headers })).status).toBe(200);
+      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '10.0.0.9' } })).status).toBe(429);
+    });
+
+    it('ignores X-Forwarded-For when the proxy is not trusted', async () => {
+      process.env.NODE_ENV = 'production';
+      delete process.env.TRUST_PROXY;
+      delete process.env.RATE_LIMIT_DISABLED;
+      const app = makeApp();
+
+      // A spoofed header must not be able to pick its own bucket.
+      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '10.0.0.1' } })).status).toBe(200);
+      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '10.0.0.2' } })).status).toBe(200);
+    });
+
+    it('does not funnel header-less callers into one shared bucket', async () => {
+      process.env.NODE_ENV = 'production';
+      delete process.env.TRUST_PROXY;
+      delete process.env.RATE_LIMIT_DISABLED;
+      const app = makeApp();
+
+      // These requests carry neither a trusted header nor socket info. Under the
+      // old fixed 'unknown-ip' key the second one would already be a 429, which
+      // is exactly how one caller could lock out the whole service.
+      expect((await app.request('/api/ping')).status).toBe(200);
+      expect((await app.request('/api/ping')).status).toBe(200);
+      expect((await app.request('/api/ping')).status).toBe(200);
+    });
   });
 });
