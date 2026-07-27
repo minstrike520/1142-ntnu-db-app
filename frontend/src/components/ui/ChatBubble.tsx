@@ -3,7 +3,8 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./Avatar";
 import ProfilePopover from "../chat/ProfilePopover";
-import { downloadAttachment, fetchAttachmentBlobUrl } from "@/lib/api";
+import { fetchAttachmentBlobUrl } from "@/lib/api";
+import { FileDownloaderBridge } from "@/lib/fileDownloaderBridge";
 import { useChat } from "@/context/ChatContext";
 
 export interface Attachment {
@@ -171,6 +172,7 @@ function ImageAttachmentPreview({
 
   return (
     <div className="flex flex-col gap-1">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={blobUrl}
         alt={file.filename}
@@ -345,7 +347,7 @@ export function ChatBubble({
     setDownloadingUrl(file.url);
 
     try {
-      await downloadAttachment(file.url, file.filename);
+      await FileDownloaderBridge.download(file.url, file.filename);
     } catch (error) {
       console.error(error);
       setDownloadError(error instanceof Error ? error.message : "Failed to download attachment");

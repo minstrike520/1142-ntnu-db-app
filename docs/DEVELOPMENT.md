@@ -254,3 +254,36 @@ describe('userRepository', () => {
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
+
+---
+
+## 8. Git Workflow, PR Guidelines & Release Automation
+
+### Git Branching Strategy
+* **Active Development Branch**: The main development branch is `dev`.
+* **Feature Branches**: All feature and bugfix branches must be created from `dev` (e.g. `feat/my-feature` or `fix/my-bug`).
+* **Pull Requests**: Submit all Pull Requests back to the `dev` branch. Direct pushes to `main` or `dev` are prohibited.
+
+### PR Merge Requirement: Squash and Merge
+To keep the commit history clean and prevent cluttered changelogs, **all Pull Requests merged into `dev` must use Squash and Merge**.
+* **PR Title Format**: PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/) format in English:
+  - `feat(scope): short description` - New feature
+  - `fix(scope): short description` - Bug fix
+  - `docs: short description` - Documentation update
+  - `refactor(scope): short description` - Code refactoring
+  - `chore: short description` - Maintenance task
+  - `BREAKING CHANGE:` or `feat!:` - Breaking API or schema changes
+* **Squash Merge Benefit**: Squashing compresses multiple small/WIP commits in a feature branch into a single, clean conventional commit on `dev`.
+
+### Automated Version Release Flow (`dev` → `main`)
+When milestone changes on `dev` are merged into `main`, GitHub Actions (`.github/workflows/ci.yml`) automatically triggers the `release` job running `semantic-release` upon CI completion:
+
+1. **Semantic Versioning (`a.b.c`) Calculation**:
+   - `fix:` → Increments **Patch (`c`)** (e.g. `v1.0.1` → `v1.0.2`)
+   - `feat:` → Increments **Minor (`b`)** (e.g. `v1.0.1` → `v1.1.0`)
+   - `BREAKING CHANGE:` → Increments **Major (`a`)** (e.g. `v1.0.1` → `v2.0.0`)
+   - `docs:`, `chore:`, `refactor:` → No version increment
+2. **Multi-Package Version Sync**: Runs `scripts/update-versions.js` to synchronize `"version"` in root `package.json`, `frontend/package.json`, and `backend/package.json`.
+3. **Changelog & GitHub Release**: Automatically generates `CHANGELOG.md` and publishes formatted **Release Notes directly on the GitHub Release page**.
+4. **Stack Image & Bundle Publication**: Creating tag `vX.Y.Z` triggers `.github/workflows/release-stack.yml`, building & pushing Docker images to GHCR, signing provenance attestations, and attaching `near-chat-stack-vX.Y.Z.tar.gz` deployment bundle to the GitHub Release.
+

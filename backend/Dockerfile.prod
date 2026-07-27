@@ -1,7 +1,6 @@
 # Stage 1: Build/Typecheck the backend application
 FROM oven/bun:1.2-slim AS builder
 ENV CI=true
-
 WORKDIR /workspace
 
 # Copy global configs and shared files
@@ -21,7 +20,6 @@ RUN bun exec tsc --noEmit
 # Stage 2: Create a production runner image
 FROM oven/bun:1.2-slim AS runner
 ENV CI=true
-
 WORKDIR /app
 
 # Create uploads directory structure

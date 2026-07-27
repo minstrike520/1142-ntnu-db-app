@@ -1348,7 +1348,7 @@ All errors return the following JSON structure:
 | :--- | :--- | :--- |
 | `join_room` | `{ roomId: string }` | Subscribe to message broadcasts of a chat room (must be a member) |
 | `leave_room` | `{ roomId: string }` | Unsubscribe |
-| `send_message` | `{ roomId: string, content: string, replyTo?: string, attachmentIds?: string[] }` | Send message; `replyTo` is the referenced message ID; `attachmentIds` is the array of attachment IDs |
+| `send_message` | `{ roomId: string, content: string, replyTo?: string, attachmentIds?: string[] }` | Send message; `replyTo` is the referenced message ID; `attachmentIds` is the array of attachment IDs. Note: `content` can be empty only if at least one attachment ID is provided; otherwise `content` must not be empty. |
 | `recall_message` | `{ messageId: string }` | Recall message (Sender only) |
 | `typing` | `{ roomId: string, isTyping: boolean }` | Broadcast typing state |
 | `read_receipt` | `{ roomId: string, messageId: string }` | Update read receipt cursor to specified message |
