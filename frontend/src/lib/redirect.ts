@@ -1,17 +1,35 @@
 /** Pages that must never be a post-auth destination, or the user loops back to them. */
 const AUTH_PATHNAMES = new Set(["/login", "/register"]);
 
+// Reserved TLD (RFC 2606), so it can never collide with a real deployment origin.
+const RESOLVE_BASE = "http://redirect.invalid";
+
 /**
- * Only ever redirect to a same-origin relative path. Rejects protocol-relative
- * ("//evil.com") and backslash-normalized ("/\evil.com") open-redirect payloads,
- * plus every spelling of the auth pages — comparing the raw string alone would
- * still let "/login?next=x" or "/login/" through.
+ * Only ever redirect to a same-origin relative path.
+ *
+ * Pattern-matching the raw string is not sufficient: the URL parser strips tab
+ * and newline characters before resolving, so a payload like "/\t/evil.example"
+ * (delivered percent-encoded as `%09`, which `URLSearchParams` decodes) looks
+ * like a rooted path to a regex yet resolves to "//evil.example". Everything is
+ * therefore resolved against a sentinel origin first, and only inputs that stay
+ * on that origin are accepted. The parser's normalized output is returned rather
+ * than the caller's string so no smuggled control characters survive.
  */
 export const sanitizeRedirect = (raw: string | null): string => {
-  if (!raw || !/^\/(?![/\\])/.test(raw)) return "/";
+  if (!raw || !raw.startsWith("/")) return "/";
 
-  const pathname = raw.split(/[?#]/)[0].replace(/\/+$/, "") || "/";
-  return AUTH_PATHNAMES.has(pathname) ? "/" : raw;
+  let url: URL;
+  try {
+    url = new URL(raw, RESOLVE_BASE);
+  } catch {
+    return "/";
+  }
+  if (url.origin !== RESOLVE_BASE) return "/";
+
+  const pathname = url.pathname.replace(/\/+$/, "") || "/";
+  if (AUTH_PATHNAMES.has(pathname)) return "/";
+
+  return `${url.pathname}${url.search}${url.hash}`;
 };
 
 /** Read and sanitize the `redirect` query parameter of the current URL. */
