@@ -43,7 +43,10 @@ describe('removeManagedAvatar', () => {
   const createdFiles: string[] = [];
 
   const makeManagedFile = async (ownerId: string): Promise<string> => {
-    ensureUploadDirectories();
+    // Must be awaited: `uploads/` is gitignored, so on a fresh checkout the
+    // avatars directory does not exist yet and the write below races the
+    // directory creation, failing with ENOENT.
+    await ensureUploadDirectories();
     const fileName = `${ownerId}-${crypto.randomUUID()}.png`;
     const fullPath = path.join(AVATARS_UPLOAD_DIR, fileName);
     await fs.writeFile(fullPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
