@@ -1,7 +1,7 @@
 import type { ChatServer } from './authSocket';
 
 interface FriendPresenceDeps {
-  getFriends(userId: string): Promise<any[]>;
+  getFriends(userId: string): Promise<{ friend: { userId: string } }[]>;
 }
 
 // Map of userId -> Set of socketId

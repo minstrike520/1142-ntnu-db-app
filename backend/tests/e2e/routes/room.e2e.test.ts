@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
 import request from 'supertest';
-let app: any;
 import { resetDb } from '../../helpers/resetDb';
+
+let app: any;
 
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
@@ -66,6 +67,24 @@ describe('Room E2E', () => {
     expect(res.body.roomId).toBeDefined();
     expect(res.body.type).toBe('group');
     expect(res.body.name).toBe('Test Room');
+  });
+
+  it('should reject creating a group without a name', async () => {
+    // `type` defaults to 'group', so both of these would otherwise persist a
+    // room with name = NULL.
+    for (const payload of [{}, { type: 'group' }]) {
+      const res = await request(app)
+        .post('/api/v1/rooms')
+        .set('Authorization', `Bearer ${token}`)
+        .send(payload);
+
+      expect(res.status).toBe(400);
+    }
+
+    const list = await request(app)
+      .get('/api/v1/rooms')
+      .set('Authorization', `Bearer ${token}`);
+    expect(list.body.length).toBe(0);
   });
 
   it('should list rooms', async () => {

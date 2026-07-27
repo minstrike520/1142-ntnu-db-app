@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'bun:test';
 import request from 'supertest';
 import { resetDb } from '../../helpers/resetDb';
+import { testPool } from '../../helpers/testPool';
 
 let app: any;
 
@@ -61,14 +62,12 @@ describe('Room Members E2E', () => {
       .send({ type: 'group', name: 'Test Room', requireApproval: true });
     roomId = res.body.roomId;
 
-    const { Pool } = await import('pg');
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL_TEST });
-    
-    await pool.query('INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, $3)', [roomId, adminId, 'admin']);
-    await pool.query('INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, $3)', [roomId, memberId, 'member']);
-    await pool.query('INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, $3)', [roomId, pendingId, 'pending']);
-    
-    await pool.end();
+    const adminRole = 'admin';
+    const memberRole = 'member';
+    const pendingRole = 'pending';
+    await testPool`INSERT INTO room_members (room_id, user_id, role) VALUES (${roomId}, ${adminId}, ${adminRole})`;
+    await testPool`INSERT INTO room_members (room_id, user_id, role) VALUES (${roomId}, ${memberId}, ${memberRole})`;
+    await testPool`INSERT INTO room_members (room_id, user_id, role) VALUES (${roomId}, ${pendingId}, ${pendingRole})`;
   });
 
   describe('POST /rooms/:id/members/:userId/approve', () => {
@@ -169,6 +168,60 @@ describe('Room Members E2E', () => {
         .delete(`/api/v1/rooms/${roomId}/members/${ownerId}`)
         .set('Authorization', `Bearer ${adminToken}`);
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe('PATCH /rooms/:id (ownership transfer)', () => {
+    const rolesOf = async () => {
+      const rows = await testPool`
+        SELECT user_id, role FROM room_members WHERE room_id = ${roomId}
+      `;
+      return Object.fromEntries(rows.map((row: { user_id: string; role: string }) => [row.user_id, row.role]));
+    };
+
+    it('should transfer ownership from owner to admin', async () => {
+      const res = await request(app)
+        .patch(`/api/v1/rooms/${roomId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ ownerId: adminId });
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe('Ownership transferred');
+
+      const roles = await rolesOf();
+      expect(roles[adminId]).toBe('owner');
+      expect(roles[ownerId]).toBe('admin');
+    });
+
+    it('should not allow a non-owner to transfer ownership', async () => {
+      const res = await request(app)
+        .patch(`/api/v1/rooms/${roomId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ ownerId: memberId });
+
+      expect(res.status).toBe(403);
+      expect((await rolesOf())[ownerId]).toBe('owner');
+    });
+
+    it('should reject transferring ownership to a pending member', async () => {
+      const res = await request(app)
+        .patch(`/api/v1/rooms/${roomId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ ownerId: pendingId });
+
+      expect(res.status).toBe(400);
+      expect((await rolesOf())[ownerId]).toBe('owner');
+    });
+
+    it('should still update room settings when no ownerId is sent', async () => {
+      const res = await request(app)
+        .patch(`/api/v1/rooms/${roomId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ name: 'Renamed Room' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('Renamed Room');
+      expect((await rolesOf())[ownerId]).toBe('owner');
     });
   });
 });
