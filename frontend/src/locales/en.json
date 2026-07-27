@@ -333,5 +333,15 @@
     "renameFailed": "Failed to rename folder",
     "deleteFailed": "Failed to delete folder",
     "confirmAction": "Confirm"
+  },
+  "chatFilter": {
+    "filterAll": "All",
+    "filterDm": "DM",
+    "filterGroup": "Group",
+    "filterUnread": "Unread",
+    "sortLabel": "Sort",
+    "sortCustom": "Custom",
+    "sortUnread": "Unread first",
+    "emptyResult": "No matching chats"
   }
 }
