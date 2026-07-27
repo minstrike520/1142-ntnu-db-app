@@ -2,7 +2,7 @@
 
 本文件記錄 issue #328 所要求的調查：後端目前只透過 `HttpOnly` Cookie（`backend/src/auth/cookies.ts`）傳遞 refresh token，回應內容（body）中完全沒有備援欄位，未來的 Flutter 桌面／行動用戶端該如何攜帶與儲存此憑證。
 
-**決策（TL;DR）：維持現有以 Cookie 為基礎的 `/auth/refresh` 契約不變（方案 A，「Cookie 模擬」）。原生用戶端不使用通用的 cookie jar 套件；改由 `dio` 攔截器從 `/auth/register`、`/auth/login`、`/auth/refresh` 回應中的原始 `Set-Cookie` Header 解析出 `refresh_token` 的值，連同其 `Secure` 旗標一併儲存於 `flutter_secure_storage`（每次送出時都對照當下 base URL 重新驗證，而非只驗證一次），並在呼叫 `/auth/refresh` 與 `/auth/logout` 時手動附上 `Cookie: refresh_token=<value>` 請求 Header，兩者共用同一個 single-flight 鎖，桌面版並強制單一執行個體以避免跨程序競態。不需要變更後端 API 契約——但後端輪替設計中一個既有、尚未解決的缺口（伺服器完成輪替後遺失回應）仍然存在，詳見下方「限制」段落。**
+**決策（TL;DR）：維持現有以 Cookie 為基礎的 `/auth/refresh` 契約不變（方案 A，「Cookie 模擬」）。原生用戶端不使用通用的 cookie jar 套件；改由 `dio` 攔截器從 `/auth/register`、`/auth/login`、`/auth/refresh` 回應中的原始 `Set-Cookie` Header 解析出 `refresh_token` 的值，連同其 `Secure` 旗標、簽發 origin 與到期時間一併儲存於 `flutter_secure_storage`——這三項都必須在每次送出時對照當下 base URL 與時鐘重新驗證，而非只在寫入時驗證一次。攔截器在呼叫 `/auth/refresh` 與 `/auth/logout` 時手動附上 `Cookie: refresh_token=<value>` 請求 Header，兩者共用同一個 single-flight 鎖（並以 session 世代機制確保過期的 refresh 回應無法復原已完成的登出），桌面版強制單一執行個體以避免跨程序競態，登出時並一併清除記憶體中的存取權杖。不需要變更後端 API 契約——但後端輪替設計中有兩個既有、尚未解決的缺口（輪替成功後遺失回應，以及輪替更新並非真正的 compare-and-swap），詳見下方「已知限制」段落。**
 
 ## 背景
 
@@ -86,21 +86,34 @@ $ curl -v -b cookies.txt -X POST http://192.0.2.2:4099/api/v1/auth/refresh
 
 | `flutter_secure_storage` 鍵名 | 值 | 寫入時機 | 清除時機 |
 | :--- | :--- | :--- | :--- |
-| `refresh_token` | 從 `Set-Cookie` 回應 Header 中 `refresh_token=` 區段解析出的原始值，**僅在下方屬性檢查通過時才寫入**（`Path`／`SameSite` 忽略——生命週期由 App 端自行管理，不依賴 cookie 語意） | `POST /auth/register`、`POST /auth/login`、`POST /auth/refresh` 成功時 | `POST /auth/logout`（用戶端主動觸發），以及 `POST /auth/refresh` 回傳 `400`／`401` 時（對應伺服器端 `authController.refresh` 在 `ValidationError` 時清除自身 cookie 的邏輯） |
+| `refresh_token` | 從 `Set-Cookie` 回應 Header 中 `refresh_token=` 區段解析出的原始值，**僅在下方各項屬性檢查皆通過時才寫入**（`Path`／`SameSite` 忽略——生命週期由 App 端自行管理，不依賴 cookie 語意） | `POST /auth/register`、`POST /auth/login`、`POST /auth/refresh` 成功時 | `POST /auth/logout`（用戶端主動觸發）、`POST /auth/refresh` 回傳 `400`／`401` 時，以及下方任一屬性檢查失敗時（對應伺服器端 `authController.refresh` 在 `ValidationError` 時清除自身 cookie 的邏輯） |
 | `refresh_token_secure` | `"1"` 表示產生目前 `refresh_token` 的 `Set-Cookie` 帶有 `Secure` 屬性，`"0"` 表示沒有。必須與 `refresh_token` 同步寫入／清除——絕不可只讀取 `refresh_token` 而不一併讀取此旗標。 | 與 `refresh_token` 相同 | 與 `refresh_token` 相同 |
-| `access_token` | 不持久化，僅保存於記憶體中（Riverpod 狀態）；App 冷啟動時以持久化的 `refresh_token` 透過 `/auth/refresh` 重新取得。由於存取權杖僅 15 分鐘有效，持久化的效益本就不高，此設計可縮小其暴露於磁碟的時間窗。 | — | App 重新啟動（因僅存於記憶體，本就會自然清除） |
+| `refresh_token_origin` | 簽發目前 `refresh_token` 的 API base URL 完整 origin（`scheme://host:port`），例如 `https://api.example.com`。用以還原真實 Cookie 原有的 host-only 隔離（`cookies.ts` 未設定 `Domain` 屬性，因此後端簽發的 Cookie 本來就是 host-only；此鍵存在的唯一目的，就是在手動模擬下補回這道傳輸層本來就有、但模擬機制沒有的邊界）。 | 與 `refresh_token` 相同 | 與 `refresh_token` 相同 |
+| `refresh_token_expires_at` | 同一份 `Set-Cookie` 的 `Max-Age`／`Expires`，換算為絕對 epoch 時間戳。通常等同 `getRefreshTokenTtlMs()`（14 天），但仍需獨立記錄，因為 `backend/src/auth/cookies.ts` 允許將 `REFRESH_COOKIE_MAX_AGE_MS` 設得比資料庫端 TTL 更短（本專案目前的 `.env`／`docker-compose*.yml` 皆未設定此變數，但程式碼路徑確實存在）——原生用戶端若忽略它，會在瀏覽器早已丟棄 Cookie 之後仍繼續送出該權杖。 | 與 `refresh_token` 相同 | 與 `refresh_token` 相同 |
+| `access_token` | 不持久化，僅保存於記憶體中（Riverpod 狀態）；App 冷啟動時以持久化的 `refresh_token` 透過 `/auth/refresh` 重新取得。由於存取權杖僅 15 分鐘有效，持久化的效益本就不高，此設計可縮小其暴露於磁碟的時間窗。 | — | App 重新啟動（因僅存於記憶體，本就會自然清除），**以及登出時與 `/auth/refresh` 回傳 `400`／`401` 時必須明確清除**——`authController.logout` 只能撤銷 refresh token，無法撤銷已簽發的無狀態 JWT 存取權杖；若登出後不動記憶體中的值，同一個仍在執行的 App 程序內的程式碼，仍可在其剩餘最長 15 分鐘的效期內繼續呼叫受保護 API。登出與 refresh 遭拒必須在同一步驟中清除此值並將 `AuthNotifier` 導向 `unauthenticated`，而不是等待程序結束。 |
 
-**`Secure` 屬性仍須遵守，不可忽略——且必須在每次送出時重新檢查，而非只在寫入時檢查一次。** `backend/src/auth/cookies.ts` 僅在 `NODE_ENV` 為 `development`／`test` 時省略 `Secure`——在其餘任何環境（即正式環境）下，此 Cookie 都被標記為 `Secure`，目的正是確保它絕不會透過純 HTTP 傳送。若原生用戶端無視此屬性、一律儲存並重送權杖，一旦有人以純 HTTP 連線正式環境的 release build，就會直接破壞這道防護。只在權杖首次寫入時檢查也不夠：App 設定的 base URL 可能在權杖儲存之後才改變（App 更新、切換 build flavor，或使用者手動改連別的後端），因此攔截器必須將 `Secure` 旗標與權杖一併持久化（即上表的 `refresh_token_secure`），並在每次 `onRequest` 時，對照*當下*的 base URL scheme 重新驗證——而非只在儲存當下驗證一次。若 `refresh_token_secure` 為 `"1"` 且目前 base URL scheme 不是 `https`，應拒絕附上該 Cookie，並將已儲存的權杖視為無效（刪除它、將 `AuthNotifier` 導向 `unauthenticated`），而不是透過純 HTTP 洩漏它，也不是靜默丟棄一個原本合法的 development 權杖。
+**下列三項屬性必須與權杖一併持久化，並在每次送出時重新檢查，而非只在寫入時檢查一次**（依 review 回饋，將本文件先前版本僅涵蓋 `Secure` 的規則，擴及 host 綁定與到期時間）：
+
+1. **`Secure`。** `backend/src/auth/cookies.ts` 僅在 `NODE_ENV` 為 `development`／`test` 時省略 `Secure`——在其餘任何環境（即正式環境）下，此 Cookie 都被標記為 `Secure`，目的正是確保它絕不會透過純 HTTP 傳送。App 設定的 base URL 可能在權杖儲存之後才改變（App 更新、切換 build flavor，或使用者手動改連別的後端），因此必須在每次 `onRequest` 時對照*當下*的 base URL scheme 重新驗證：若 `refresh_token_secure` 為 `"1"` 且目前 scheme 不是 `https`，應拒絕附上該 Cookie，並將已儲存的權杖視為無效。
+2. **簽發 origin（`refresh_token_origin`）。** 真實瀏覽器 Cookie 預設為 host-only（`cookies.ts` 未設定 `Domain` 屬性），因此由 `api-a.example` 簽發的 Cookie 絕不會被送往 `api-b.example`。手動模擬機制若不明確檢查，就沒有等效的隔離——base URL 從一個 HTTPS 主機改為另一個 HTTPS 主機時，會靜默地把前者簽發的權杖重放給後者。必須在每次 `onRequest` 時比對當下 base URL 的 origin 與 `refresh_token_origin`，只要不符即拒絕附上 Cookie 並將權杖視為無效。
+3. **到期時間（`refresh_token_expires_at`）。** 每次 `onRequest` 時與當下時間比對；若已過期，比照無效權杖處理（不附上 Cookie，讓請求正常收到 401，或主動清除並強制重新登入）。
+
+上述三種情況的失敗處理方式一致：拒絕附上 `Cookie` Header、刪除四個 `refresh_token*` 鍵，並將 `AuthNotifier` 導向 `unauthenticated`——絕不可靜默降級為「照樣送出」，也不可靜默丟棄一個原本合法的權杖。
 
 送出請求的處理方式（`dio` 攔截器，供 #332 實作）：
-- 針對 `POST /auth/refresh` 與 `POST /auth/logout` 的 `onRequest`：從安全儲存讀出 `refresh_token`／`refresh_token_secure`，依上述規則對照目前 base URL scheme 重新驗證，通過後才設定請求 Header `Cookie: refresh_token=<value>`。登出也必須附上此 Header——`authController.logout` 只有在能從請求中讀到 cookie 時才會呼叫 `revokeToken`，若登出時漏帶，會導致清除了本地儲存，但伺服器端的權杖仍維持有效，直到最長 14 天後自然過期。
-- 針對 `/auth/register`、`/auth/login`、`/auth/refresh` 的 `onResponse`：讀取 `set-cookie` 回應 Header，解析出 `refresh_token=<value>` 區段與 `Secure` 旗標，僅在上述 `Secure` 檢查通過時才將權杖與其 `refresh_token_secure` 旗標一併寫入安全儲存（覆蓋舊值——權杖每次呼叫皆會輪替）。
-- 當 `/auth/refresh` 回傳 `400`／`401`：刪除已儲存的 `refresh_token`／`refresh_token_secure`，並將 `AuthNotifier` 導向 `unauthenticated`（#333 的啟動時 session 恢復流程應將「本地無 `refresh_token`」與「refresh 呼叫遭拒」視為相同情況處理）。
+- 針對 `POST /auth/refresh` 與 `POST /auth/logout` 的 `onRequest`：從安全儲存讀出四個 `refresh_token*` 鍵，依上述規則對照目前 base URL 與時鐘重新驗證 `Secure`／origin／到期時間，三者皆通過後才設定請求 Header `Cookie: refresh_token=<value>`。登出也必須附上此 Header——`authController.logout` 只有在能從請求中讀到 cookie 時才會呼叫 `revokeToken`，若登出時漏帶，會導致清除了本地儲存，但伺服器端的權杖仍維持有效，直到最長 14 天後自然過期。
+- 針對 `/auth/register`、`/auth/login`、`/auth/refresh` 的 `onResponse`：讀取 `set-cookie` 回應 Header，解析出 `refresh_token=<value>` 區段及其 `Secure` 旗標與 `Max-Age`／`Expires`，僅在上述 `Secure` 檢查通過時才將權杖與三項衍生屬性一併寫入安全儲存（覆蓋舊值——權杖每次呼叫皆會輪替）。
+- 當 `/auth/refresh` 回傳 `400`／`401`：刪除已儲存的四個 `refresh_token*` 鍵與記憶體中的 `access_token`，並將 `AuthNotifier` 導向 `unauthenticated`（#333 的啟動時 session 恢復流程應將「本地無 `refresh_token`」與「refresh 呼叫遭拒」視為相同情況處理）。
 - **登出與 refresh 必須共用同一個 single-flight 互斥區段**，不能只讓 refresh 單獨序列化。若在 refresh 進行中發起登出，兩者不可交錯執行：可以讓登出等待進行中的 refresh 結束後再清除並撤銷；但更簡單、也更建議的做法是——登出取得同一把鎖後，任何在此之後才抵達的 refresh 回應一律捨棄、不寫回。具體做法：以單調遞增的 session 世代（generation）計數器包住此互斥區段；refresh 的 `onResponse` 在請求發起時記下當時的世代，只有在回應抵達時世代仍相同才允許寫回輪替後的權杖。若不這麼做，一次剛好在使用者登出前於伺服器端完成輪替的 refresh，其回應可能在登出清除儲存「之後」才抵達，把新權杖寫回去，使下次冷啟動時悄悄復原本應登出的工作階段。
 - **Single-flight 不能只侷限於單一程序（process）。** 與行動裝置不同，Flutter 桌面版可能同時有多個程序共用同一份 OS Keychain／DPAPI 支援的 `flutter_secure_storage`（例如使用者把 App 開了兩次）。僅限程序內的 `Future`／鎖只能協調同一程序內的 refresh 呼叫；兩個程序可能都在對方寫回輪替後權杖之前讀到同一份舊值，其中較晚寫回的一方會觸發伺服器的重用偵測，撤銷該使用者的所有工作階段。因此桌面版必須擇一：在啟動時強制單一執行個體（第二次啟動導向既有視窗，而非另起新程序——這是此類問題的標準解法），或以作業系統層級的跨程序鎖（例如安全儲存底層檔案旁的 lock file）包住「讀取—刷新—寫回」的臨界區段。本 ADR 建議採用單一執行個體，因為做法較單純，且 #333 本就需要設計殼層／視窗架構，可以自然地一併納入。
 
-**以下限制繼承自既有後端設計，並非本 ADR 新引入：** 若網路在後端 `userService.refresh`（`backend/src/services/userService.ts`）已完成輪替交易之後、但用戶端收到 `Set-Cookie` 回應之前中斷，用戶端仍只持有舊權杖。即使是完全遵守 single-flight、單一執行個體等規範的用戶端，下次使用該舊權杖時仍會命中重用偵測分支，觸發 `revokeAllForUser`，讓使用者所有裝置都因為一次暫時性斷線而被強制登出，而非因為真的發生憑證外洩。這並非本 ADR 新增的風險：現有 Web 用戶端今天就有相同曝險（伺服器完成輪替與瀏覽器收到 `Set-Cookie` 之間若連線中斷，結果完全相同），只是在一般有線／Wi-Fi 連線下較不容易發生，行動數據網路下機率較高。要徹底解決需要伺服器端的配合（例如輪替後短暫寬限期，讓緊接在前的舊權杖仍可再用一次），而這已超出本 issue 範圍（「本 issue 僅止於提案，不修改 `backend/` 程式碼」）。本 ADR 不解決此問題，而是將其明確列為留給後端 refresh 輪替邏輯負責人裁決的後續決策，而非默默假設原生策略已經處理好這個情況便逕行採用。
-- **Refresh 呼叫必須序列化（single-flight），不可每個請求各自呼叫。** 後端將「重複使用已輪替失效的 refresh token」視為憑證外洩，會呼叫 `revokeAllForUser`（`backend/src/services/userService.ts`）撤銷該使用者的所有權杖。若多個並發請求同時收到 `401`，各自以同一份已儲存的 refresh token 呼叫 `/auth/refresh`，只有第一個會成功，其餘會重用已輪替失效的舊權杖，進而觸發整個帳號的權杖全部被撤銷。現有 Web 用戶端已針對此情況做了防護（`frontend/src/lib/api.ts` 的 `runExclusiveRefresh`／`isRefreshing` 搭配訂閱佇列）；Flutter 攔截器必須實作等效機制——例如以單一進行中的 `Future`／鎖包住 `/auth/refresh`，讓並發的 401 共用同一次 refresh，而非各自發起。
+## 繼承自既有後端設計、並非本 ADR 新引入的已知限制
+
+以下兩項皆為 `backend/src/services/userService.ts` 與 `backend/src/repositories/refreshTokenRepository.ts` 既有的性質，本 ADR 的用戶端設計無法單方面解決，因為修正需要變更 `backend/`，而這已超出 issue #328 的範圍（「本 issue 僅止於提案，不修改 `backend/` 程式碼」）。兩者今天對現有 Web 用戶端的影響完全相同——都不是由上述原生策略引入，也不是原生端獨有。本 ADR 選擇明確記錄，而非默默假設它們已被處理便逕行採用；是否修正、如何修正，屬於後端 refresh 輪替邏輯負責人的決策。
+
+1. **輪替成功但回應遺失。** 若網路在後端 `userService.refresh` 完成輪替交易之後、但用戶端收到 `Set-Cookie` 回應之前中斷，用戶端仍只持有舊權杖。即使是完全遵守 single-flight、單一執行個體等規範的用戶端，下次使用該舊權杖時仍會命中重用偵測分支，觸發 `revokeAllForUser`，讓使用者所有裝置都因為一次暫時性斷線而被強制登出，而非因為真的發生憑證外洩。此情況在行動數據網路下較容易發生，但現有 Web 用戶端今天有完全相同的曝險。要徹底解決需要伺服器端的配合，例如輪替後設一段短暫寬限期，允許緊接在前的舊權杖再被使用一次。
+
+2. **輪替本身並非 compare-and-swap。** `refreshTokenRepository.rotate()` 先插入新權杖資料列，接著無條件執行 `UPDATE refresh_tokens SET revoked_at = NOW(), replaced_by = $2 WHERE token_id = $1`——該 `UPDATE` 並未附加 `revoked_at IS NULL` 條件，而 `userService.refresh` 也只有在 `findByHash` 讀到的資料列於「讀取當下」即為 `revoked_at IS NOT NULL` 時，才會進入重用偵測路徑（`revokeAllForUser`）。若兩次 `/auth/refresh` 都持同一份仍然有效的舊權杖，且雙方都在對方的 `rotate()` 交易提交前就完成 `findByHash`——注意這是「同一份權杖被真正並發地提出」，而非單一用戶端的並發 401（後者已由 single-flight 防住）——則 Postgres 的資料列鎖雖會把兩次 `UPDATE` 序列化，卻不會阻止第二次成功：兩個交易都會插入有效的新權杖資料列，而舊資料列的 `replaced_by` 最終指向較晚提交的那一方，等於默默丟棄「另一個後繼權杖同樣已被簽發」這項事實。結果是一次輪替產生兩個各自有效的後繼權杖，而非第二個呼叫者被判定為重用並遭撤銷——與上述第 1 點方向相反的失效模式，但同樣源自缺少原子性。要收斂此問題，必須改用條件式更新（例如 `... WHERE token_id = $1 AND revoked_at IS NULL` 並檢查受影響筆數），或在決定要輪替或判定重用之前，先對舊資料列執行明確的 `SELECT ... FOR UPDATE`。
 
 ## 本 PR 一併修正的文件錯誤
 
