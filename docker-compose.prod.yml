@@ -19,12 +19,8 @@ services:
     build:
       context: .
       dockerfile: ./backend/Dockerfile.prod
-    # Deliberately no published port: the backend is reachable only over the
-    # compose network, via the cloudflared tunnel. Publishing it alongside
-    # TRUST_PROXY=true would let a direct caller spoof X-Forwarded-For and pick
-    # their own rate-limit bucket.
-    expose:
-      - "4000"
+    ports:
+      - "4005:4000"
     environment:
       - NODE_ENV=${NODE_ENV}
       - PORT=${PORT}
@@ -32,11 +28,7 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
-      # Safe here because the backend is not published: the only peer is the
-      # cloudflared tunnel, so its X-Forwarded-For is the real client IP. Without
-      # this, every tunnelled request shares the tunnel container's address and
-      # one bucket — ten auth attempts would lock out the whole service.
-      - TRUST_PROXY=${TRUST_PROXY:-true}
+      - TRUST_PROXY=${TRUST_PROXY:-false}
       - CORS_ORIGINS=${CORS_ORIGINS}
       - ATTACHMENT_TYPE_RESTRICTION_ENABLED=${ATTACHMENT_TYPE_RESTRICTION_ENABLED:-false}
       - ATTACHMENT_ALLOWED_MIME_TYPES=${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
