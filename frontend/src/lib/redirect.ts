@@ -29,7 +29,12 @@ export const sanitizeRedirect = (raw: string | null): string => {
   const pathname = url.pathname.replace(/\/+$/, "") || "/";
   if (AUTH_PATHNAMES.has(pathname)) return "/";
 
-  return `${url.pathname}${url.search}${url.hash}`;
+  // Matching the parsed origin is not on its own enough: naming the sentinel host
+  // in a protocol-relative input ("//redirect.invalid//evil.example") keeps the
+  // origin intact while leaving a protocol-relative *pathname* behind. Validate
+  // the string actually handed to the router, which is what gets navigated to.
+  const target = `${url.pathname}${url.search}${url.hash}`;
+  return /^\/(?![/\\])/.test(target) ? target : "/";
 };
 
 /** Read and sanitize the `redirect` query parameter of the current URL. */
