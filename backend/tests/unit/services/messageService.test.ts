@@ -1,15 +1,19 @@
-import { describe, it, expect, vi, beforeEach, type Mocked } from 'vitest';
+import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { makeMessageService } from '../../../src/services/messageService';
-import { ForbiddenError, NotFoundError, ValidationError } from '../../../src/errors/AppError';
-import type { IMessageRepository } from '../../../src/repositories/IMessageRepository';
-import type { IRoomMemberRepository } from '../../../src/repositories/IRoomMemberRepository';
-import type { IRoomRepository } from '../../../src/repositories/IRoomRepository';
+import { ForbiddenError, NotFoundError, ValidationError } from '../../../src/utils/AppError';
+import type { IMessageRepository } from '../../../src/models/IMessageRepository';
+import type { IRoomMemberRepository } from '../../../src/models/IRoomMemberRepository';
+import type { IRoomRepository } from '../../../src/models/IRoomRepository';
 import type { Message, MessageWithSender, Room, RoomMember } from '../../../../shared/types';
 
+type Mocked<T> = {
+  [P in keyof T]: T[P] extends Function ? Mock<any> : T[P];
+};
+
 describe('messageService', () => {
-  let messageRepo: Mocked<IMessageRepository>;
-  let roomRepo: Mocked<IRoomRepository>;
-  let roomMemberRepo: Mocked<IRoomMemberRepository>;
+  let messageRepo: any;
+  let roomRepo: any;
+  let roomMemberRepo: any;
   let messageService: ReturnType<typeof makeMessageService>;
 
   const room: Room = {
@@ -19,6 +23,7 @@ describe('messageService', () => {
     requireApproval: false,
     viewHistory: true,
     isArchived: false,
+    isReadonly: false,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
   };
 
@@ -50,26 +55,26 @@ describe('messageService', () => {
 
   beforeEach(() => {
     messageRepo = {
-      findById: vi.fn(),
-      findByRoom: vi.fn(),
-      create: vi.fn(),
-      markRecalled: vi.fn(),
+      findById: mock(),
+      findByRoom: mock(),
+      create: mock(),
+      markRecalled: mock(),
     };
     roomRepo = {
-      findById: vi.fn(),
-      findByInviteCode: vi.fn(),
-      findByMember: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      delete: vi.fn(),
+      findById: mock(),
+      findByInviteCode: mock(),
+      findByMember: mock(),
+      create: mock(),
+      update: mock(),
+      delete: mock(),
     };
     roomMemberRepo = {
-      findMember: vi.fn(),
-      findByRoom: vi.fn(),
-      add: vi.fn(),
-      update: vi.fn(),
-      remove: vi.fn(),
-      resolveMentions: vi.fn(),
+      findMember: mock(),
+      findByRoom: mock(),
+      add: mock(),
+      update: mock(),
+      remove: mock(),
+      resolveMentions: mock(),
     };
     messageService = makeMessageService(messageRepo, roomRepo, roomMemberRepo);
   });
@@ -350,7 +355,7 @@ describe('messageService', () => {
   it('recallMessage allows room admin to recall member messages', async () => {
     const recalled: MessageWithSender = { ...messageWithSender, isRecalled: true };
     roomRepo.findById.mockResolvedValue(room);
-    roomMemberRepo.findMember.mockImplementation(async (roomId, uid) => {
+    roomMemberRepo.findMember.mockImplementation(async (roomId: string, uid: string) => {
       if (uid === 'user-1') return { ...member, role: 'admin' };
       if (uid === 'user-2') return { ...member, role: 'member' };
       return null;
@@ -366,7 +371,7 @@ describe('messageService', () => {
 
   it('recallMessage rejects admins who attempt to recall owner messages', async () => {
     roomRepo.findById.mockResolvedValue(room);
-    roomMemberRepo.findMember.mockImplementation(async (roomId, uid) => {
+    roomMemberRepo.findMember.mockImplementation(async (roomId: string, uid: string) => {
       if (uid === 'user-1') return { ...member, role: 'admin' };
       if (uid === 'user-2') return { ...member, role: 'owner' };
       return null;
@@ -379,7 +384,7 @@ describe('messageService', () => {
 
   it('recallMessage rejects admins who attempt to recall other admin messages', async () => {
     roomRepo.findById.mockResolvedValue(room);
-    roomMemberRepo.findMember.mockImplementation(async (roomId, uid) => {
+    roomMemberRepo.findMember.mockImplementation(async (roomId: string, uid: string) => {
       if (uid === 'user-1') return { ...member, role: 'admin' };
       if (uid === 'user-2') return { ...member, role: 'admin' };
       return null;

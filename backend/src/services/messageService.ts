@@ -1,13 +1,13 @@
 import type { MessageWithSender } from '@shared/types';
-import type { IMessageRepository } from '../repositories/IMessageRepository';
-import type { IRoomMemberRepository } from '../repositories/IRoomMemberRepository';
-import type { IRoomRepository } from '../repositories/IRoomRepository';
-import { ForbiddenError, NotFoundError, ValidationError } from '../errors/AppError';
+import type { IMessageRepository } from '../models/IMessageRepository';
+import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
+import type { IRoomRepository } from '../models/IRoomRepository';
+import { ForbiddenError, NotFoundError, ValidationError } from '../utils/AppError';
 import {
   listMessagesSchema,
   recallMessageSchema,
   sendMessageSchema,
-} from '../validators/messageSchemas';
+} from '../routes/messageSchemas';
 
 const validationMessage = (issues: { message: string }[]) =>
   issues[0]?.message ?? 'Invalid message payload';

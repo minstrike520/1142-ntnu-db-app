@@ -55,7 +55,7 @@ Docker Compose exposes different host ports from the container-internal ports:
 | Service | Host URL / port | Container port | Description |
 |---------|------------------|----------------|-------------|
 | **Frontend** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js frontend web app |
-| **Backend API** | [http://localhost:4005](http://localhost:4005) | 4000 | Express API & Socket.IO server |
+| **Backend API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API & Socket.IO server |
 | **Database** | `localhost:5435` | 5432 | PostgreSQL 18 instance |
 
 For browser-facing frontend requests, set the API environment variable to:
@@ -76,19 +76,19 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 When setting up the project for the first time, you must initialize the database schema. Ensure your Docker containers are running, then apply the migrations:
 
 ```bash
-docker compose exec backend pnpm run migrate:up
+docker compose exec backend bun run migrate:up
 ```
 
 To seed the database with mock data:
 ```bash
-docker compose exec backend pnpm run db:seed
+docker compose exec backend bun run db:seed
 ```
 
 ### Common Commands
-- **Create a new migration**: `docker compose exec backend pnpm run migrate:create <name>`
-- **Run migrations**: `docker compose exec backend pnpm run migrate:up`
-- **Rollback migrations**: `docker compose exec backend pnpm run migrate:down`
-- **Seed database**: `docker compose exec backend pnpm run db:seed`
+- **Create a new migration**: `docker compose exec backend bun run migrate:create <name>`
+- **Run migrations**: `docker compose exec backend bun run migrate:up`
+- **Rollback migrations**: `docker compose exec backend bun run migrate:down`
+- **Seed database**: `docker compose exec backend bun run db:seed`
 
 ### Repairing a Broken Dev Database
 If you encounter `relation ... already exists` errors during migration, or migration state goes out of sync:
@@ -101,7 +101,7 @@ docker compose down -v
 docker compose up -d
 
 # 3. Wait for the database to be ready, then run migrations again
-docker compose exec backend pnpm run migrate:up
+docker compose exec backend bun run migrate:up
 ```
 
 ---
@@ -140,17 +140,17 @@ Running `db:seed` populates the development database with the following reproduc
 ## 5. Testing Guide
 
 ### Testing Architecture
-The development environment runs entirely within Docker. There is no `node_modules` on the host machine. All Vitest tests must be executed inside the backend container using `docker compose exec`.
+The development environment runs entirely within Docker. There is no `node_modules` on the host machine. All Bun test suites must be executed inside the backend container using `docker compose exec`.
 
 Testing database setup: Integration tests run against an ephemeral Postgres test database instance (`db-test`) defined in `docker-compose.test.yml`, separating development data from tests.
 
 ### Running TypeScript Type Checks
 ```bash
 # Backend Check
-docker compose exec backend pnpm exec tsc --noEmit
+pnpm --prefix backend exec tsc --noEmit
 
 # Frontend Check
-docker compose exec frontend pnpm exec tsc --noEmit
+pnpm --prefix frontend exec tsc --noEmit
 ```
 
 ### Running ESLint Checks
@@ -167,32 +167,27 @@ docker compose exec frontend pnpm run lint
 ### Running Unit Tests
 Unit tests do not require a database connection.
 ```bash
-docker compose exec backend pnpm run test:unit
+docker compose exec backend bun run test:unit
 ```
 
 ### Running Integration Tests
-Integration tests require starting the ephemeral test database and applying migrations:
+Integration tests require starting the ephemeral test database (which automatically applies migrations via `test:db:up`):
 
 ```bash
-# 1. Start the ephemeral test database
+# 1. Start the ephemeral test database & automatically apply migrations
 pnpm -C backend run test:db:up
-# Or: docker compose -f docker-compose.test.yml up -d --wait
 
-# 2. Apply migrations to the test database (needed on container spin-up)
-docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
+# 2. Run the integration test suite
+docker compose exec backend bun run test:integration
 
-# 3. Run the integration test suite
-docker compose exec backend pnpm run test:integration
-
-# 4. Stop the test database
+# 3. Stop the test database
 pnpm -C backend run test:db:down
-# Or: docker compose -f docker-compose.test.yml down
 ```
 
 ### Running All Tests
 ```bash
 pnpm -C backend run test:db:up
-docker compose exec backend pnpm run test
+docker compose exec backend bun run test
 pnpm -C backend run test:db:down
 ```
 
@@ -202,11 +197,11 @@ pnpm -C backend run test:db:down
 
 ### Unit Tests
 * **Path**: `backend/tests/unit/**/*.test.ts`
-* **Guidelines**: Mock database repositories using `vi.mock()` to test business logic in isolation without making real database connections.
+* **Guidelines**: Mock database repositories using `mock.module()` to test business logic in isolation without making real database connections.
 
 ```typescript
 // Example: backend/tests/unit/services/userService.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 
 describe('userService', () => {
   it('adds two numbers', () => {
@@ -221,7 +216,7 @@ describe('userService', () => {
 
 ```typescript
 // Example: backend/tests/integration/repositories/userRepository.test.ts
-import { beforeEach, afterAll, describe, it, expect } from 'vitest';
+import { beforeEach, afterAll, describe, it, expect } from 'bun:test';
 import { testPool } from '../helpers/testPool';
 import { resetDb } from '../helpers/resetDb';
 
@@ -245,7 +240,7 @@ describe('userRepository', () => {
 
 ## 7. Troubleshooting
 
-* **`vitest: not found`**: Backend container `node_modules` is out of sync. Rebuild container:
+* **`bun test errors`**: Backend container `node_modules` is out of sync. Rebuild container:
   ```bash
   docker compose rm -v -s -f backend
   docker compose up -d --build backend
@@ -257,7 +252,7 @@ describe('userRepository', () => {
 * **`db-test` connection hangs/timeouts**: Ensure `db-test` is running using `docker compose -f docker-compose.test.yml ps`. Spin it up if down.
 * **`TRUNCATE` failures**: Make sure migrations were applied to the test DB using:
   ```bash
-  docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
+  docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
 
 ---

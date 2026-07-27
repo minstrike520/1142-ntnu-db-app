@@ -1,7 +1,7 @@
-import type { ApiError, MessageWithSender } from '@shared/types';
-import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../errors/AppError';
-import type { IMessageRepository } from '../repositories/IMessageRepository';
-import type { IRoomMemberRepository } from '../repositories/IRoomMemberRepository';
+import type { MessageWithSender, FriendResponse } from '@shared/types';
+import { ForbiddenError, NotFoundError, ValidationError } from '../utils/AppError';
+import type { IMessageRepository } from '../models/IMessageRepository';
+import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
 import type { ChatServer } from './authSocket';
 import { trackUserConnection, trackUserDisconnection } from './presence';
 
@@ -20,10 +20,10 @@ interface SocketDeps {
   messageService: MessageService;
   messageRepository: Pick<IMessageRepository, 'findById'>;
   roomMemberRepository: Pick<IRoomMemberRepository, 'update' | 'findMember'>;
-  friendRepository?: { getFriends(userId: string): Promise<any[]> };
+  friendRepository?: { getFriends(userId: string): Promise<FriendResponse[]> };
 }
 
-import { mapErrorToApiShape } from '../errors/mapError';
+import { mapErrorToApiShape } from '../utils/mapError';
 
 export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
   io.on('connection', (socket) => {

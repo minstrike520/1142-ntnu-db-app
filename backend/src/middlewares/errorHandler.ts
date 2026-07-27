@@ -1,12 +1,8 @@
-import { Request, Response, NextFunction } from 'express';
-import { mapErrorToApiShape } from '../errors/mapError';
+import type { ErrorHandler } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { mapErrorToApiShape } from '../utils/mapError';
 
-export function errorHandler(
-  err: unknown,
-  _req: Request,
-  res: Response,
-  _next: NextFunction,
-): void {
+export const errorHandler: ErrorHandler = (err, c) => {
   const body = mapErrorToApiShape(err);
-  res.status(body.statusCode).json(body);
-}
+  return c.json(body, body.statusCode as ContentfulStatusCode);
+};
