@@ -55,11 +55,10 @@ export const makeBlockRoutes = (service: FriendService) => {
 
   app.get('/', async (c) => {
     const userId = c.get('user').userId;
-    const blocks = (await service.getBlockedUsers(userId)) as (PublicUser | { blocked: PublicUser })[];
-    const mapped = (blocks || []).map((b) => ({
-      blocked: 'blocked' in b ? b.blocked : b,
-    }));
-    return c.json(mapped, 200);
+    // The service already returns a flat PublicUser[]; clients read `userId`/`name`
+    // directly off each entry, so it must not be wrapped.
+    const blocks = (await service.getBlockedUsers(userId)) as PublicUser[];
+    return c.json(blocks ?? [], 200);
   });
 
   app.post('/', validate('json', blockUserSchema), async (c) => {

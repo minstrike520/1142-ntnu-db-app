@@ -69,6 +69,24 @@ describe('Room E2E', () => {
     expect(res.body.name).toBe('Test Room');
   });
 
+  it('should reject creating a group without a name', async () => {
+    // `type` defaults to 'group', so both of these would otherwise persist a
+    // room with name = NULL.
+    for (const payload of [{}, { type: 'group' }]) {
+      const res = await request(app)
+        .post('/api/v1/rooms')
+        .set('Authorization', `Bearer ${token}`)
+        .send(payload);
+
+      expect(res.status).toBe(400);
+    }
+
+    const list = await request(app)
+      .get('/api/v1/rooms')
+      .set('Authorization', `Bearer ${token}`);
+    expect(list.body.length).toBe(0);
+  });
+
   it('should list rooms', async () => {
     await request(app)
       .post('/api/v1/rooms')

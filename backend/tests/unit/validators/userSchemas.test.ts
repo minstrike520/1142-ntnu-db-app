@@ -5,6 +5,7 @@ import {
   searchQuerySchema,
   updateMeSchema,
   updateSettingsSchema,
+  checkInactivitySchema,
 } from '../../../src/routes/userSchemas';
 
 describe('user validation schemas', () => {
@@ -70,5 +71,32 @@ describe('user validation schemas', () => {
   it('validates trimmed search queries', () => {
     expect(searchQuerySchema.parse({ q: ' Alice ' })).toEqual({ q: 'Alice' });
     expect(searchQuerySchema.safeParse({ q: '   ' }).success).toBe(false);
+  });
+
+  describe('checkInactivitySchema', () => {
+    it('accepts an omitted now', () => {
+      expect(checkInactivitySchema.safeParse({}).success).toBe(true);
+    });
+
+    it('accepts ISO 8601 strings in UTC and with an offset', () => {
+      expect(checkInactivitySchema.safeParse({ now: new Date().toISOString() }).success).toBe(true);
+      expect(checkInactivitySchema.safeParse({ now: '2026-06-14T22:18:13.000+08:00' }).success).toBe(true);
+    });
+
+    it('accepts a Date instance', () => {
+      expect(checkInactivitySchema.safeParse({ now: new Date() }).success).toBe(true);
+    });
+
+    it('rejects strings that would become an Invalid Date', () => {
+      // `new Date('invalid')` makes the service's inactiveMs NaN, which skips the
+      // below-threshold guard and can send a real emergency alert.
+      for (const now of ['invalid', '', 'yesterday', '2026-13-45T99:99:99Z']) {
+        expect(checkInactivitySchema.safeParse({ now }).success).toBe(false);
+      }
+    });
+
+    it('rejects a date without a time component', () => {
+      expect(checkInactivitySchema.safeParse({ now: '2026-06-14' }).success).toBe(false);
+    });
   });
 });

@@ -265,7 +265,10 @@ describe('Friend & Block E2E Integration Tests', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.length).toBe(1);
-      expect(res.body[0].blocked?.userId ?? res.body[0].blockedId).toBe(userC.userId);
+      // Flat PublicUser entries — clients read these fields directly.
+      expect(res.body[0].userId).toBe(userC.userId);
+      expect(res.body[0].name).toBe('User C');
+      expect(res.body[0]).not.toHaveProperty('blocked');
     });
 
     it('should unblock a user', async () => {

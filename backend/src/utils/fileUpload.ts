@@ -15,6 +15,30 @@ export interface UploadedFile {
   stream?: ReadableStream | null;
 }
 
+/**
+ * Reduce a client-supplied multipart filename to a single, inert path segment.
+ *
+ * The browser controls this value, and Bun keeps whatever it is given, so it can
+ * carry `../` (or a Windows-style `..\`) and escape the upload directory once it
+ * reaches `path.join`. The human-readable name is persisted separately as
+ * `originalname`, so the on-disk name only has to be unique and safe.
+ */
+export const sanitizeStoredFileName = (rawName: string): string => {
+  const segment = path.posix.basename(String(rawName ?? '').replace(/\\/g, '/'));
+  const safe = segment
+    .replace(/\0/g, '')
+    .replace(/[^A-Za-z0-9._-]/g, '_')
+    .replace(/^\.+/, '');
+  return safe.length > 0 ? safe.slice(-100) : 'upload';
+};
+
+/**
+ * Slack allowed between the declared Content-Length and the file's own size, to
+ * cover multipart boundaries, part headers and other field values. Generous on
+ * purpose: this check only exists to reject the clearly-too-large early.
+ */
+const MULTIPART_OVERHEAD_ALLOWANCE = 64 * 1024;
+
 export interface ParseFileOptions {
   fieldName?: string;
   maxBytes?: number;
@@ -29,6 +53,18 @@ export async function parseSingleFile(
   options: ParseFileOptions = {}
 ): Promise<UploadedFile> {
   const fieldName = options.fieldName ?? 'file';
+
+  // Reject obviously oversized uploads before `parseBody()` buffers the whole
+  // request. This is a declared-size check only, so it is a cheap early exit
+  // rather than a real streaming limit; the authoritative check on the decoded
+  // file still runs below. Enforcing the cap at the stream level is issue #411.
+  if (options.maxBytes) {
+    const declaredLength = Number(c.req.header('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > options.maxBytes + MULTIPART_OVERHEAD_ALLOWANCE) {
+      throw new ValidationError('File size limit exceeded');
+    }
+  }
+
   const body = await c.req.parseBody();
   const file = body[fieldName];
 
@@ -67,9 +103,10 @@ export async function parseSingleFile(
   const buffer = Buffer.from(arrayBuffer);
 
   let filePath = '';
+  let storedName = '';
   if (options.saveToDir) {
-    const fileName = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${fileObj.name}`;
-    filePath = path.join(options.saveToDir, fileName);
+    storedName = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${sanitizeStoredFileName(fileObj.name)}`;
+    filePath = path.join(options.saveToDir, storedName);
     await Bun.write(filePath, buffer);
   }
 
@@ -81,7 +118,7 @@ export async function parseSingleFile(
     buffer,
     size: fileObj.size,
     destination: options.saveToDir || '',
-    filename: fileObj.name,
+    filename: storedName || sanitizeStoredFileName(fileObj.name),
     path: filePath,
     stream: null,
   };

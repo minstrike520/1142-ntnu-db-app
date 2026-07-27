@@ -7,6 +7,7 @@ import { authMiddleware } from '../middlewares/authMiddleware';
 import { attachmentUploadConfig } from '../utils/attachmentUploadConfig';
 import { ATTACHMENTS_UPLOAD_DIR, ensureUploadDirectories } from '../utils/uploads';
 import { parseSingleFile } from '../utils/fileUpload';
+import { toPublicAttachment } from '../models/attachmentRepository';
 
 ensureUploadDirectories();
 
@@ -55,12 +56,13 @@ export const makeAttachmentRoutes = (service: AttachmentService) => {
 
     const accept = c.req.header('accept') || '';
     if (accept.includes('application/json')) {
-      return c.json(attachment, 200);
+      return c.json(toPublicAttachment(attachment), 200);
     }
 
     const rawPath = attachment.filePath || attachment.file_path;
     if (!rawPath) {
-      return c.json(attachment, 200);
+      // The record exists but has no stored file, so there is nothing to stream.
+      throw new NotFoundError('attachment', attachmentId);
     }
 
     const filePath = path.isAbsolute(rawPath)
@@ -71,16 +73,19 @@ export const makeAttachmentRoutes = (service: AttachmentService) => {
     const mimeType = attachment.fileType || attachment.mime_type || 'application/octet-stream';
 
     const file = Bun.file(filePath);
-    if (await file.exists()) {
-      return new Response(file, {
-        status: 200,
-        headers: {
-          'Content-Type': mimeType,
-          'Content-Disposition': encodeDownloadFilename(originalName),
-        },
-      });
+    if (!(await file.exists())) {
+      // Stored file is gone (lost volume, manual deletion). Answering with
+      // metadata and a 200 would make download clients treat JSON as the file.
+      throw new NotFoundError('attachment', attachmentId);
     }
-    return c.json(attachment, 200);
+
+    return new Response(file, {
+      status: 200,
+      headers: {
+        'Content-Type': mimeType,
+        'Content-Disposition': encodeDownloadFilename(originalName),
+      },
+    });
   });
 
   return app;

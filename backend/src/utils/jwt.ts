@@ -1,6 +1,7 @@
 import { sign, verify } from 'hono/jwt';
 import { createHash, randomBytes } from 'crypto';
 import type { JwtPayload } from '@shared/types';
+import { getAccessTokenTtlSeconds } from './accessTokenTtl';
 
 const getJwtSecret = (): string => {
   const secret = process.env.JWT_SECRET;
@@ -16,8 +17,7 @@ const getJwtSecret = (): string => {
 export const signToken = async (payload: JwtPayload): Promise<string> => {
   const secret = getJwtSecret();
   // ponytail: Hono JWT requires 'exp' inside the payload as a UNIX timestamp in seconds
-  const minutes = 15;
-  const exp = Math.floor(Date.now() / 1000) + (minutes * 60);
+  const exp = Math.floor(Date.now() / 1000) + getAccessTokenTtlSeconds();
   return await sign({ ...payload, exp }, secret, 'HS256');
 };
 

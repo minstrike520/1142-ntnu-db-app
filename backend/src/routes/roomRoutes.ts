@@ -3,9 +3,10 @@ import type { UploadedFile } from '../utils/fileUpload';
 import { Hono } from 'hono';
 import {
   createRoomSchema,
-  updateRoomSchema,
+  patchRoomSchema,
   joinByCodeSchema,
   updateMemberSchema,
+  type PatchRoomInput,
 } from '../routes/roomSchemas';
 import { validate } from '../middlewares/validator';
 import { authMiddleware } from '../middlewares/authMiddleware';
@@ -105,24 +106,16 @@ export const makeRoomRoutes = (service: RoomService) => {
     const userId = c.get('user').userId;
     const roomId = c.req.param('id');
     const targetUserId = c.req.param('targetUserId');
-    const body = c.req.valid('json') as { status?: string; ownerId?: string };
+    const body = c.req.valid('json') as { status?: string };
 
     if (body.status === 'approved') {
       await service.approveMember(roomId, userId, targetUserId);
-      return c.json({ success: true }, 200);
+      return c.json({ message: 'Member approved' }, 200);
     }
 
-    if (body.ownerId && (body.ownerId === targetUserId || body.ownerId === userId)) {
-      const targetOwnerId = body.ownerId === userId ? targetUserId : body.ownerId;
-      if (!targetOwnerId) {
-        throw new ValidationError('targetUserId is required for ownership transfer');
-      }
-      await service.transferOwnership(roomId, userId, targetOwnerId);
-      return c.json({ success: true }, 200);
-    }
-
+    // Ownership transfer lives on PATCH /rooms/:id, not here.
     await service.updateMember(roomId, userId, targetUserId, body);
-    return c.json({ success: true }, 200);
+    return c.json({ message: 'Member updated' }, 200);
   });
 
   app.post('/:id/members/:targetUserId/approve', async (c) => {
@@ -130,7 +123,7 @@ export const makeRoomRoutes = (service: RoomService) => {
     const roomId = c.req.param('id');
     const targetUserId = c.req.param('targetUserId');
     await service.approveMember(roomId, userId, targetUserId);
-    return c.json({ success: true }, 200);
+    return c.json({ message: 'Member approved' }, 200);
   });
 
   app.get('/:id', async (c) => {
@@ -140,11 +133,17 @@ export const makeRoomRoutes = (service: RoomService) => {
     return c.json(room, 200);
   });
 
-  app.patch('/:id', validate('json', updateRoomSchema), async (c) => {
+  app.patch('/:id', validate('json', patchRoomSchema), async (c) => {
     const userId = c.get('user').userId;
     const roomId = c.req.param('id');
-    const body = c.req.valid('json');
-    const updated = await service.update(roomId, userId, body);
+    const { ownerId, ...settings } = c.req.valid('json') as PatchRoomInput;
+
+    if (ownerId) {
+      await service.transferOwnership(roomId, userId, ownerId);
+      return c.json({ message: 'Ownership transferred' }, 200);
+    }
+
+    const updated = await service.update(roomId, userId, settings);
     return c.json(updated, 200);
   });
 

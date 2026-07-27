@@ -13,7 +13,30 @@ export interface AttachmentRow {
   message_is_recalled?: boolean | null;
 }
 
-function mapRowToAttachment(row: AttachmentRow): Attachment & { messageIsRecalled?: boolean, filePath?: string } {
+/** Server-side view of an attachment: the public shape plus internal-only fields. */
+export type InternalAttachment = Attachment & {
+  messageIsRecalled?: boolean;
+  filePath?: string;
+};
+
+/**
+ * Drop the internal fields before an attachment is serialized to a client.
+ *
+ * `filePath` is the absolute on-disk location (`/app/uploads/...`) and must never
+ * reach the API; excess properties are not stripped at runtime just because the
+ * declared return type is `Attachment`.
+ */
+export const toPublicAttachment = (attachment: InternalAttachment): Attachment => ({
+  attachmentId: attachment.attachmentId,
+  messageId: attachment.messageId,
+  uploadedBy: attachment.uploadedBy,
+  fileUrl: attachment.fileUrl,
+  fileType: attachment.fileType,
+  originalName: attachment.originalName,
+  uploadedAt: attachment.uploadedAt,
+});
+
+function mapRowToAttachment(row: AttachmentRow): InternalAttachment {
   return {
     attachmentId: row.attachment_id,
     messageId: row.message_id ?? undefined,
@@ -36,10 +59,11 @@ export class AttachmentRepository {
       VALUES (${data.uploadedBy}, ${data.filePath}, ${data.fileType}, ${data.originalName})
       RETURNING *
     `;
-    return mapRowToAttachment(rows[0]);
+    // Public shape only: the upload response must not carry the storage path.
+    return toPublicAttachment(mapRowToAttachment(rows[0]));
   }
 
-  async findById(attachmentId: string): Promise<(Attachment & { messageIsRecalled?: boolean, filePath?: string }) | null> {
+  async findById(attachmentId: string): Promise<InternalAttachment | null> {
     const rows = await this.sql<AttachmentRow[]>`
       SELECT a.*, m.is_recalled AS message_is_recalled
       FROM attachments a
