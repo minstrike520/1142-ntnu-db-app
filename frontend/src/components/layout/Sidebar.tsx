@@ -10,7 +10,17 @@ import { Modal } from "@/components/ui/Modal";
 import { useTranslation } from "@/hooks/useTranslation";
 import ChatList from "./ChatList";
 import FriendInfoPanel from "@/components/chat/FriendInfoPanel";
-import { Icon } from "@iconify/react";
+import MessageDetailIcon from "@iconify-react/boxicons/message-detail";
+import GroupIcon from "@iconify-react/boxicons/group";
+import AlertTriangleIcon from "@iconify-react/boxicons/alert-triangle";
+import CogIcon from "@iconify-react/boxicons/cog";
+import LogoutIcon from "@iconify-react/boxicons/arrow-out-left-square-half-filled";
+import SearchIcon from "@iconify-react/boxicons/search";
+import PlusIcon from "@iconify-react/boxicons/plus";
+import UserIcon from "@iconify-react/boxicons/user";
+import PlusSquareIcon from "@iconify-react/boxicons/plus-square";
+import JoinGroupIcon from "@iconify-react/boxicons/arrow-down-stroke-square";
+import FolderPlusIcon from "@iconify-react/boxicons/folder-plus";
 import { resolveAssetUrl } from "@/lib/assets";
 
 export default function Sidebar() {
@@ -104,7 +114,7 @@ export default function Sidebar() {
       label: t("rail.chats"),
       active: pathname === "/" || pathname.startsWith("/chat"),
       onClick: () => router.push(firstChatPath),
-      icon: <Icon icon="boxicons:message-detail" className="h-5 w-5 shrink-0" />,
+      icon: <MessageDetailIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
     {
       label: t("rail.friends"),
@@ -114,25 +124,25 @@ export default function Sidebar() {
         router.push("/friends");
       },
       badge: pendingIncoming,
-      icon: <Icon icon="boxicons:group" className="h-5 w-5 shrink-0" />,
+      icon: <GroupIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
     {
       label: t("rail.emergency"),
       active: pathname === "/emergency",
       onClick: () => router.push("/emergency"),
-      icon: <Icon icon="boxicons:alert-triangle" className="h-5 w-5 shrink-0" />,
+      icon: <AlertTriangleIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
     {
       label: t("sidebar.settings"),
       active: isSettingsPage,
       onClick: () => router.push("/settings"),
-      icon: <Icon icon="boxicons:cog" className="h-5 w-5 shrink-0" />,
+      icon: <CogIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
     {
       label: t("sidebar.logout"),
       active: false,
       onClick: handleLogout,
-      icon: <Icon icon="boxicons:arrow-out-left-square-half-filled" className="h-5 w-5 shrink-0" />,
+      icon: <LogoutIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
   ];
 
@@ -152,7 +162,7 @@ export default function Sidebar() {
           {/* Search bar */}
           <div className="flex-1 relative">
             <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-text-muted">
-              <Icon icon="boxicons:bx-search" className="h-3.5 w-3.5" />
+              <SearchIcon aria-hidden="true" className="h-3.5 w-3.5" />
             </span>
             <input
               type="text"
@@ -166,7 +176,7 @@ export default function Sidebar() {
           <div className="flex gap-1 shrink-0">
             <IconButton
               label={t("sidebar.actions")}
-              icon="boxicons:plus"
+              icon={<PlusIcon aria-hidden="true" className="h-4 w-4" />}
               onClick={() => {
                 setJoinInviteCode("");
                 setJoinError("");
@@ -202,7 +212,7 @@ export default function Sidebar() {
             />
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-text-muted text-xs text-center p-4">
-              <Icon icon="boxicons:user" className="h-10 w-10 text-text-muted/30 mb-2" />
+              <UserIcon aria-hidden="true" className="h-10 w-10 text-text-muted/30 mb-2" />
               <p>{t("profileCard.selectPrompt")}</p>
             </div>
           )
@@ -277,7 +287,7 @@ export default function Sidebar() {
               }}
               className="flex items-center gap-4 p-4 border-b border-border-primary hover:bg-surface-muted transition-all cursor-pointer text-left w-full group select-none rounded-none"
             >
-              <Icon icon="boxicons:plus-square" className="h-6 w-6 text-text-muted group-hover:text-primary transition-colors shrink-0" />
+              <PlusSquareIcon aria-hidden="true" className="h-6 w-6 text-text-muted group-hover:text-primary transition-colors shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-bold text-foreground leading-snug">{t("sidebar.createGroup")}</p>
                 <p className="text-xs text-text-muted mt-1 leading-normal">{t("sidebar.createGroupDesc")}</p>
@@ -294,7 +304,7 @@ export default function Sidebar() {
               }}
               className="flex items-center gap-4 p-4 border-b border-border-primary hover:bg-surface-muted transition-all cursor-pointer text-left w-full group select-none rounded-none"
             >
-              <Icon icon="boxicons:arrow-down-stroke-square" className="h-6 w-6 text-text-muted group-hover:text-primary transition-colors shrink-0" />
+              <JoinGroupIcon aria-hidden="true" className="h-6 w-6 text-text-muted group-hover:text-primary transition-colors shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-bold text-foreground leading-snug">{t("sidebar.joinGroup")}</p>
                 <p className="text-xs text-text-muted mt-1 leading-normal">{t("sidebar.joinGroupDesc")}</p>
@@ -310,7 +320,7 @@ export default function Sidebar() {
               }}
               className="flex items-center gap-4 p-4 hover:bg-surface-muted transition-all cursor-pointer text-left w-full group select-none rounded-none"
             >
-              <Icon icon="boxicons:folder-plus" className="h-6 w-6 text-text-muted group-hover:text-primary transition-colors shrink-0" />
+              <FolderPlusIcon aria-hidden="true" className="h-6 w-6 text-text-muted group-hover:text-primary transition-colors shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-bold text-foreground leading-snug">{t("sidebar.createFolder")}</p>
                 <p className="text-xs text-text-muted mt-1 leading-normal">{t("sidebar.createFolderDesc")}</p>
@@ -406,7 +416,7 @@ function IconButton({
 }: {
   label: string;
   onClick: () => void;
-  icon: string;
+  icon: React.ReactNode;
 }) {
   return (
     <button
@@ -415,7 +425,7 @@ function IconButton({
       aria-label={label}
       className="p-1 text-text-muted hover:text-foreground border border-transparent hover:border-border-primary rounded-sm transition-colors cursor-pointer flex items-center justify-center shrink-0"
     >
-      <Icon icon={icon} className="h-4 w-4" />
+      {icon}
     </button>
   );
 }
