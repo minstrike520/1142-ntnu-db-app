@@ -67,6 +67,14 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 1. **前端前綴**：任何需要在 Next.js 瀏覽器端讀取的環境變數，都必須加上 `NEXT_PUBLIC_` 前綴。
 2. **生產環境注入**：生產環境不應該依賴已提交的 `.env` 檔案，請改為透過雲端託管平台（例如 Vercel、AWS Secrets Manager）的設定來注入環境變數。
 3. **範本維護**：新增環境變數時，請同步更新 `.env.example`，將欄位值留空或使用佔位符，以便他人參考。
+4. **插值優先序**：Compose 對**每一份** compose 檔（含 `docker-compose.prod.yml`）進行插值時都會讀取 `.env`。因此 `.env` 中的值會蓋過 compose 檔內寫的 `${VAR:-預設值}`——`.env.example` 裡為了開發方便而設的值，會靜默成為正式環境的值。若某個設定不應被這樣覆寫（目前是 `cloudflared` 容器的固定位址，於後端以 `TRUSTED_PROXY_IPS` 讀取），請改用另一個名稱的變數插值，並讓 `.env.example` 維持註解狀態。新增「正式環境的值攸關正確性」的設定時，請比照此模式，或將其列入 [README.zh-TW.md](../../README.zh-TW.md#1-配置生產環境變數) 的正式環境檢查表。
+
+### 來源 IP 判定
+`backend/src/utils/clientIp.ts` 決定速率限制要以哪個位址分桶，全專案僅有一處呼叫（`backend/src/middlewares/securityMiddleware.ts` 的 `rateLimitKeyGenerator`）。Socket.IO 不受速率限制，也不會經過此處。
+
+判定以 TCP 連線的對端位址為準。只有當對端位址列於 `TRUSTED_PROXY_IPS`（完全相符，不接受網段），或 `TRUST_PROXY=true` 無條件信任所有對端時，才會採信 `CF-Connecting-IP` 與 `X-Forwarded-For`。`X-Forwarded-For` 一律由右往左讀取並跳過清單內的代理位址——因為代理會把它實際收到連線的來源位址附加在最後，左側都是呼叫端自己送進來的內容。
+
+兩者皆不適用時，無法歸屬的請求會取得各自獨立的鍵值而非共用鍵值，寧可讓它不受限，也不會連帶把其他所有呼叫端一起鎖住。
 
 ---
 

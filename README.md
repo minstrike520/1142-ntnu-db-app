@@ -115,11 +115,25 @@ The project provides a production-ready configuration using `docker-compose.prod
 ### 1. Configure Production Environment
 Ensure all production environment variables (e.g., `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DATABASE_URL`, `JWT_SECRET`, `NEXT_PUBLIC_API_URL`, `TUNNEL_TOKEN`) are configured in your `.env` file.
 
+Docker Compose interpolates `docker-compose.prod.yml` from that same `.env`, so values carried over from `.env.example` apply to production as well. Change these before going live:
+
+| Parameter | `.env.example` value | Production value | Why |
+| :--- | :--- | :--- | :--- |
+| `RATE_LIMIT_DISABLED` | `true` | `false` | Left at `true`, production runs with no rate limiting at all. |
+| `NODE_ENV` | `development` | `production` | Controls the `Secure` flag on the refresh cookie, among others. |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:4005` | Your public backend URL | Baked into the frontend at build time. |
+
 ### 2. Boot Production Services
 Build and start the services in production mode:
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
 ```
+
+The production stack pins a fixed subnet so the backend can recognise the `cloudflared` container as its trusted proxy (see [Client IP & rate limiting](#client-ip--rate-limiting) below). If a stack was already running from an earlier revision of this file, take it down first — Docker refuses to reuse an existing network whose IPAM configuration no longer matches:
+```bash
+docker compose -f docker-compose.prod.yml down
+```
+If `10.83.71.0/24` collides with an existing network on the host, `docker compose up` fails loudly. Set `TUNNEL_SUBNET` and `TUNNEL_IP` together (the address must be inside the subnet) to move it.
 
 ### 3. Run Database Migrations
 Run the pending database migrations on the production container:
@@ -132,6 +146,16 @@ To tear down the production services:
 ```bash
 docker compose -f docker-compose.prod.yml down
 ```
+
+### Client IP & rate limiting
+Rate limits are bucketed per client IP. The backend resolves that IP from the TCP peer address, and only reads `CF-Connecting-IP` / `X-Forwarded-For` when the peer is a proxy it trusts:
+
+* `TRUSTED_PROXY_IPS` — exact peer addresses (comma-separated, no CIDR ranges). `docker-compose.prod.yml` sets this to the tunnel's pinned address via `TUNNEL_IP`, so requests arriving through Cloudflare are bucketed per visitor, while anything reaching the published `4005` port keeps its own peer address and cannot pick a bucket by header.
+* `TRUST_PROXY=true` — trusts every peer. Only safe when the backend port cannot be reached directly.
+
+Within `X-Forwarded-For` the hops are read right to left, because a proxy appends the address it actually received the connection from and everything to the left of it is caller-supplied.
+
+To confirm the tunnel path is attributed correctly, watch the backend log for `[clientIp] Ignoring forwarded client-IP header from untrusted peer …`. Seeing that in production means the tunnel's ingress is not pointed at `http://backend:4000`, and every external user is sharing one bucket.
 
 ---
 
