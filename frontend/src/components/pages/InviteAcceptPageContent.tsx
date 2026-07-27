@@ -93,7 +93,10 @@ export default function InviteAcceptPageContent() {
         setStatus(result.isPending ? "pending" : "ready");
       } catch (err) {
         if (cancelled) return;
-        setErrorMessage(err instanceof Error ? err.message : t("invalidInvite"));
+        // The API layer surfaces the backend's English text, so show a localized
+        // message and keep the original for debugging only.
+        console.error("Failed to load invite preview:", err);
+        setErrorMessage(t("invalidInvite"));
         setStatus("error");
       }
     })();
@@ -121,16 +124,26 @@ export default function InviteAcceptPageContent() {
       // Preview and accept aren't atomic (e.g. joined from another tab in between) —
       // treat "already a member" as success rather than surfacing a hard error.
       if (message.toLowerCase().includes("already a member")) {
-        // That concurrent join is still only pending on an approval-required
-        // room, so keep the waiting state instead of opening an unusable room.
-        if (preview.requireApproval) {
-          setStatus("pending");
-        } else {
-          router.push(`/chat/${preview.roomId}`);
+        // Re-read the server state rather than trusting the preview: the winning
+        // request decides whether we ended up pending, and requireApproval may
+        // have been toggled since this page loaded.
+        try {
+          const fresh = await getRoomInvitePreview(token, code);
+          setPreview(fresh);
+          if (fresh.isPending) {
+            setStatus("pending");
+          } else {
+            router.push(`/chat/${fresh.roomId}`);
+          }
+        } catch (refreshErr) {
+          console.error("Failed to re-check membership after a concurrent join:", refreshErr);
+          setErrorMessage(t("joinFailed"));
+          setStatus("ready");
         }
         return;
       }
-      setErrorMessage(message || t("joinFailed"));
+      console.error("Failed to join room from invite:", err);
+      setErrorMessage(t("joinFailed"));
       setStatus("ready");
     }
   }, [token, code, preview, router, t]);

@@ -16,6 +16,18 @@ export const readRedirectParam = (): string => {
   return sanitizeRedirect(new URLSearchParams(window.location.search).get("redirect"));
 };
 
+/**
+ * Server snapshot for `useSyncExternalStore`. The server cannot see the query
+ * string during pre-render, so it must report the same value every time and let
+ * React re-render with the real target after hydration; reading
+ * `window.location` in a `useState` initializer would instead bake a mismatched
+ * value into attributes such as `<Link href>`, which React does not repair.
+ */
+export const getServerRedirect = (): string => "/";
+
+/** The URL cannot change without a navigation, so there is nothing to observe. */
+export const subscribeToRedirect = (): (() => void) => () => {};
+
 /** Build a link to `path` that carries the pending redirect target along. */
 export const withRedirectParam = (path: string, redirectTo: string): string =>
   redirectTo && redirectTo !== "/"
