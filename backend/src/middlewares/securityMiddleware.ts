@@ -49,6 +49,7 @@ export const makeAuthRateLimiter = (overrides: Record<string, unknown> = {}): Mi
     limit: parsePositiveInt(process.env.AUTH_RATE_LIMIT_MAX, 10),
     standardHeaders: 'draft-6',
     keyGenerator: rateLimitKeyGenerator,
+    skipSuccessfulRequests: true,
     skip: () => rateLimitDisabled(),
     handler: () => {
       throw new AppError(429, 'Too many authentication attempts, please try again later', 'TOO_MANY_REQUESTS');
