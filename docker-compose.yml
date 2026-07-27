@@ -25,10 +25,11 @@ services:
       - NODE_ENV=${NODE_ENV}
       - PORT=${PORT}
       - DATABASE_URL=${DATABASE_URL}
-      # No db-test default here: this stack only starts `db`, and the test host
-      # is provided by docker-compose.test.yml. Set it explicitly when running
-      # the suite against this container.
-      - DATABASE_URL_TEST=${DATABASE_URL_TEST:-}
+      # Pass through only when set on the host — no db-test default, because this
+      # stack starts only `db`. Deliberately not `${DATABASE_URL_TEST:-}`: an
+      # empty value still counts as set and would shadow backend/.env.test, which
+      # is where the documented in-container test workflow gets this from.
+      - DATABASE_URL_TEST
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
