@@ -10,8 +10,9 @@ FROM node:24-slim AS builder
 ENV CI=true
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# pnpm version comes from "packageManager" in the root package.json.
-RUN corepack enable
+# Pinned to match "packageManager" in the root package.json, and prepared at
+# build time so the image does not fetch pnpm on first use at runtime.
+RUN corepack enable pnpm && corepack prepare pnpm@11.15.0 --activate
 
 WORKDIR /workspace
 

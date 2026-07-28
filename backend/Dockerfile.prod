@@ -10,7 +10,7 @@ ENV CI=true
 # execute on a bun-only image. Graft the node toolchain in rather than switching
 # the base image — bun stays the runtime. (Approach from #419.)
 COPY --from=node:24-slim /usr/local/ /usr/local/
-RUN corepack enable && corepack prepare pnpm@11.15.0 --activate
+RUN corepack enable pnpm && corepack prepare pnpm@11.15.0 --activate
 
 WORKDIR /workspace
 

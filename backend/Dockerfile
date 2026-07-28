@@ -16,7 +16,7 @@ RUN apt-get update -y \
 
 # Pinned to match "packageManager" in the root package.json, and prepared at
 # build time so the image does not fetch pnpm on first use at runtime.
-RUN corepack enable && corepack prepare pnpm@11.15.0 --activate
+RUN corepack enable pnpm && corepack prepare pnpm@11.15.0 --activate
 
 WORKDIR /workspace
 

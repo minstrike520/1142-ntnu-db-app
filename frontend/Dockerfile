@@ -5,9 +5,9 @@
 # manifest and every package's package.json all live outside frontend/.
 FROM node:24-slim
 
-# `corepack prepare` is no longer needed — the root package.json pins the
-# version via "packageManager", which corepack reads once it is copied in.
-RUN corepack enable
+# Pinned to match "packageManager" in the root package.json, and prepared at
+# build time so the image does not fetch pnpm on first use at runtime.
+RUN corepack enable pnpm && corepack prepare pnpm@11.15.0 --activate
 
 WORKDIR /workspace
 
