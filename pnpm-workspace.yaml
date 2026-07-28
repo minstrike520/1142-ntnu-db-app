@@ -1,6 +1,23 @@
 packages:
   - 'frontend'
   - 'backend'
-  - 'shared'
 
 dangerouslyAllowAllBuilds: true
+
+# pnpm honours `overrides` only at the workspace root. These were previously
+# split across frontend/pnpm-workspace.yaml and backend/pnpm-workspace.yaml;
+# consolidating to a single root lockfile requires merging them here, or the
+# CVE pins silently stop applying and the `security-scan` CI job loses coverage.
+#
+# Deliberately NOT carried over from backend/: `vite: ^7.3.5` and
+# `esbuild: ^0.28.1`. Both are leftovers from when the backend ran vitest — the
+# backend declares neither today, and neither appears in its lockfile. At root
+# scope they would apply only to the frontend, where vite resolves to 8.1.5;
+# `^7.3.5` does not match 8.x, so hoisting that pin would force a major
+# downgrade of the frontend toolchain rather than raise a security floor.
+overrides:
+  postcss: ">=8.5.10"       # was frontend/; resolves 8.5.14, already satisfied
+  ws: "^8.21.0"             # was in both, identical; resolves 8.21.0
+  "@babel/core": "^7.29.7"  # was ^7.29.6 in frontend/, weaker than the ^7.29.7
+                            # already declared in frontend/package.json
+  form-data: "^4.0.6"       # was backend/

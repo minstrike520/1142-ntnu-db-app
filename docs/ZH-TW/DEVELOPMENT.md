@@ -144,13 +144,34 @@ docker compose exec backend bun run migrate:up
 
 測試資料庫設定：整合測試會在一台臨時的 Postgres 測試資料庫實例（`db-test`）上運行，該實例定義於 `docker-compose.test.yml` 中，以將開發數據與測試數據隔離開來。
 
+### 安裝相依套件
+本專案是**單一 lockfile 的 pnpm workspace**：整個 repo 只有根目錄一份 `pnpm-lock.yaml`，
+同時涵蓋 root、`frontend/` 與 `backend/`。
+
+```bash
+# 一律在 repo 根目錄安裝
+pnpm install
+```
+
+**切勿在 `frontend/` 或 `backend/` 目錄內執行 `pnpm install`。** 這麼做會產生巢狀的
+`frontend/pnpm-lock.yaml` 或 `backend/pnpm-lock.yaml` 並與根 lockfile 分歧 ——
+這正是 issue #420 所記錄的故障成因。CI 會拒絕任何被提交的巢狀 lockfile。
+
+pnpm 版本由根 `package.json` 的 `"packageManager"` 欄位鎖定，執行 `corepack enable` 即可套用。
+若要針對單一套件執行指令，請使用 workspace filter，並且用**套件名稱**而非目錄名稱：
+
+```bash
+pnpm --filter near-chat-frontend <script>
+pnpm --filter near-chat-backend <script>
+```
+
 ### 執行 TypeScript 型別檢查
 ```bash
 # 後端檢查
-pnpm --prefix backend exec tsc --noEmit
+pnpm --filter near-chat-backend exec tsc --noEmit
 
 # 前端檢查
-pnpm --prefix frontend exec tsc --noEmit
+pnpm --filter near-chat-frontend exec tsc --noEmit
 ```
 
 ### 執行 ESLint 代碼品質與風格檢查
@@ -158,7 +179,7 @@ pnpm --prefix frontend exec tsc --noEmit
 
 ```bash
 # 於前端目錄執行代碼檢查
-pnpm --prefix frontend run lint
+pnpm --filter near-chat-frontend lint
 
 # 或於前端 Docker 容器內執行
 docker compose exec frontend pnpm run lint
@@ -175,20 +196,20 @@ docker compose exec backend bun run test:unit
 
 ```bash
 # 1. 啟動臨時測試資料庫並自動套用遷移
-pnpm -C backend run test:db:up
+pnpm --filter near-chat-backend test:db:up
 
 # 2. 執行整合測試套件
 docker compose exec backend bun run test:integration
 
 # 3. 關閉測試資料庫
-pnpm -C backend run test:db:down
+pnpm --filter near-chat-backend test:db:down
 ```
 
 ### 執行所有測試
 ```bash
-pnpm -C backend run test:db:up
+pnpm --filter near-chat-backend test:db:up
 docker compose exec backend bun run test
-pnpm -C backend run test:db:down
+pnpm --filter near-chat-backend test:db:down
 ```
 
 ---

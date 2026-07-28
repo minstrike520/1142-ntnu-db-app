@@ -144,13 +144,36 @@ The development environment runs entirely within Docker. There is no `node_modul
 
 Testing database setup: Integration tests run against an ephemeral Postgres test database instance (`db-test`) defined in `docker-compose.test.yml`, separating development data from tests.
 
+### Installing Dependencies
+This repository is a **single-lockfile pnpm workspace**. There is exactly one
+`pnpm-lock.yaml`, at the repo root, covering the root, `frontend/` and `backend/`.
+
+```bash
+# Always install from the repository root
+pnpm install
+```
+
+**Never run `pnpm install` inside `frontend/` or `backend/`.** Doing so creates a
+nested `frontend/pnpm-lock.yaml` or `backend/pnpm-lock.yaml` that drifts away
+from the root one — which is exactly the failure issue #420 documented. CI
+rejects any committed nested lockfile.
+
+The pnpm version is pinned by `"packageManager"` in the root `package.json`;
+`corepack enable` is enough to pick it up. Target a single package with a
+workspace filter, using the **package name** rather than the directory name:
+
+```bash
+pnpm --filter near-chat-frontend <script>
+pnpm --filter near-chat-backend <script>
+```
+
 ### Running TypeScript Type Checks
 ```bash
 # Backend Check
-pnpm --prefix backend exec tsc --noEmit
+pnpm --filter near-chat-backend exec tsc --noEmit
 
 # Frontend Check
-pnpm --prefix frontend exec tsc --noEmit
+pnpm --filter near-chat-frontend exec tsc --noEmit
 ```
 
 ### Running ESLint Checks
@@ -158,7 +181,7 @@ Before committing code or during development, run the linter to verify code form
 
 ```bash
 # Run linting check in the frontend directory
-pnpm --prefix frontend run lint
+pnpm --filter near-chat-frontend lint
 
 # Or run it inside the frontend Docker container
 docker compose exec frontend pnpm run lint
@@ -175,20 +198,20 @@ Integration tests require starting the ephemeral test database (which automatica
 
 ```bash
 # 1. Start the ephemeral test database & automatically apply migrations
-pnpm -C backend run test:db:up
+pnpm --filter near-chat-backend test:db:up
 
 # 2. Run the integration test suite
 docker compose exec backend bun run test:integration
 
 # 3. Stop the test database
-pnpm -C backend run test:db:down
+pnpm --filter near-chat-backend test:db:down
 ```
 
 ### Running All Tests
 ```bash
-pnpm -C backend run test:db:up
+pnpm --filter near-chat-backend test:db:up
 docker compose exec backend bun run test
-pnpm -C backend run test:db:down
+pnpm --filter near-chat-backend test:db:down
 ```
 
 ---
