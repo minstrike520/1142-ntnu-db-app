@@ -97,6 +97,49 @@ describe('roomTaskRoutes', () => {
     });
   });
 
+  // Regression: the handlers originally read the body with a bare
+  // `await c.req.json()`, so a missing/malformed body threw a SyntaxError that
+  // escaped the route as a 500 INTERNAL_ERROR. The body must instead reach the
+  // service's zod schema, which reports it as a 400. (The 400 itself is pinned
+  // by the roomTaskService tests; here we only assert the SyntaxError no longer
+  // escapes and the call still reaches the service.)
+  describe('malformed or missing request bodies', () => {
+    it.each([
+      ['POST', `/${ROOM_ID}/tasks`, undefined],
+      ['POST', `/${ROOM_ID}/tasks`, '{not json'],
+      ['PATCH', `/${ROOM_ID}/tasks/${TASK_ID}`, undefined],
+      ['PATCH', `/${ROOM_ID}/tasks/${TASK_ID}/status`, undefined],
+    ] as const)('%s %s does not surface a 500', async (method, path, rawBody) => {
+      const res = await makeApp().request(`/rooms${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(rawBody === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(rawBody === undefined ? {} : { body: rawBody }),
+      });
+
+      expect(res.status).not.toBe(500);
+    });
+
+    it('forwards an absent body to the service as undefined fields', async () => {
+      service.createTask.mockResolvedValue(task);
+
+      await makeApp().request(`/rooms/${ROOM_ID}/tasks`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      expect(service.createTask).toHaveBeenCalledWith(CALLER_ID, ROOM_ID, {
+        title: undefined,
+        description: undefined,
+        dueAt: undefined,
+        externalLink: undefined,
+        assigneeUserIds: undefined,
+      });
+    });
+  });
+
   describe('PATCH /:roomId/tasks/:taskId', () => {
     it('returns 200 with the updated task', async () => {
       const updated = { ...task, title: 'Updated' };
