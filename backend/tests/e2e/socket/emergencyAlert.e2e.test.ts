@@ -1,16 +1,16 @@
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'bun:test';
 import { AddressInfo } from 'net';
 import request from 'supertest';
 import { io as createClient, type Socket as ClientSocket } from 'socket.io-client';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { app, server } from '../../../src/index';
 import { resetDb } from '../../helpers/resetDb';
-import type { ClientToServerEvents, ServerToClientEvents, Room, Message } from '../../../../shared/types';
+import type { ClientToServerEvents, ServerToClientEvents, Message } from '../../../../shared/types';
 
 type TestClient = ClientSocket<ServerToClientEvents, ClientToServerEvents>;
 
 const waitFor = <T>(socket: TestClient, event: keyof ServerToClientEvents): Promise<T> =>
   new Promise((resolve) => {
-    socket.once(event, (payload) => resolve(payload as T));
+    socket.once(event, (payload: any) => resolve(payload as T));
   });
 
 describe('Emergency alert Socket.IO E2E', () => {
@@ -33,9 +33,14 @@ describe('Emergency alert Socket.IO E2E', () => {
   });
 
   afterAll(async () => {
-    clients.forEach((socket) => socket.disconnect());
+    clients.forEach((socket) => {
+      try { socket.disconnect(); } catch (e) {}
+    });
     if (server.listening) {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await Promise.race([
+        new Promise<void>((resolve) => server.close(() => resolve())),
+        new Promise<void>((resolve) => setTimeout(resolve, 300))
+      ]);
     }
   });
 
@@ -76,8 +81,7 @@ describe('Emergency alert Socket.IO E2E', () => {
       .post('/api/v1/rooms')
       .set('Authorization', `Bearer ${userRes.body.token}`)
       .send({ type: 'private', targetUserId: contactRes.body.user.userId });
-    
-    expect(roomRes.status).to.be.oneOf([200, 201]);
+    expect([200, 201]).toContain(roomRes.status);
     const privateRoomId = roomRes.body.roomId;
 
     // Set up emergency contact and enable warning settings

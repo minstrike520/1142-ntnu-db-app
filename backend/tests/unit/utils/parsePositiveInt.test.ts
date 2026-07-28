@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { parsePositiveInt } from '../../../src/utils/parsePositiveInt';
 
 describe('parsePositiveInt', () => {

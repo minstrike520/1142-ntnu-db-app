@@ -1,10 +1,14 @@
-import { describe, it, expect, vi, beforeEach, type Mocked } from 'vitest';
+import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { makeRoomTaskService } from '../../../src/services/roomTaskService';
-import { ForbiddenError, NotFoundError, ValidationError } from '../../../src/errors/AppError';
-import type { IRoomTaskRepository } from '../../../src/repositories/IRoomTaskRepository';
-import type { IRoomMemberRepository } from '../../../src/repositories/IRoomMemberRepository';
-import type { IRoomRepository } from '../../../src/repositories/IRoomRepository';
+import { ForbiddenError, NotFoundError, ValidationError } from '../../../src/utils/AppError';
+import type { IRoomTaskRepository } from '../../../src/models/IRoomTaskRepository';
+import type { IRoomMemberRepository } from '../../../src/models/IRoomMemberRepository';
+import type { IRoomRepository } from '../../../src/models/IRoomRepository';
 import type { Room, RoomMember, RoomTaskWithDetails } from '../../../../shared/types';
+
+type Mocked<T> = {
+  [P in keyof T]: T[P] extends Function ? Mock<any> : T[P];
+};
 
 describe('roomTaskService', () => {
   let roomTaskRepo: Mocked<IRoomTaskRepository>;
@@ -56,34 +60,34 @@ describe('roomTaskService', () => {
 
   beforeEach(() => {
     roomTaskRepo = {
-      findById: vi.fn(),
-      findByRoom: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      setStatus: vi.fn(),
-      delete: vi.fn(),
+      findById: mock(),
+      findByRoom: mock(),
+      create: mock(),
+      update: mock(),
+      setStatus: mock(),
+      delete: mock(),
     };
     roomRepo = {
-      findById: vi.fn(),
-      findByInviteCode: vi.fn(),
-      findByMember: vi.fn(),
-      findPrivateRoomByMembers: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      delete: vi.fn(),
+      findById: mock(),
+      findByInviteCode: mock(),
+      findByMember: mock(),
+      findPrivateRoomByMembers: mock(),
+      create: mock(),
+      update: mock(),
+      delete: mock(),
     };
     roomMemberRepo = {
-      findMember: vi.fn(),
-      findByRoom: vi.fn(),
-      add: vi.fn(),
-      update: vi.fn(),
-      remove: vi.fn(),
-      resolveMentions: vi.fn(),
+      findMember: mock(),
+      findByRoom: mock(),
+      add: mock(),
+      update: mock(),
+      remove: mock(),
+      resolveMentions: mock(),
     };
     roomTaskService = makeRoomTaskService(roomTaskRepo, roomRepo, roomMemberRepo);
 
     roomRepo.findById.mockResolvedValue(room);
-    roomMemberRepo.findMember.mockImplementation(async (_roomId, userId) => membersById[userId] ?? null);
+    roomMemberRepo.findMember.mockImplementation(async (_roomId: string, userId: string) => membersById[userId] ?? null);
   });
 
   describe('listTasks', () => {
@@ -163,7 +167,7 @@ describe('roomTaskService', () => {
     });
 
     it('rejects pending members as assignees', async () => {
-      roomMemberRepo.findMember.mockImplementation(async (_roomId, userId) => {
+      roomMemberRepo.findMember.mockImplementation(async (_roomId: string, userId: string) => {
         if (userId === 'owner-1') return ownerMember;
         if (userId === 'pending-1') return { ...plainMember, userId: 'pending-1', role: 'pending' };
         return null;
@@ -218,7 +222,7 @@ describe('roomTaskService', () => {
     });
 
     it('rejects a member who is neither an assignee, the creator, nor an admin', async () => {
-      roomMemberRepo.findMember.mockImplementation(async (_roomId, userId) => {
+      roomMemberRepo.findMember.mockImplementation(async (_roomId: string, userId: string) => {
         if (userId === 'bystander') return { ...plainMember, userId: 'bystander', role: 'member' };
         return membersById[userId] ?? null;
       });
@@ -284,7 +288,7 @@ describe('roomTaskService', () => {
 
     it('rejects an admin editing a task created by another admin', async () => {
       const otherAdmin: RoomMember = { ...adminMember, userId: 'admin-2' };
-      roomMemberRepo.findMember.mockImplementation(async (_roomId, userId) => {
+      roomMemberRepo.findMember.mockImplementation(async (_roomId: string, userId: string) => {
         if (userId === 'admin-2') return otherAdmin;
         return membersById[userId] ?? null;
       });

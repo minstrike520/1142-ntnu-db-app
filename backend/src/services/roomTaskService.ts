@@ -1,15 +1,15 @@
 import type { RoomTaskWithDetails } from '@shared/types';
-import type { IRoomTaskRepository } from '../repositories/IRoomTaskRepository';
-import type { IRoomMemberRepository } from '../repositories/IRoomMemberRepository';
-import type { IRoomRepository } from '../repositories/IRoomRepository';
-import { ForbiddenError, NotFoundError, ValidationError } from '../errors/AppError';
+import type { IRoomTaskRepository } from '../models/IRoomTaskRepository';
+import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
+import type { IRoomRepository } from '../models/IRoomRepository';
+import { ForbiddenError, NotFoundError, ValidationError } from '../utils/AppError';
 import {
   createTaskSchema,
   deleteTaskSchema,
   listTasksSchema,
   setTaskStatusSchema,
   updateTaskSchema,
-} from '../validators/taskSchemas';
+} from '../routes/taskSchemas';
 
 const validationMessage = (issues: { message: string }[]) =>
   issues[0]?.message ?? 'Invalid task payload';

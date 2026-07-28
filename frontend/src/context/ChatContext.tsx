@@ -276,7 +276,6 @@ interface ChatContextType {
   folders: Folder[];
   tasksByRoom: Record<string, RoomTask[]>;
   messages: Message[];
-  typingUsers: Record<string, string[]>;
   groupReadStates: Record<string, Record<string, string>>;
   user: User;
   activeRoomNicknames: Record<string, string>;
@@ -290,8 +289,6 @@ interface ChatContextType {
   roomsInitialized: boolean;
   selectedFriendForSidebar: Friend | null;
   setSelectedFriendForSidebar: React.Dispatch<React.SetStateAction<Friend | null>>;
-  showRightPanel: boolean;
-  setShowRightPanel: React.Dispatch<React.SetStateAction<boolean>>;
   hasUnsavedChanges: boolean;
   setHasUnsavedChanges: (val: boolean) => void;
 
@@ -364,14 +361,95 @@ interface ChatContextType {
   unblockUser: (blockedId: string) => Promise<void>;
   saveEmergencySettings: (settings: EmergencySettings) => Promise<void>;
   setUiLanguage: (language: UiLanguage) => void;
-  activeProfilePopover: { instanceId: string; userId: string } | null;
-  setActiveProfilePopover: React.Dispatch<React.SetStateAction<{ instanceId: string; userId: string } | null>>;
   refreshSocialData: () => Promise<void>;
   updateRoomSorting: (nextOrder: Record<string, string[]>) => Promise<void>;
   markRoomAsRead: (roomId: string) => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
+
+// ---------------------------------------------------------------------------
+// Leaf contexts for high-frequency / UI-local state (hotspot #2, issue #383).
+//
+// These states change far more often than the chat data (typing events fire
+// on every keystroke of every peer) or are purely presentational (popover,
+// right panel). Keeping them inside the main context value forced every
+// useChat() consumer — including every ChatBubble via useTranslation — to
+// re-render on each change. They still live in ChatProvider's state; only the
+// subscription channel is separate, so this is not a ChatContext re-
+// architecture (that is tracked separately, see
+// docs/frontend-react-render-optimization.md).
+// ---------------------------------------------------------------------------
+
+const TypingUsersContext = createContext<Record<string, string[]> | undefined>(undefined);
+
+const UiLanguageContext = createContext<UiLanguage | undefined>(undefined);
+
+interface ProfilePopoverContextType {
+  activeProfilePopover: { instanceId: string; userId: string } | null;
+  setActiveProfilePopover: React.Dispatch<
+    React.SetStateAction<{ instanceId: string; userId: string } | null>
+  >;
+}
+
+const ProfilePopoverContext = createContext<ProfilePopoverContextType | undefined>(undefined);
+
+interface RightPanelContextType {
+  showRightPanel: boolean;
+  setShowRightPanel: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+const RightPanelContext = createContext<RightPanelContextType | undefined>(undefined);
+
+// Static key list for the stable handler proxies built in ChatProvider. Kept
+// at module level so building the proxies never reads a ref during render.
+// The `NoMissingHandlerKey` check below fails to compile if a handler is
+// added to the `handlers` object without being listed here.
+const HANDLER_KEYS = [
+  "toggleFolder",
+  "handleLogout",
+  "handleSendMessage",
+  "handleTyping",
+  "handleUploadAttachments",
+  "handleRecallMessage",
+  "handleUpdateMessage",
+  "handleUpdateProfile",
+  "handleUpdatePreferences",
+  "handleCreateRoom",
+  "handleOpenPrivateRoom",
+  "handleCreateFolder",
+  "handleDeleteFolder",
+  "handleRenameFolder",
+  "handleCategorizeRoom",
+  "handleModifyNickname",
+  "handleLeaveOrBlock",
+  "handleDeleteAccount",
+  "loadGroupMembers",
+  "saveGroupSettings",
+  "approveGroupMember",
+  "updateGroupMember",
+  "kickGroupMember",
+  "transferGroupOwner",
+  "handleDeleteGroupRoom",
+  "searchUsersForInvite",
+  "handleJoinByInviteCode",
+  "sendFriendRequest",
+  "acceptFriendRequest",
+  "rejectFriendRequest",
+  "removeFriend",
+  "blockFriend",
+  "unblockUser",
+  "saveEmergencySettings",
+  "setUiLanguage",
+  "refreshSocialData",
+  "updateRoomSorting",
+  "loadRoomTasks",
+  "handleCreateTask",
+  "handleUpdateTask",
+  "handleToggleTaskStatus",
+  "handleDeleteTask",
+] as const;
+type HandlerKey = (typeof HANDLER_KEYS)[number];
 
 const toStoredUser = (
   profile: MyProfile,
@@ -1834,23 +1912,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     return remaining[0]?.id ?? null;
   };
 
-  const getReadAvatarsForMessage = (room: ChatRoom, msg: Message): { name: string; displayName?: string; avatarUrl: string }[] => {
-    if (room.type !== "group" && room.type !== "msg") return [];
+  // Called during render by consumers (Chatroom), so it must be a real
+  // useCallback over its state dependencies rather than a stable proxy that
+  // could observe a previous commit's state.
+  const getReadAvatarsForMessage = useCallback(
+    (room: ChatRoom, msg: Message): { name: string; displayName?: string; avatarUrl: string }[] => {
+      if (room.type !== "group" && room.type !== "msg") return [];
 
-    const roomReads = groupReadStates[room.id];
-    if (!roomReads) return [];
+      const roomReads = groupReadStates[room.id];
+      if (!roomReads) return [];
 
-    return Object.entries(roomReads)
-      .filter(([readerId, lastReadId]) => readerId !== currentUserId && lastReadId === msg.id)
-      .map(([readerId]) => {
-        const member = room.members?.find((m) => m.userId === readerId);
-        return {
-          name: member?.name ?? readerId,
-          displayName: member?.nickname ?? member?.name ?? readerId,
-          avatarUrl: member?.avatarUrl ?? "",
-        };
-      });
-  };
+      return Object.entries(roomReads)
+        .filter(([readerId, lastReadId]) => readerId !== currentUserId && lastReadId === msg.id)
+        .map(([readerId]) => {
+          const member = room.members?.find((m) => m.userId === readerId);
+          return {
+            name: member?.name ?? readerId,
+            displayName: member?.nickname ?? member?.name ?? readerId,
+            avatarUrl: member?.avatarUrl ?? "",
+          };
+        });
+    },
+    [groupReadStates, currentUserId],
+  );
 
   const searchUsersForInvite = async (query: string): Promise<PublicUser[]> => {
     if (!token) throw new Error("Not authenticated");
@@ -2157,85 +2241,162 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // -------------------------------------------------------------------------
+  // Context value stabilization (hotspot #1, issue #383)
+  //
+  // The React Compiler is disabled for this file (see header), so without
+  // manual memoization every provider render would rebuild all handler
+  // closures and the context value object, forcing every useChat() consumer
+  // to re-render on any provider state change.
+  //
+  // Imperative handlers are exposed through identity-stable proxies that
+  // delegate to the latest implementation via a ref (same pattern as
+  // markRoomAsRead below). The proxies are only ever invoked from event
+  // handlers and effects — never during render — so they always observe the
+  // closures of the last committed render. Functions that consumers call
+  // during render (getReadAvatarsForMessage) use useCallback with real
+  // dependencies instead.
+  // -------------------------------------------------------------------------
+  const handlers = {
+    toggleFolder,
+    handleLogout,
+    handleSendMessage,
+    handleTyping,
+    handleUploadAttachments,
+    handleRecallMessage,
+    handleUpdateMessage,
+    handleUpdateProfile,
+    handleUpdatePreferences,
+    handleCreateRoom,
+    handleOpenPrivateRoom,
+    handleCreateFolder,
+    handleDeleteFolder,
+    handleRenameFolder,
+    handleCategorizeRoom,
+    handleModifyNickname,
+    handleLeaveOrBlock,
+    handleDeleteAccount,
+    loadGroupMembers,
+    saveGroupSettings,
+    approveGroupMember,
+    updateGroupMember,
+    kickGroupMember,
+    transferGroupOwner,
+    handleDeleteGroupRoom,
+    searchUsersForInvite,
+    handleJoinByInviteCode,
+    sendFriendRequest,
+    acceptFriendRequest,
+    rejectFriendRequest,
+    removeFriend,
+    blockFriend,
+    unblockUser,
+    saveEmergencySettings,
+    setUiLanguage,
+    refreshSocialData: handleRefreshSocialData,
+    updateRoomSorting,
+    loadRoomTasks,
+    handleCreateTask,
+    handleUpdateTask,
+    handleToggleTaskStatus,
+    handleDeleteTask,
+  };
+  type Handlers = typeof handlers;
+  // Compile-time exhaustiveness check: every key of `handlers` must appear in
+  // the module-level HANDLER_KEYS list (and vice versa via HandlerKey).
+  type NoMissingHandlerKey = Exclude<keyof Handlers, HandlerKey> extends never ? true : never;
+  const assertAllHandlerKeysListed: NoMissingHandlerKey = true;
+  void assertAllHandlerKeysListed;
+
+  const handlersRef = useRef<Handlers>(handlers);
+  useLayoutEffect(() => {
+    handlersRef.current = handlers;
+  });
+
+  const stableHandlers = useMemo(() => {
+    const proxies = {} as Record<HandlerKey, (...args: unknown[]) => unknown>;
+    for (const key of HANDLER_KEYS) {
+      proxies[key] = (...args: unknown[]) =>
+        (handlersRef.current[key] as (...inner: unknown[]) => unknown)(...args);
+    }
+    return proxies as unknown as Handlers;
+  }, []);
+
+  const contextValue = useMemo<ChatContextType>(
+    () => ({
+      rooms: derivedRooms,
+      folders,
+      tasksByRoom,
+      messages,
+      groupReadStates,
+      user,
+      activeRoomNicknames,
+      friends,
+      friendRequests,
+      blockedUsers,
+      emergencySettings,
+      uiLanguage,
+      isAuthenticated,
+      isMounted,
+      roomsInitialized,
+      selectedFriendForSidebar,
+      setSelectedFriendForSidebar,
+      hasUnsavedChanges,
+      setHasUnsavedChanges,
+      setRooms,
+      setFolders,
+      setMessages,
+      setUser,
+      setActiveRoomNicknames,
+      getReadAvatarsForMessage,
+      markRoomAsRead,
+      ...stableHandlers,
+    }),
+    [
+      derivedRooms,
+      folders,
+      tasksByRoom,
+      messages,
+      groupReadStates,
+      user,
+      activeRoomNicknames,
+      friends,
+      friendRequests,
+      blockedUsers,
+      emergencySettings,
+      uiLanguage,
+      isAuthenticated,
+      isMounted,
+      roomsInitialized,
+      selectedFriendForSidebar,
+      hasUnsavedChanges,
+      getReadAvatarsForMessage,
+      markRoomAsRead,
+      stableHandlers,
+    ],
+  );
+
+  const profilePopoverValue = useMemo<ProfilePopoverContextType>(
+    () => ({ activeProfilePopover, setActiveProfilePopover }),
+    [activeProfilePopover],
+  );
+
+  const rightPanelValue = useMemo<RightPanelContextType>(
+    () => ({ showRightPanel, setShowRightPanel }),
+    [showRightPanel],
+  );
+
   return (
-    <ChatContext.Provider
-      value={{
-        rooms: derivedRooms,
-        folders,
-        tasksByRoom,
-        messages,
-        groupReadStates,
-        user,
-        activeRoomNicknames,
-        friends,
-        friendRequests,
-        blockedUsers,
-        emergencySettings,
-        uiLanguage,
-        isAuthenticated,
-        isMounted,
-        roomsInitialized,
-        selectedFriendForSidebar,
-        setSelectedFriendForSidebar,
-        showRightPanel,
-        setShowRightPanel,
-        setRooms,
-        setFolders,
-        setMessages,
-        setUser,
-        setActiveRoomNicknames,
-        toggleFolder,
-        handleLogout,
-        handleSendMessage,
-        handleTyping,
-        handleUploadAttachments,
-        handleRecallMessage,
-        handleUpdateMessage,
-        handleUpdateProfile,
-        handleUpdatePreferences,
-        handleCreateRoom,
-        handleOpenPrivateRoom,
-        handleCreateFolder,
-        handleDeleteFolder,
-        handleRenameFolder,
-        handleCategorizeRoom,
-        handleModifyNickname,
-        handleLeaveOrBlock,
-        handleDeleteAccount,
-        loadGroupMembers,
-        loadRoomTasks,
-        handleCreateTask,
-        handleUpdateTask,
-        handleToggleTaskStatus,
-        handleDeleteTask,
-        saveGroupSettings,
-        approveGroupMember,
-        updateGroupMember,
-        kickGroupMember,
-        transferGroupOwner,
-        handleDeleteGroupRoom,
-        getReadAvatarsForMessage,
-        searchUsersForInvite,
-        handleJoinByInviteCode,
-        sendFriendRequest,
-        acceptFriendRequest,
-        rejectFriendRequest,
-        removeFriend,
-        blockFriend,
-        unblockUser,
-        saveEmergencySettings,
-        setUiLanguage,
-        typingUsers,
-        activeProfilePopover,
-        setActiveProfilePopover,
-        hasUnsavedChanges,
-        setHasUnsavedChanges,
-        refreshSocialData: handleRefreshSocialData,
-        updateRoomSorting,
-        markRoomAsRead,
-      }}
-    >
-      {children}
+    <ChatContext.Provider value={contextValue}>
+      <UiLanguageContext.Provider value={uiLanguage}>
+        <TypingUsersContext.Provider value={typingUsers}>
+          <ProfilePopoverContext.Provider value={profilePopoverValue}>
+            <RightPanelContext.Provider value={rightPanelValue}>
+              {children}
+            </RightPanelContext.Provider>
+          </ProfilePopoverContext.Provider>
+        </TypingUsersContext.Provider>
+      </UiLanguageContext.Provider>
     </ChatContext.Provider>
   );
 }
@@ -2244,6 +2405,42 @@ export function useChat() {
   const context = useContext(ChatContext);
   if (context === undefined) {
     throw new Error("useChat must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** Per-room typing indicator state. Changes on every remote typing event. */
+export function useTypingUsers() {
+  const context = useContext(TypingUsersContext);
+  if (context === undefined) {
+    throw new Error("useTypingUsers must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** UI language only — lets useTranslation avoid subscribing to chat data. */
+export function useUiLanguage() {
+  const context = useContext(UiLanguageContext);
+  if (context === undefined) {
+    throw new Error("useUiLanguage must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** Shared profile-popover open state (message bubbles, member list). */
+export function useProfilePopover() {
+  const context = useContext(ProfilePopoverContext);
+  if (context === undefined) {
+    throw new Error("useProfilePopover must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** Right info-panel visibility. */
+export function useRightPanel() {
+  const context = useContext(RightPanelContext);
+  if (context === undefined) {
+    throw new Error("useRightPanel must be used within a ChatProvider");
   }
   return context;
 }

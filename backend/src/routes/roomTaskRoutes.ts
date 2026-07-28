@@ -1,17 +1,62 @@
-import { Router } from 'express';
-import { authMiddleware } from '../middlewares/authMiddleware';
-import type { makeRoomTaskController } from '../controllers/roomTaskController';
+import { Hono } from 'hono';
+import type { RoomTaskService } from '../services/roomTaskService';
 
-export const makeRoomTaskRoutes = (ctrl: ReturnType<typeof makeRoomTaskController>): Router => {
-  const router = Router();
+// The service validates every payload with the task schemas (roomId/taskId are
+// merged in from the path), so these handlers stay thin and let AppError
+// subclasses reach the shared error handler.
+export const makeRoomTaskRoutes = (service: RoomTaskService) => {
+  const app = new Hono();
 
-  router.use(authMiddleware);
+  app.get('/:roomId/tasks', async (c) => {
+    const userId = c.get('user').userId;
+    const tasks = await service.listTasks(userId, c.req.param('roomId'));
+    return c.json(tasks, 200);
+  });
 
-  router.get('/:roomId/tasks', ctrl.list.bind(ctrl));
-  router.post('/:roomId/tasks', ctrl.create.bind(ctrl));
-  router.patch('/:roomId/tasks/:taskId', ctrl.update.bind(ctrl));
-  router.patch('/:roomId/tasks/:taskId/status', ctrl.setStatus.bind(ctrl));
-  router.delete('/:roomId/tasks/:taskId', ctrl.remove.bind(ctrl));
+  app.post('/:roomId/tasks', async (c) => {
+    const body = await c.req.json();
+    const userId = c.get('user').userId;
+    const { title, description, dueAt, externalLink, assigneeUserIds } = body;
+    const task = await service.createTask(userId, c.req.param('roomId'), {
+      title,
+      description,
+      dueAt,
+      externalLink,
+      assigneeUserIds,
+    });
+    return c.json(task, 201);
+  });
 
-  return router;
+  app.patch('/:roomId/tasks/:taskId', async (c) => {
+    const body = await c.req.json();
+    const userId = c.get('user').userId;
+    const { title, description, dueAt, externalLink } = body;
+    const task = await service.updateTask(
+      userId,
+      c.req.param('roomId'),
+      c.req.param('taskId'),
+      { title, description, dueAt, externalLink },
+    );
+    return c.json(task, 200);
+  });
+
+  app.patch('/:roomId/tasks/:taskId/status', async (c) => {
+    const body = await c.req.json();
+    const userId = c.get('user').userId;
+    const task = await service.setStatus(
+      userId,
+      c.req.param('roomId'),
+      c.req.param('taskId'),
+      body.status,
+    );
+    return c.json(task, 200);
+  });
+
+  app.delete('/:roomId/tasks/:taskId', async (c) => {
+    const userId = c.get('user').userId;
+    await service.deleteTask(userId, c.req.param('roomId'), c.req.param('taskId'));
+    return c.body(null, 204);
+  });
+
+  return app;
 };

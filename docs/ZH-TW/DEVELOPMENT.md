@@ -55,7 +55,7 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 | 服務 | 主機網址 / 連接埠 | 容器內部連接埠 | 說明 |
 |---|------------------|----------------|-------------|
 | **前端** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js 前端網頁應用程式 |
-| **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Express API 與 Socket.IO 伺服器 |
+| **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API 與 Socket.IO 伺服器 |
 | **資料庫** | `localhost:5435` | 5432 | PostgreSQL 18 實例 |
 
 對於瀏覽器端的前端請求，請將 API 環境變數設定為：
@@ -76,19 +76,19 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 首次設定專案時，您必須初始化資料庫 Schema。請確認 Docker 容器已正常啟動，然後套用遷移：
 
 ```bash
-docker compose exec backend pnpm run migrate:up
+docker compose exec backend bun run migrate:up
 ```
 
 將測試用的種子資料寫入資料庫：
 ```bash
-docker compose exec backend pnpm run db:seed
+docker compose exec backend bun run db:seed
 ```
 
 ### 常見指令
-- **建立新的遷移檔**：`docker compose exec backend pnpm run migrate:create <name>`
-- **執行資料庫遷移**：`docker compose exec backend pnpm run migrate:up`
-- **回滾資料庫遷移**：`docker compose exec backend pnpm run migrate:down`
-- **寫入種子資料**：`docker compose exec backend pnpm run db:seed`
+- **建立新的遷移檔**：`docker compose exec backend bun run migrate:create <name>`
+- **執行資料庫遷移**：`docker compose exec backend bun run migrate:up`
+- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`
+- **寫入種子資料**：`docker compose exec backend bun run db:seed`
 
 ### 修復損壞的開發資料庫
 如果遷移過程中遇到 `relation ... already exists` 錯誤，或者遷移狀態發生混亂：
@@ -101,7 +101,7 @@ docker compose down -v
 docker compose up -d
 
 # 3. 等待資料庫就緒後，再次執行遷移
-docker compose exec backend pnpm run migrate:up
+docker compose exec backend bun run migrate:up
 ```
 
 ---
@@ -140,17 +140,17 @@ docker compose exec backend pnpm run migrate:up
 ## 5. 測試指南
 
 ### 測試架構
-開發環境完全運行於 Docker 中，主機上沒有 `node_modules`。所有 Vitest 測試都必須在後端容器內部使用 `docker compose exec` 執行。
+開發環境完全運行於 Docker 中，主機上沒有 `node_modules`。所有 Bun 測試套件都必須在後端容器內部使用 `docker compose exec` 執行。
 
 測試資料庫設定：整合測試會在一台臨時的 Postgres 測試資料庫實例（`db-test`）上運行，該實例定義於 `docker-compose.test.yml` 中，以將開發數據與測試數據隔離開來。
 
 ### 執行 TypeScript 型別檢查
 ```bash
 # 後端檢查
-docker compose exec backend pnpm exec tsc --noEmit
+pnpm --prefix backend exec tsc --noEmit
 
 # 前端檢查
-docker compose exec frontend pnpm exec tsc --noEmit
+pnpm --prefix frontend exec tsc --noEmit
 ```
 
 ### 執行 ESLint 代碼品質與風格檢查
@@ -167,32 +167,27 @@ docker compose exec frontend pnpm run lint
 ### 執行單元測試
 單元測試不需要資料庫連線。
 ```bash
-docker compose exec backend pnpm run test:unit
+docker compose exec backend bun run test:unit
 ```
 
 ### 執行整合測試
-整合測試需要啟動臨時的測試資料庫並套用遷移：
+整合測試需要啟動臨時的測試資料庫（`test:db:up` 會自動啟動容器並完成資料庫遷移）：
 
 ```bash
-# 1. 啟動臨時測試資料庫
+# 1. 啟動臨時測試資料庫並自動套用遷移
 pnpm -C backend run test:db:up
-# 或：docker compose -f docker-compose.test.yml up -d --wait
 
-# 2. 套用遷移至測試資料庫（容器啟動時需要執行）
-docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
+# 2. 執行整合測試套件
+docker compose exec backend bun run test:integration
 
-# 3. 執行整合測試套件
-docker compose exec backend pnpm run test:integration
-
-# 4. 關閉測試資料庫
+# 3. 關閉測試資料庫
 pnpm -C backend run test:db:down
-# 或：docker compose -f docker-compose.test.yml down
 ```
 
 ### 執行所有測試
 ```bash
 pnpm -C backend run test:db:up
-docker compose exec backend pnpm run test
+docker compose exec backend bun run test
 pnpm -C backend run test:db:down
 ```
 
@@ -202,11 +197,11 @@ pnpm -C backend run test:db:down
 
 ### 單元測試
 * **路徑**：`backend/tests/unit/**/*.test.ts`
-* **指南**：使用 `vi.mock()` 模擬資料庫 Repository，在不建立真實資料庫連線的情況下，單獨測試業務邏輯。
+* **指南**：使用 `mock.module()` 模擬資料庫 Repository，在不建立真實資料庫連線的情況下，單獨測試業務邏輯。
 
 ```typescript
 // 範例：backend/tests/unit/services/userService.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 
 describe('userService', () => {
   it('adds two numbers', () => {
@@ -221,7 +216,7 @@ describe('userService', () => {
 
 ```typescript
 // 範例：backend/tests/integration/repositories/userRepository.test.ts
-import { beforeEach, afterAll, describe, it, expect } from 'vitest';
+import { beforeEach, afterAll, describe, it, expect } from 'bun:test';
 import { testPool } from '../helpers/testPool';
 import { resetDb } from '../helpers/resetDb';
 
@@ -245,7 +240,7 @@ describe('userRepository', () => {
 
 ## 7. 疑難排解
 
-* **`vitest: not found`**：後端容器的 `node_modules` 不同步。請重新建置容器：
+* **`bun test 錯誤`**：後端容器的 `node_modules` 不同步。請重新建置容器：
   ```bash
   docker compose rm -v -s -f backend
   docker compose up -d --build backend
@@ -257,5 +252,38 @@ describe('userRepository', () => {
 * **`db-test` 連線掛起或逾時**：請確認 `db-test` 正在運行，指令為：`docker compose -f docker-compose.test.yml ps`。如果沒啟動請將它啟動。
 * **`TRUNCATE` 失敗**：請確認已透過以下指令在測試資料庫中套用了遷移：
   ```bash
-  docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
+  docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
+
+---
+
+## 8. Git 工作流程、PR 規範與自動化發布
+
+### Git 分支策略
+* **主要開發分支**：本專案主要開發分支為 **`dev`**。
+* **功能分支**：所有功能開發與 Bug 修復皆需自 `dev` 切出（例如：`feat/my-feature` 或 `fix/my-bug`）。
+* **Pull Request**：所有 Pull Request 皆需提交回 `dev` 分支。嚴禁直接 Push 至 `main` 或 `dev` 分支。
+
+### PR 合併規範：Squash and Merge
+為保持 Git 歷史乾淨並避免發布日誌（Changelog）雜亂，**所有 Merge 至 `dev` 的 Pull Request 必須採用 Squash and Merge**。
+* **PR 標題格式**：PR 標題必須遵循 [Conventional Commits](https://www.conventionalcommits.org/) 規範：
+  - `feat(scope): 英文簡述` — 新增功能 (feature)
+  - `fix(scope): 英文簡述` — 修正 Bug
+  - `docs: 英文簡述` — 修改文件 (documentation)
+  - `refactor(scope): 英文簡述` — 重構代碼
+  - `chore: 英文簡述` — 建置流程或雜務變更
+  - `BREAKING CHANGE:` 或 `feat!:` — 破壞性變更（重大 API / 資料庫架構調整）
+* **Squash Merge 優點**：在合併時將 Feature 分支中多個微小的提交（如修飾註解、修復排版）壓縮為單一精確的提交。
+
+### 自動化版本發布流程 (`dev` → `main`)
+當 `dev` 分支累積階段變更並合併回 `main` 分支時，GitHub Actions (`.github/workflows/ci.yml`) 會於 CI 測試全數通過後自動執行 `semantic-release` 發布工作：
+
+1. **語意化版本 (`a.b.c`) 計算**：
+   - `fix:` $\rightarrow$ 遞增 **Patch (`c`)**（如 `v1.0.1` $\rightarrow$ `v1.0.2`）
+   - `feat:` $\rightarrow$ 遞增 **Minor (`b`)**（如 `v1.0.1` $\rightarrow$ `v1.1.0`）
+   - `BREAKING CHANGE:` $\rightarrow$ 遞增 **Major (`a`)**（如 `v1.0.1` $\rightarrow$ `v2.0.0`）
+   - `docs:`, `chore:`, `refactor:` $\rightarrow$ 不遞增版本號
+2. **三方版本號同步**：自動執行 `scripts/update-versions.js` 同步更新根目錄 `package.json`、`frontend/package.json` 與 `backend/package.json` 的版本。
+3. **Changelog 與 Release 頁面**：自動更新 `CHANGELOG.md`，並**將格式化後的 Release Notes 直接發布於 GitHub Release 頁面**。
+4. **Stack 映像檔與部署包發布**：建立 `vX.Y.Z` 標籤並觸發 `.github/workflows/release-stack.yml`，自動建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，並附加 `near-chat-stack-vX.Y.Z.tar.gz` 部署包至 GitHub Release。
+

@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import dynamic from "next/dynamic";
-import { useChat } from "@/context/ChatContext";
+import { useChat, useRightPanel } from "@/context/ChatContext";
 import { useTranslation } from "@/hooks/useTranslation";
 import Chatroom from "@/components/chat/Chatroom";
 import RoomMembersPanel from "@/components/chat/RoomMembersPanel";
@@ -34,7 +34,8 @@ function GroupSettingsLoading() {
 
 export default function ChatroomPageContent() {
   const params = useParams();
-  const { rooms, showRightPanel, setShowRightPanel, user } = useChat();
+  const { rooms, user } = useChat();
+  const { showRightPanel, setShowRightPanel } = useRightPanel();
   const [showSettings, setShowSettings] = useState(false);
 
   const chatId = params?.chatId as string;

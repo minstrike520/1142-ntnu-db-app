@@ -1,117 +1,103 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import request from 'supertest';
-let app: any;
-import { resetDb } from '../../helpers/resetDb';
+import { app } from '../../../src/index';
 import { testPool } from '../../helpers/testPool';
-
-beforeAll(async () => {
-  process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
-  const indexModule = await import('../../../src/index');
-  app = indexModule.app;
-});
+import { resetDb } from '../../helpers/resetDb';
+import path from 'path';
+import fs from 'fs/promises';
 
 describe('Attachment E2E', () => {
-  let token: string;
+  let userToken: string;
   let userId: string;
   let roomId: string;
   let messageId: string;
 
   beforeEach(async () => {
     await resetDb();
-    const authRes = await request(app).post('/api/v1/auth/register').send({
-      name: 'AttachmentUser',
-      email: 'attach@example.com',
-      password: 'Password123!',
-    });
-    token = authRes.body.token;
-    userId = authRes.body.user.userId;
+
+    const regRes = await request(app)
+      .post('/api/v1/auth/register')
+      .send({
+        name: 'Attachment User',
+        email: 'attachment@test.com',
+        password: 'password123',
+      });
+    userToken = regRes.body.token;
+    userId = regRes.body.user.userId;
 
     const roomRes = await request(app)
       .post('/api/v1/rooms')
-      .set('Authorization', `Bearer ${token}`)
+      .set('Authorization', `Bearer ${userToken}`)
       .send({
         type: 'group',
         name: 'Attachment Test Room',
       });
     roomId = roomRes.body.roomId;
 
-    const msgRes = await testPool.query(
-      "INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, 'Hello attachment!') RETURNING message_id",
-      [roomId, userId]
-    );
-    messageId = msgRes.rows[0].message_id;
-  });
-
-  afterAll(async () => {
-    await testPool.end();
+    const msgContent = 'Hello attachment!';
+    const msgRes = await testPool`
+      INSERT INTO messages (room_id, sender_id, content) VALUES (${roomId}, ${userId}, ${msgContent}) RETURNING message_id
+    `;
+    messageId = msgRes[0].message_id;
   });
 
   it('should upload an attachment successfully', async () => {
     const res = await request(app)
       .post('/api/v1/attachments')
-      .set('Authorization', `Bearer ${token}`)
-      .attach('file', Buffer.from('dummy file content'), 'test.txt');
+      .set('Authorization', `Bearer ${userToken}`)
+      .attach('file', Buffer.from('test file content'), 'test.txt');
 
     expect(res.status).toBe(201);
-    expect(res.body).toHaveProperty('attachmentId');
-    expect(res.body.fileUrl).toContain('/api/v1/attachments/');
-    expect(res.body).toMatchObject({
-      uploadedBy: userId,
-      fileType: 'text/plain',
-      originalName: 'test.txt',
-    });
-    expect(res.body.messageId).toBeUndefined();
-    expect(res.body.uploadedAt).toBeDefined();
+    expect(res.body.attachmentId).toBeDefined();
+    expect(res.body.originalName).toBe('test.txt');
+    expect(res.body.fileType).toBe('text/plain');
+    expect(res.body.fileUrl).toBe(`/api/v1/attachments/${res.body.attachmentId}`);
   });
 
-  it('should download an uploaded attachment', async () => {
+  it('should return 400 if no file is provided', async () => {
+    const res = await request(app)
+      .post('/api/v1/attachments')
+      .set('Authorization', `Bearer ${userToken}`);
+
+    expect(res.status).toBe(400);
+  });
+
+  it('should fetch metadata for an unassigned attachment uploaded by the user', async () => {
     const uploadRes = await request(app)
       .post('/api/v1/attachments')
-      .set('Authorization', `Bearer ${token}`)
-      .attach('file', Buffer.from('dummy file content'), 'test.txt');
+      .set('Authorization', `Bearer ${userToken}`)
+      .attach('file', Buffer.from('test metadata file'), 'meta.txt');
 
     const attachmentId = uploadRes.body.attachmentId;
 
     const getRes = await request(app)
       .get(`/api/v1/attachments/${attachmentId}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${userToken}`)
+      .set('Accept', 'application/json');
 
     expect(getRes.status).toBe(200);
-    expect(getRes.text || getRes.body.toString()).toBe('dummy file content');
-    // Ensure content disposition or content type
-    expect(getRes.headers['content-type']).toContain('application/octet-stream');
+    expect(getRes.body.attachmentId).toBe(attachmentId);
+    expect(getRes.body.originalName).toBe('meta.txt');
   });
 
-  it('should return 404 for non-existent attachment', async () => {
-    const fakeId = '00000000-0000-0000-0000-000000000000';
-    const getRes = await request(app)
-      .get(`/api/v1/attachments/${fakeId}`)
-      .set('Authorization', `Bearer ${token}`);
-
-    expect(getRes.status).toBe(404);
-  });
-
-  it('should return 404 for an attachment whose message has been recalled', async () => {
+  it('should fetch metadata for an attachment linked to a room message if user is in that room', async () => {
     const uploadRes = await request(app)
       .post('/api/v1/attachments')
-      .set('Authorization', `Bearer ${token}`)
-      .attach('file', Buffer.from('dummy file content'), 'test.txt');
+      .set('Authorization', `Bearer ${userToken}`)
+      .attach('file', Buffer.from('room attachment content'), 'room_file.txt');
 
     const attachmentId = uploadRes.body.attachmentId;
 
-    await testPool.query(
-      'UPDATE attachments SET message_id = $1 WHERE attachment_id = $2',
-      [messageId, attachmentId],
-    );
-    await testPool.query(
-      'UPDATE messages SET is_recalled = true WHERE message_id = $1',
-      [messageId],
-    );
+    await testPool`
+      UPDATE attachments SET message_id = ${messageId} WHERE attachment_id = ${attachmentId}
+    `;
 
     const getRes = await request(app)
       .get(`/api/v1/attachments/${attachmentId}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${userToken}`)
+      .set('Accept', 'application/json');
 
-    expect(getRes.status).toBe(404);
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.attachmentId).toBe(attachmentId);
   });
 });

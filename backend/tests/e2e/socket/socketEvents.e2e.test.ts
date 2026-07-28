@@ -1,17 +1,20 @@
+import { describe, it, expect, beforeAll, beforeEach, afterEach, mock } from 'bun:test';
+
+const mockSqlFn: any = mock().mockResolvedValue([{}]);
+mockSqlFn.unsafe = mock().mockResolvedValue([{}]);
+mock.module('../../../src/models/db', () => ({
+  default: mockSqlFn,
+}));
+
 import { createServer, type Server as HttpServer } from 'http';
 import { AddressInfo } from 'net';
 import { Server } from 'socket.io';
 import { io as createClient, type Socket as ClientSocket } from 'socket.io-client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { signToken } from '../../../src/auth/jwt';
-import { ForbiddenError } from '../../../src/errors/AppError';
+import { signToken } from '../../../src/utils/jwt';
+import { ForbiddenError } from '../../../src/utils/AppError';
 import { attachSocketAuth, type ChatServer } from '../../../src/realtime/authSocket';
 import { attachSockets } from '../../../src/realtime/socketServer';
 import type { ClientToServerEvents, MessageWithSender, ServerToClientEvents } from '../../../../shared/types';
-
-vi.mock('../../../src/db', () => ({
-  default: { query: vi.fn().mockResolvedValue({ rows: [{}] }) },
-}));
 
 type TestClient = ClientSocket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -27,8 +30,21 @@ const message: MessageWithSender = {
 
 const waitFor = <T>(socket: TestClient, event: keyof ServerToClientEvents): Promise<T> =>
   new Promise((resolve) => {
-    socket.once(event, (payload) => resolve(payload as T));
+    socket.once(event, (payload: any) => resolve(payload as T));
   });
+
+async function waitForExpect(fn: () => void, timeout = 1000, interval = 50) {
+  const start = Date.now();
+  while (true) {
+    try {
+      fn();
+      return;
+    } catch (e) {
+      if (Date.now() - start > timeout) throw e;
+      await new Promise((resolve) => setTimeout(resolve, interval));
+    }
+  }
+}
 
 describe('Socket.IO chat events E2E', () => {
   let httpServer: HttpServer;
@@ -36,18 +52,20 @@ describe('Socket.IO chat events E2E', () => {
   let url: string;
   let clients: TestClient[];
   let messageService: {
-    sendMessage: ReturnType<typeof vi.fn>;
-    recallMessage: ReturnType<typeof vi.fn>;
+    sendMessage: any;
+    recallMessage: any;
   };
   let messageRepository: {
-    findById: ReturnType<typeof vi.fn>;
+    findById: any;
   };
   let roomMemberRepository: {
-    update: ReturnType<typeof vi.fn>;
+    update: any;
+    findMember: any;
   };
 
-  const connectClient = (userId: string, token = signToken({ userId, name: userId })): Promise<TestClient> =>
-    new Promise((resolve, reject) => {
+  const connectClient = async (userId: string, tokenInput?: string | Promise<string>): Promise<TestClient> => {
+    const token = await (tokenInput !== undefined ? tokenInput : signToken({ userId, name: userId }));
+    return new Promise((resolve, reject) => {
       const socket: TestClient = createClient(url, {
         auth: token ? { token } : {},
         forceNew: true,
@@ -57,6 +75,7 @@ describe('Socket.IO chat events E2E', () => {
       socket.once('connect', () => resolve(socket));
       socket.once('connect_error', reject);
     });
+  };
 
   beforeEach(async () => {
     httpServer = createServer();
@@ -64,20 +83,20 @@ describe('Socket.IO chat events E2E', () => {
       cors: { origin: '*' },
     }) as ChatServer;
     messageService = {
-      sendMessage: vi.fn(),
-      recallMessage: vi.fn(),
+      sendMessage: mock(),
+      recallMessage: mock(),
     };
     messageRepository = {
-      findById: vi.fn().mockResolvedValue(message),
+      findById: mock().mockResolvedValue(message),
     };
     roomMemberRepository = {
-      update: vi.fn(),
-      findMember: vi.fn().mockResolvedValue({ role: 'member' }),
+      update: mock(),
+      findMember: mock().mockResolvedValue({ role: 'member' }),
     };
     clients = [];
 
     attachSocketAuth(ioServer);
-    attachSockets(ioServer, { messageService, messageRepository, roomMemberRepository });
+    attachSockets(ioServer, { messageService: messageService as any, messageRepository: messageRepository as any, roomMemberRepository: roomMemberRepository as any });
 
     await new Promise<void>((resolve) => {
       httpServer.listen(0, '127.0.0.1', () => resolve());
@@ -87,9 +106,18 @@ describe('Socket.IO chat events E2E', () => {
   });
 
   afterEach(async () => {
-    clients.forEach((socket) => socket.disconnect());
-    await new Promise<void>((resolve) => ioServer.close(() => resolve()));
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    clients.forEach((socket) => {
+      try { socket.disconnect(); } catch (e) {}
+    });
+    try { ioServer.disconnectSockets(true); } catch (e) {}
+    await Promise.race([
+      new Promise<void>((resolve) => ioServer.close(() => resolve())),
+      new Promise<void>((resolve) => setTimeout(resolve, 300))
+    ]);
+    await Promise.race([
+      new Promise<void>((resolve) => httpServer.close(() => resolve())),
+      new Promise<void>((resolve) => setTimeout(resolve, 300))
+    ]);
   });
 
   it('rejects connections without a token', async () => {
@@ -100,12 +128,12 @@ describe('Socket.IO chat events E2E', () => {
     const client = await connectClient('user-1');
 
     client.emit('join_room', { roomId: 'room-1' });
-    await vi.waitFor(() => {
+    await waitForExpect(() => {
       expect(ioServer.sockets.adapter.rooms.get('room_room-1')?.has(client.id!)).toBe(true);
     });
 
     client.emit('leave_room', { roomId: 'room-1' });
-    await vi.waitFor(() => {
+    await waitForExpect(() => {
       expect(ioServer.sockets.adapter.rooms.get('room_room-1')?.has(client.id!)).not.toBe(true);
     });
   });
@@ -116,7 +144,7 @@ describe('Socket.IO chat events E2E', () => {
     messageService.sendMessage.mockResolvedValue(message);
 
     receiver.emit('join_room', { roomId: 'room-1' });
-    await vi.waitFor(() => {
+    await waitForExpect(() => {
       expect(ioServer.sockets.adapter.rooms.get('room_room-1')?.has(receiver.id!)).toBe(true);
     });
 
@@ -144,7 +172,7 @@ describe('Socket.IO chat events E2E', () => {
     });
 
     receiver.emit('join_room', { roomId: 'room-1' });
-    await vi.waitFor(() => {
+    await waitForExpect(() => {
       expect(ioServer.sockets.adapter.rooms.get('room_room-1')?.has(receiver.id!)).toBe(true);
     });
 
@@ -167,7 +195,7 @@ describe('Socket.IO chat events E2E', () => {
     });
 
     receiver.emit('join_room', { roomId: 'room-1' });
-    await vi.waitFor(() => {
+    await waitForExpect(() => {
       expect(ioServer.sockets.adapter.rooms.get('room_room-1')?.has(receiver.id!)).toBe(true);
     });
 
@@ -198,13 +226,12 @@ describe('Socket.IO chat events E2E', () => {
     });
   });
 
-
   it('broadcasts typing indicators', async () => {
     const sender = await connectClient('user-1');
     const receiver = await connectClient('user-2');
 
     receiver.emit('join_room', { roomId: 'room-1' });
-    await vi.waitFor(() => {
+    await waitForExpect(() => {
       expect(ioServer.sockets.adapter.rooms.get('room_room-1')?.has(receiver.id!)).toBe(true);
     });
 
@@ -225,7 +252,7 @@ describe('Socket.IO chat events E2E', () => {
     messageService.recallMessage.mockResolvedValue({ ...message, isRecalled: true });
 
     receiver.emit('join_room', { roomId: 'room-1' });
-    await vi.waitFor(() => {
+    await waitForExpect(() => {
       expect(ioServer.sockets.adapter.rooms.get('room_room-1')?.has(receiver.id!)).toBe(true);
     });
 
@@ -259,7 +286,7 @@ describe('Socket.IO chat events E2E', () => {
     const receiver = await connectClient('user-2');
 
     receiver.emit('join_room', { roomId: 'room-1' });
-    await vi.waitFor(() => {
+    await waitForExpect(() => {
       expect(ioServer.sockets.adapter.rooms.get('room_room-1')?.has(receiver.id!)).toBe(true);
     });
 
