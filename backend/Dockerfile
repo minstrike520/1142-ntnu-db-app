@@ -1,4 +1,4 @@
-FROM oven/bun:1.2-slim
+FROM oven/bun:1.3.14-slim
 
 RUN apt-get update -y && apt-get install -y openssl
 
@@ -11,9 +11,9 @@ RUN chown -R bun:bun /app
 
 USER bun
 
-COPY --chown=bun:bun package.json pnpm-lock.yaml ./
+COPY --chown=bun:bun package.json bun.lock ./
 
-RUN bun install
+RUN bun install --frozen-lockfile
 
 COPY --chown=bun:bun . .
 
