@@ -138,3 +138,25 @@ This document defines the relational schema for the real-time group chat applica
 | `user_id` | UUID | User ID | PK, FK(`users`), CASCADE DELETE |
 | `last_activity_at`| TIMESTAMPTZ| Last activity time | PK, NOT NULL |
 | `alerted_at` | TIMESTAMPTZ | Alert triggered timestamp | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+
+#### `room_tasks`
+| Column Name | Type | Description | Constraints |
+| :--- | :--- | :--- | :--- |
+| `task_id` | UUID | Unique task identifier | PK, Default: `gen_random_uuid()` |
+| `room_id` | UUID | Room the task belongs to | FK(`chat_rooms`), CASCADE DELETE, NOT NULL |
+| `title` | VARCHAR(200) | Task title | NOT NULL |
+| `description` | TEXT | Task detail | NULLABLE |
+| `created_by` | UUID | Creator (room owner/admin only) | FK(`users`), SET NULL |
+| `due_at` | TIMESTAMPTZ | Optional deadline | NULLABLE |
+| `external_link` | VARCHAR(2048) | Optional link (e.g. a GitHub issue) | NULLABLE |
+| `status` | VARCHAR(10) | Task status | NOT NULL, DEFAULT `'open'`, CHECK IN (`open`, `done`) |
+| `created_at` | TIMESTAMPTZ | Creation timestamp | NOT NULL, DEFAULT NOW() |
+| `updated_at` | TIMESTAMPTZ | Last modified timestamp | NOT NULL, DEFAULT NOW() |
+
+Only members with role `owner` or `admin` may create a task; since private (1:1) rooms never have an `owner`/`admin` member (see `room_members`), tasks are effectively a group-room-only feature in v1.
+
+#### `room_task_assignees`
+| Column Name | Type | Description | Constraints |
+| :--- | :--- | :--- | :--- |
+| `task_id` | UUID | Task ID | PK, FK(`room_tasks`), CASCADE DELETE |
+| `user_id` | UUID | Assigned user ID | PK, FK(`users`), CASCADE DELETE |

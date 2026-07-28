@@ -25,6 +25,7 @@ import type {
   RoomMember as ApiRoomMember,
   RoomMemberRole,
   RoomSummary,
+  RoomTaskWithDetails as ApiRoomTask,
   UserProfile,
   UserSettings,
 } from "@shared/types";
@@ -35,9 +36,11 @@ import {
   createFolder,
   createGroup,
   createPrivateRoom,
+  createRoomTask,
   deleteEmergencyContact,
   deleteFriend,
   deleteFolder as deleteFolderApi,
+  deleteRoomTask,
   renameFolder as renameFolderApi,
   deleteMe as deleteMeApi,
   deleteRoom as deleteRoomApi,
@@ -54,17 +57,20 @@ import {
   listFriends,
   listMessages,
   listRoomMembers,
+  listRoomTasks,
   listRooms,
   logout,
   respondFriendRequest,
   searchUsers,
   sendFriendRequest as sendFriendRequestApi,
+  setRoomTaskStatus,
   unblockUser as unblockUserApi,
   updateFolderRooms,
   updateMe,
   updateMySettings,
   updateRoom,
   updateRoomMember,
+  updateRoomTask,
   transferRoomOwner,
   upsertEmergencyContact,
   uploadAttachment,
@@ -150,6 +156,21 @@ export interface Folder {
   id: string;
   name: string;
   collapsed: boolean;
+}
+
+export interface RoomTask {
+  id: string;
+  roomId: string;
+  title: string;
+  description?: string;
+  createdBy: string | null;
+  dueAt?: string;
+  externalLink?: string;
+  status: "open" | "done";
+  createdAt: string;
+  updatedAt: string;
+  creator: { userId: string; name: string; avatarUrl?: string } | null;
+  assignees: { userId: string; name: string; avatarUrl?: string }[];
 }
 
 export interface User {
@@ -253,6 +274,7 @@ interface GroupSettingsInput {
 interface ChatContextType {
   rooms: ChatRoom[];
   folders: Folder[];
+  tasksByRoom: Record<string, RoomTask[]>;
   messages: Message[];
   groupReadStates: Record<string, Record<string, string>>;
   user: User;
@@ -299,6 +321,24 @@ interface ChatContextType {
   handleLeaveOrBlock: (roomId: string) => Promise<{ isDeleted: boolean; newActiveId?: string }>;
   handleDeleteAccount: () => Promise<void>;
   loadGroupMembers: (roomId: string) => Promise<Member[]>;
+  loadRoomTasks: (roomId: string) => Promise<RoomTask[]>;
+  handleCreateTask: (
+    roomId: string,
+    data: {
+      title: string;
+      description?: string;
+      dueAt?: string;
+      externalLink?: string;
+      assigneeUserIds?: string[];
+    },
+  ) => Promise<void>;
+  handleUpdateTask: (
+    roomId: string,
+    taskId: string,
+    data: { title?: string; description?: string; dueAt?: string; externalLink?: string },
+  ) => Promise<void>;
+  handleToggleTaskStatus: (roomId: string, taskId: string, status: "open" | "done") => Promise<void>;
+  handleDeleteTask: (roomId: string, taskId: string) => Promise<void>;
   saveGroupSettings: (roomId: string, settings: GroupSettingsInput) => Promise<void>;
   approveGroupMember: (roomId: string, userId: string) => Promise<Member[] | undefined>;
   updateGroupMember: (
@@ -403,6 +443,11 @@ const HANDLER_KEYS = [
   "setUiLanguage",
   "refreshSocialData",
   "updateRoomSorting",
+  "loadRoomTasks",
+  "handleCreateTask",
+  "handleUpdateTask",
+  "handleToggleTaskStatus",
+  "handleDeleteTask",
 ] as const;
 type HandlerKey = (typeof HANDLER_KEYS)[number];
 
@@ -660,6 +705,21 @@ const mapRoomMember = (member: ApiRoomMember, profile?: UserProfile): Member => 
   avatarUrl: profile?.avatarUrl,
 });
 
+const mapRoomTask = (task: ApiRoomTask): RoomTask => ({
+  id: task.taskId,
+  roomId: task.roomId,
+  title: task.title,
+  description: task.description,
+  createdBy: task.createdBy,
+  dueAt: task.dueAt ? String(task.dueAt) : undefined,
+  externalLink: task.externalLink,
+  status: task.status,
+  createdAt: String(task.createdAt),
+  updatedAt: String(task.updatedAt),
+  creator: task.creator,
+  assignees: task.assignees,
+});
+
 const fetchRoomMembers = async (authToken: string, roomId: string): Promise<Member[]> => {
   const apiMembers = await listRoomMembers(authToken, roomId);
   const profiles = await Promise.all(
@@ -698,6 +758,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const socketRef = useRef<ChatSocket | null>(null);
   const roomsRef = useRef<ChatRoom[]>([]);
   const roomMembersRequestRef = useRef<Map<string, Promise<Member[]>>>(new Map());
+  const roomTasksRequestRef = useRef<Map<string, Promise<RoomTask[]>>>(new Map());
   const socialDataRefreshTimerRef = useRef<NodeJS.Timeout | null>(null);
   const socialDataRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const socialDataRefreshResolversRef = useRef<Array<() => void>>([]);
@@ -713,6 +774,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User>({ username: "", email: "", avatar: "" });
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [tasksByRoom, setTasksByRoom] = useState<Record<string, RoomTask[]>>({});
   const [messages, setMessages] = useState<Message[]>([]);
   const [groupReadStates, setGroupReadStates] = useState<Record<string, Record<string, string>>>({});
   const [activeRoomNicknames, setActiveRoomNicknames] = useState<Record<string, string>>({});
@@ -802,6 +864,71 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     return request;
   };
 
+  const loadRoomTasks = async (roomId: string): Promise<RoomTask[]> => {
+    if (!token) return [];
+    const existingRequest = roomTasksRequestRef.current.get(roomId);
+    if (existingRequest) {
+      return existingRequest;
+    }
+
+    // Deduplicate concurrent task loads for the same room.
+    const request = listRoomTasks(token, roomId)
+      .then((apiTasks) => {
+        const tasks = apiTasks.map(mapRoomTask);
+        setTasksByRoom((current) => ({ ...current, [roomId]: tasks }));
+        return tasks;
+      })
+      .finally(() => {
+        roomTasksRequestRef.current.delete(roomId);
+      });
+
+    roomTasksRequestRef.current.set(roomId, request);
+    return request;
+  };
+
+  const handleCreateTask = async (
+    roomId: string,
+    data: {
+      title: string;
+      description?: string;
+      dueAt?: string;
+      externalLink?: string;
+      assigneeUserIds?: string[];
+    },
+  ): Promise<void> => {
+    if (!token) return;
+    await createRoomTask(token, roomId, data);
+    await loadRoomTasks(roomId);
+  };
+
+  const handleUpdateTask = async (
+    roomId: string,
+    taskId: string,
+    data: { title?: string; description?: string; dueAt?: string; externalLink?: string },
+  ): Promise<void> => {
+    if (!token) return;
+    await updateRoomTask(token, roomId, taskId, data);
+    await loadRoomTasks(roomId);
+  };
+
+  const handleToggleTaskStatus = async (roomId: string, taskId: string, status: "open" | "done"): Promise<void> => {
+    if (!token) return;
+    const updated = mapRoomTask(await setRoomTaskStatus(token, roomId, taskId, status));
+    setTasksByRoom((current) => ({
+      ...current,
+      [roomId]: (current[roomId] ?? []).map((task) => (task.id === taskId ? updated : task)),
+    }));
+  };
+
+  const handleDeleteTask = async (roomId: string, taskId: string): Promise<void> => {
+    if (!token) return;
+    await deleteRoomTask(token, roomId, taskId);
+    setTasksByRoom((current) => ({
+      ...current,
+      [roomId]: (current[roomId] ?? []).filter((task) => task.id !== taskId),
+    }));
+  };
+
   const clearSession = () => {
     localStorage.removeItem("user");
     localStorage.removeItem("theme");
@@ -817,6 +944,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setRoomsInitialized(false);
     setRooms([]);
     setFolders([]);
+    setTasksByRoom({});
     setMessages([]);
 
     if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
@@ -2167,6 +2295,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setUiLanguage,
     refreshSocialData: handleRefreshSocialData,
     updateRoomSorting,
+    loadRoomTasks,
+    handleCreateTask,
+    handleUpdateTask,
+    handleToggleTaskStatus,
+    handleDeleteTask,
   };
   type Handlers = typeof handlers;
   // Compile-time exhaustiveness check: every key of `handlers` must appear in
@@ -2193,6 +2326,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     () => ({
       rooms: derivedRooms,
       folders,
+      tasksByRoom,
       messages,
       groupReadStates,
       user,
@@ -2221,6 +2355,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [
       derivedRooms,
       folders,
+      tasksByRoom,
       messages,
       groupReadStates,
       user,

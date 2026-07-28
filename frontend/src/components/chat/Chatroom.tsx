@@ -24,6 +24,8 @@ import DotsHorizontalRoundedIcon from "@iconify-react/boxicons/dots-horizontal-r
 import SidebarRightIcon from "@iconify-react/boxicons/sidebar-right";
 import XIcon from "@iconify-react/boxicons/x";
 import PaperclipIcon from "@iconify-react/boxicons/paperclip";
+import TaskIcon from "@iconify-react/boxicons/task";
+import RoomTasksPanel from "@/components/chat/RoomTasksPanel";
 
 interface ChatroomProps {
   roomId: string;
@@ -287,6 +289,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
   const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isTasksOpen, setIsTasksOpen] = useState(false);
   const [msgSearchQuery, setMsgSearchQuery] = useState("");
   const messageEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -840,6 +843,20 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
             ]}
           />
 
+          {activeRoom.type === "group" && !isPending && (
+            <button
+              onClick={() => setIsTasksOpen(true)}
+              className={`p-1.5 border rounded-sm transition-colors cursor-pointer ${
+                isTasksOpen
+                  ? "bg-primary/10 border-primary/30 text-primary"
+                  : "border-border-secondary hover:border-border-primary text-text-muted hover:text-foreground"
+              }`}
+              title={isTasksOpen ? t("chatroom.hideTasks") : t("chatroom.showTasks")}
+            >
+              <TaskIcon className="h-4 w-4" />
+            </button>
+          )}
+
           <button
             onClick={() => setShowRightPanel(!showRightPanel)}
             className={`p-1.5 border rounded-sm transition-colors cursor-pointer ${
@@ -853,6 +870,10 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
           </button>
         </div>
       </div>
+
+      {activeRoom.type === "group" && (
+        <RoomTasksPanel roomId={roomId} isOpen={isTasksOpen} onClose={() => setIsTasksOpen(false)} />
+      )}
 
       {/* Search Bar */}
       {isSearchOpen && (

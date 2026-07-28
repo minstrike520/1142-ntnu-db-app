@@ -16,6 +16,7 @@ import { RoomRepository } from "./models/roomRepository";
 import { RoomMemberRepository } from "./models/roomMemberRepository";
 import { MessageRepository } from "./models/messageRepository";
 import { FolderRepository } from "./models/folderRepository";
+import { RoomTaskRepository } from "./models/roomTaskRepository";
 import { AttachmentRepository } from "./models/attachmentRepository";
 import { makeAttachmentService } from "./services/attachmentService";
 import { makeAttachmentRoutes } from "./routes/attachmentRoutes";
@@ -24,6 +25,7 @@ import { makeUserService } from "./services/userService";
 import { makeRoomService } from "./services/roomService";
 import { makeMessageService } from "./services/messageService";
 import { makeFolderService } from "./services/folderService";
+import { makeRoomTaskService } from "./services/roomTaskService";
 import { makeFriendService } from "./services/friendService";
 import { startInactivityJob } from "./utils/inactivityJob";
 import { makeAuthRoutes } from "./routes/authRoutes";
@@ -31,6 +33,7 @@ import { makeUserRoutes } from "./routes/userRoutes";
 import { makeRoomRoutes } from "./routes/roomRoutes";
 import { makeMessageRoutes } from "./routes/messageRoutes";
 import { makeFolderRoutes } from "./routes/folderRoutes";
+import { makeRoomTaskRoutes } from "./routes/roomTaskRoutes";
 import { makeFriendRoutes, makeBlockRoutes, makeFriendRequestRoutes } from "./routes/friendRoutes";
 import { attachSocketAuth } from "./realtime/authSocket";
 import { attachSockets } from "./realtime/socketServer";
@@ -82,6 +85,7 @@ const roomRepo = new RoomRepository(pool);
 const roomMemberRepo = new RoomMemberRepository(pool);
 const messageRepo = new MessageRepository(pool);
 const folderRepo = new FolderRepository(pool);
+const roomTaskRepo = new RoomTaskRepository(pool);
 const attachmentRepo = new AttachmentRepository(pool);
 const friendRepo = makeFriendRepository(pool);
 const refreshTokenRepo = new RefreshTokenRepository(pool);
@@ -152,6 +156,7 @@ const roomService = makeRoomService(
 
 const messageService = makeMessageService(messageRepo, roomRepo, roomMemberRepo);
 const folderService = makeFolderService(folderRepo, roomMemberRepo);
+const roomTaskService = makeRoomTaskService(roomTaskRepo, roomRepo, roomMemberRepo);
 const attachmentService = makeAttachmentService(attachmentRepo);
 
 const friendService = makeFriendService(friendRepo, (userId, eventName, payload) => {
@@ -171,6 +176,7 @@ const roomApi = new Hono();
 roomApi.use('*', authMiddleware);
 roomApi.route('/', makeRoomRoutes(roomService));
 roomApi.route('/', makeMessageRoutes(messageService));
+roomApi.route('/', makeRoomTaskRoutes(roomTaskService));
 honoApp.route('/api/v1/rooms', roomApi);
 
 honoApp.route('/api/v1/folders', makeFolderRoutes(folderService));
