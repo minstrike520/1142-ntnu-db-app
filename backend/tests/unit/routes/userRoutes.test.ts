@@ -22,7 +22,10 @@ describe('emergency contact routes', () => {
     return app;
   };
 
+  const originalNodeEnv = process.env.NODE_ENV;
+
   beforeEach(async () => {
+    process.env.NODE_ENV = 'test';
     token = await signToken({ userId: CALLER_ID, email: 'caller@test.com' } as any);
     service = {
       deleteEmergencyContact: mock().mockResolvedValue(undefined),
@@ -31,6 +34,7 @@ describe('emergency contact routes', () => {
   });
 
   afterAll(() => {
+    process.env.NODE_ENV = originalNodeEnv;
     mock.restore();
   });
 

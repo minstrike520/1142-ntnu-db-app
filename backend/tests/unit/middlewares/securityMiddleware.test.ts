@@ -4,6 +4,7 @@ import {
   makeAuthRateLimiter,
   makeGlobalRateLimiter,
   securityHeaders,
+  testOnlyMiddleware,
 } from '../../../src/middlewares/securityMiddleware';
 import { errorHandler } from '../../../src/middlewares/errorHandler';
 
@@ -172,5 +173,26 @@ describe('security middleware', () => {
       expect((await app.request('/api/ping')).status).toBe(200);
       expect((await app.request('/api/ping')).status).toBe(200);
     });
+  });
+
+  it('blocks test-only routes outside of the test environment', async () => {
+    process.env.NODE_ENV = 'production';
+    const app = new Hono();
+    app.onError(errorHandler);
+    app.post('/api/v1/test-only', testOnlyMiddleware, (c) => c.json({ ok: true }));
+
+    const res = await app.request('/api/v1/test-only', { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
+  it('allows test-only routes when NODE_ENV=test', async () => {
+    process.env.NODE_ENV = 'test';
+    const app = new Hono();
+    app.onError(errorHandler);
+    app.post('/api/v1/test-only', testOnlyMiddleware, (c) => c.json({ ok: true }));
+
+    const res = await app.request('/api/v1/test-only', { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
   });
 });

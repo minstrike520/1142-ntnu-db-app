@@ -8,6 +8,13 @@ import { AppError } from '../utils/AppError';
 const rateLimitDisabled = (): boolean =>
   process.env.NODE_ENV === 'test' || process.env.RATE_LIMIT_DISABLED === 'true';
 
+export const testOnlyMiddleware: MiddlewareHandler = async (c, next) => {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new AppError(404, 'Not Found', 'NOT_FOUND');
+  }
+  await next();
+};
+
 /**
  * Bucket requests by the caller's real IP.
  *

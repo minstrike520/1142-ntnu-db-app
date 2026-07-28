@@ -17,6 +17,7 @@ import {
 } from '../routes/userSchemas';
 import { validate } from '../middlewares/validator';
 import { authMiddleware } from '../middlewares/authMiddleware';
+import { testOnlyMiddleware } from '../middlewares/securityMiddleware';
 import { clearRefreshCookie } from '../utils/cookies';
 import { parseSingleFile } from '../utils/fileUpload';
 import { ALLOWED_AVATAR_MIME_TYPES, AVATAR_UPLOAD_MAX_BYTES } from '../utils/avatarUpload';
@@ -123,8 +124,8 @@ export const makeUserRoutes = (service: UserService) => {
     return c.json(result, 200);
   };
 
-  app.post('/me/emergency-alert/check-inactivity', validate('json', checkInactivitySchema), handleCheckInactivity);
-  app.post('/me/emergency-contacts/check-inactivity', validate('json', checkInactivitySchema), handleCheckInactivity);
+  app.post('/me/emergency-alert/check-inactivity', testOnlyMiddleware, validate('json', checkInactivitySchema), handleCheckInactivity);
+  app.post('/me/emergency-contacts/check-inactivity', testOnlyMiddleware, validate('json', checkInactivitySchema), handleCheckInactivity);
 
   // Search without /search subpath (e.g. GET /api/v1/users?q=...)
   app.get('/', validate('query', searchQuerySchema), async (c) => {
