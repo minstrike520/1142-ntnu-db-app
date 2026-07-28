@@ -21,3 +21,9 @@ overrides:
   "@babel/core": "^7.29.7"  # was ^7.29.6 in frontend/, weaker than the ^7.29.7
                             # already declared in frontend/package.json
   form-data: "^4.0.6"       # was backend/
+  # GHSA-3jxr-9vmj-r5cp / GHSA-mh99-v99m-4gvg. Scoped to the 5.x line via the
+  # `pkg@range` selector: `minimatch@10` (node-pg-migrate -> glob) pulls 5.0.6,
+  # while eslint 9 -> minimatch@3 still pulls 1.1.15, whose v1-line fix is
+  # 1.1.16 — an unscoped pin would force that consumer onto an incompatible
+  # major. The 1.1.15 path stays open on purpose; see the eslint 10 note below.
+  "brace-expansion@>=5": "5.0.8"

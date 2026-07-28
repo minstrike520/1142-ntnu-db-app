@@ -13,7 +13,7 @@
   "dependencies": {
     "@iconify-react/boxicons": "^1.0.2",
     "clsx": "^2.1.1",
-    "next": "16.2.10",
+    "next": "16.2.12",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "socket.io-client": "^4.8.3",
@@ -30,7 +30,7 @@
     "@types/react-dom": "^19.2.3",
     "babel-plugin-react-compiler": "^1.0.0",
     "eslint": "^9.39.5",
-    "eslint-config-next": "16.2.10",
+    "eslint-config-next": "16.2.12",
     "eslint-plugin-react-compiler": "19.1.0-rc.2",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.3.2",
