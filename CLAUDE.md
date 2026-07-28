@@ -28,10 +28,10 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 
 | Directory | Purpose | Detail Orientation |
 |-----------|---------|--------------------|
-| [backend/](backend/) | Express + Socket.IO API server | See [backend/AGENTS.md](backend/AGENTS.md) |
-| [frontend/](frontend/) | Next.js 16 + React 19 Client Web App | See [frontend/AGENTS.md](frontend/AGENTS.md) |
+| [backend/](backend/) | Express + Socket.IO API server | See [backend/CLAUDE.md](backend/CLAUDE.md) |
+| [frontend/](frontend/) | Next.js 16 + React 19 Client Web App | See [frontend/CLAUDE.md](frontend/CLAUDE.md) |
 | [shared/](shared/) | Shared TypeScript models and interfaces | Mounts read-only into both services |
-| [docs/](docs/) | Design specifications and guidelines | See [docs/AGENTS.md](docs/AGENTS.md) |
+| [docs/](docs/) | Design specifications and guidelines | See [docs/CLAUDE.md](docs/CLAUDE.md) |
 | [reference/](reference/) | Course materials (original ER diagram, project reports) | Reference only |
 
 ## AI Agent Guidelines
