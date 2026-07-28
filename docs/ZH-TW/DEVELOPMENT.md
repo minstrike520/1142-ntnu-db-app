@@ -354,6 +354,6 @@ describe('userRepository', () => {
    - `BREAKING CHANGE:` $\rightarrow$ 遞增 **Major (`a`)**（如 `v1.0.1` $\rightarrow$ `v2.0.0`）
    - `docs:`, `chore:`, `refactor:` $\rightarrow$ 不遞增版本號
 2. **三方版本號同步**：自動執行 `scripts/update-versions.js` 同步更新根目錄 `package.json`、`frontend/package.json` 與 `backend/package.json` 的版本。
-3. **Changelog 與 Release 頁面**：自動更新 `CHANGELOG.md`，並**將格式化後的 Release Notes 直接發布於 GitHub Release 頁面**。
-4. **Stack 映像檔與部署包發布**：建立 `vX.Y.Z` 標籤並觸發 `.github/workflows/release-stack.yml`，自動建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，並附加 `near-chat-stack-vX.Y.Z.tar.gz` 部署包至 GitHub Release。
+3. **Changelog**：自動更新 `CHANGELOG.md` 並提交回 repo。GitHub Release 頁面本身由 `release-stack.yml` 建立而非 `semantic-release`，因此其內容為 image 參照、digest 與部署包雜湊，而不是格式化後的 changelog。
+4. **Stack 映像檔與部署包發布**：`.github/workflows/release-stack.yml` 會建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，並附加 `near-chat-stack-vX.Y.Z.tar.gz` 部署包至 GitHub Release。注意 `semantic-release` 建立的標籤目前**尚未**自動交棒給此工作流程：`release-stack.yml` 要求 annotated tag（見 issue #406），且需要一條由 `ci.yml` 出發的觸發路徑（見 issue #407）。在兩者完成前，請以 `gh workflow run release-stack.yml --ref vX.Y.Z` 手動觸發。
 

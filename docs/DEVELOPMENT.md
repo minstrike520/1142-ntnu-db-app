@@ -371,6 +371,6 @@ When changes are merged into `main`, GitHub Actions (`.github/workflows/ci.yml`)
    - `BREAKING CHANGE:` → Increments **Major (`a`)** (e.g. `v1.0.1` → `v2.0.0`)
    - `docs:`, `chore:`, `refactor:` → No version increment
 2. **Multi-Package Version Sync**: Runs `scripts/update-versions.js` to synchronize `"version"` in root `package.json`, `frontend/package.json`, and `backend/package.json`.
-3. **Changelog & GitHub Release**: Automatically generates `CHANGELOG.md` and publishes formatted **Release Notes directly on the GitHub Release page**.
-4. **Stack Image & Bundle Publication**: Creating tag `vX.Y.Z` triggers `.github/workflows/release-stack.yml`, building & pushing Docker images to GHCR, signing provenance attestations, and attaching `near-chat-stack-vX.Y.Z.tar.gz` deployment bundle to the GitHub Release.
+3. **Changelog**: Automatically generates and commits `CHANGELOG.md` into the repository. The GitHub Release page itself is created by `release-stack.yml`, not by `semantic-release`, so its notes list image references, digests and the bundle hash rather than the formatted changelog.
+4. **Stack Image & Bundle Publication**: `.github/workflows/release-stack.yml` builds & pushes Docker images to GHCR, signs provenance attestations, and attaches the `near-chat-stack-vX.Y.Z.tar.gz` deployment bundle to the GitHub Release. Note that the tag created by `semantic-release` does **not** yet hand over to this workflow automatically: `release-stack.yml` requires an annotated tag (see issue #406) and a trigger path from `ci.yml` (see issue #407). Until both land, run it manually with `gh workflow run release-stack.yml --ref vX.Y.Z`.
 
