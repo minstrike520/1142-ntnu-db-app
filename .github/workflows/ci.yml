@@ -347,6 +347,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # semantic-release 會自行嘗試 git fetch --unshallow --tags 修復
+          # shallow clone，因此這不是硬性阻斷點，而是加固：明確取得完整
+          # 歷史與 tag，不依賴該 fallback 成功，並與 release-stack.yml 的
+          # checkout 設定一致。fetch-tags 不需另外指定——fetch-depth 為 0
+          # 時 actions/checkout 已包含 +refs/tags/*:refs/tags/* refspec。
+          fetch-depth: 0
           persist-credentials: false
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
