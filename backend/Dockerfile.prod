@@ -3,15 +3,18 @@ FROM oven/bun:1.3.14-slim AS builder
 ENV CI=true
 WORKDIR /workspace
 
+COPY --from=node:24-slim /usr/local/ /usr/local/
+RUN corepack enable && corepack prepare pnpm@11 --activate
+
 # Copy global configs and shared files
 COPY tsconfig.base.json package.json ./
 COPY shared/ ./shared/
 
 # Copy backend dependency declarations
-COPY backend/package.json backend/bun.lock backend/tsconfig.json ./backend/
+COPY backend/package.json backend/pnpm-lock.yaml backend/tsconfig.json ./backend/
 
 WORKDIR /workspace/backend
-RUN bun install --frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 # Copy backend source code and typecheck
 COPY backend/src ./src
@@ -22,6 +25,9 @@ FROM oven/bun:1.3.14-slim AS runner
 ENV CI=true
 WORKDIR /app
 
+COPY --from=node:24-slim /usr/local/ /usr/local/
+RUN corepack enable && corepack prepare pnpm@11 --activate
+
 # Create uploads directory structure
 RUN mkdir -p /app/uploads/attachments /app/uploads/avatars
 
@@ -31,8 +37,8 @@ RUN chown -R bun:bun /app
 USER bun
 
 # Copy dependency declarations and install
-COPY --chown=bun:bun backend/package.json backend/bun.lock ./
-RUN bun install --production --frozen-lockfile
+COPY --chown=bun:bun backend/package.json backend/pnpm-lock.yaml ./
+RUN pnpm install --prod --frozen-lockfile
 
 # Copy source code, migrations, and shared files
 COPY --chown=bun:bun backend/src ./src
