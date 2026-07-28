@@ -2,15 +2,40 @@
 
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
-import { useChat } from "@/context/ChatContext";
+import dynamic from "next/dynamic";
+import { useChat, useRightPanel } from "@/context/ChatContext";
+import { useTranslation } from "@/hooks/useTranslation";
 import Chatroom from "@/components/chat/Chatroom";
-import GroupSettings from "@/components/settings/GroupSettings";
 import RoomMembersPanel from "@/components/chat/RoomMembersPanel";
 import FriendInfoPanel from "@/components/chat/FriendInfoPanel";
 
+// GroupSettings starts hidden and most sessions never open it, so it is
+// loaded on demand to keep it out of the chat route's initial client chunk.
+// RoomMembersPanel renders in the default group-chat view and FriendInfoPanel
+// is statically imported by the persistent Sidebar, so lazy-loading them here
+// would not reduce the initial bundle (see docs/frontend-bundle-analysis.md).
+const GroupSettings = dynamic(() => import("@/components/settings/GroupSettings"), {
+  ssr: false,
+  loading: () => <GroupSettingsLoading />,
+});
+
+function GroupSettingsLoading() {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex-1 flex items-center justify-center bg-background h-full text-text-muted font-sans"
+    >
+      {t("common.loading")}
+    </div>
+  );
+}
+
 export default function ChatroomPageContent() {
   const params = useParams();
-  const { rooms, showRightPanel, setShowRightPanel, user } = useChat();
+  const { rooms, user } = useChat();
+  const { showRightPanel, setShowRightPanel } = useRightPanel();
   const [showSettings, setShowSettings] = useState(false);
 
   const chatId = params?.chatId as string;

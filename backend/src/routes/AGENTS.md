@@ -1,40 +1,27 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-05-22 | Updated: 2026-05-25 -->
+<!-- Generated: 2026-05-22 | Updated: 2026-07-24 -->
 
 # routes
 
 ## Purpose
-Express Router handlers defining the REST API surface for User, Room, and Message resources. Each file is responsible solely for HTTP concerns: parsing request params/body, input validation, delegating to the service layer, and setting the correct HTTP response status codes. No database logic lives here.
+Hono Route modules defining the REST API surface for User, Room, Message, Friend, Folder, and Attachment resources. Each file is responsible for HTTP concerns: routing, input validation via `zValidator`, extracting context (`c.get('user')`), delegating to the service layer, and setting appropriate HTTP response status codes.
 
 ## Current State
 
-**All route files in this directory were quarantined (deleted) in issue #0.** New implementations following the layered architecture are being created in issues #9–#11.
-
-| File | Status |
-|------|--------|
-| `userRoutes.ts` | Deleted — reimplemented in [#9] User Controller + Auth Routes |
-| `roomRoutes.ts` | Deleted — reimplemented in [#10] Room Controller + Routes |
-| `messageRoutes.ts` | Deleted — reimplemented in [#11] Message Controller + Routes |
+| File | Status | Description |
+|------|--------|-------------|
+| `authRoutes.ts` | Active | Registration, login, logout, refresh token endpoints |
+| `userRoutes.ts` | Active | Profile, settings, emergency contacts, search endpoints |
+| `roomRoutes.ts` | Active | Group & private room management, membership endpoints |
+| `messageRoutes.ts` | Active | Room messages listing, editing/recalling endpoints |
+| `friendRoutes.ts` | Active | Friends, pending requests, and blocking endpoints |
+| `folderRoutes.ts` | Active | Chat room folder organization endpoints |
+| `attachmentRoutes.ts` | Active | Attachment upload and download endpoints |
 
 ## For AI Agents
 
 ### Working In This Directory
-- Do not recreate the old route files here. New implementations follow the controller pattern defined in `backend/AGENTS.md`.
-- New controllers use JWT middleware from issue #4 rather than the placeholder `(req as any).user` pattern.
-- All ID params must be validated (parseInt + isNaN check) before passing to the service layer.
-
-### Common Patterns (for new implementations)
-- Route → Controller → Service → Repository is the strict call chain; routes never import database drivers directly.
-- Typed `AppError` instances (from issue #2) are caught by the central error handler — no per-route error message string matching.
-- `res.status(204).send()` for successful DELETE — no body.
-
-## Dependencies
-
-### Internal
-- `../services/` — service layer (implemented in #6–#8)
-- `../middleware/auth` — JWT auth middleware (implemented in #4)
-
-### External
-- `express` — `Router`, `Request`, `Response` types
-
-<!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
+- Hono route modules export factory functions (e.g. `makeRoomRoutes(service: RoomService)`) returning a Hono app instance.
+- Routes use `authMiddleware` for authentication and `validate(target, schema)` (`zValidator`) for request payload validation.
+- All errors (subclassed from `AppError`) are handled by the global `errorHandler` middleware.
+- Return `c.body(null, 204)` for successful DELETE operations.

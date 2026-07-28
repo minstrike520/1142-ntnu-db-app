@@ -3,8 +3,9 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./Avatar";
 import ProfilePopover from "../chat/ProfilePopover";
-import { downloadAttachment, fetchAttachmentBlobUrl } from "@/lib/api";
-import { useChat } from "@/context/ChatContext";
+import { fetchAttachmentBlobUrl } from "@/lib/api";
+import { FileDownloaderBridge } from "@/lib/fileDownloaderBridge";
+import { useProfilePopover } from "@/context/ChatContext";
 
 export interface Attachment {
   filename: string;
@@ -36,6 +37,12 @@ export interface ChatBubbleProps {
   avatarName?: string;
   searchHighlight?: string;
 }
+
+// Kept outside the component: a conditional expression inside a component-
+// level try/catch (or a try/finally) makes the React Compiler skip the whole
+// component (see docs/frontend-react-render-optimization.md).
+const toErrorMessage = (error: unknown, fallback: string): string =>
+  error instanceof Error ? error.message : fallback;
 
 const highlightText = (text: string, query: string): React.ReactNode => {
   const lowerText = text.toLowerCase();
@@ -171,6 +178,7 @@ function ImageAttachmentPreview({
 
   return (
     <div className="flex flex-col gap-1">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={blobUrl}
         alt={file.filename}
@@ -211,7 +219,7 @@ export function ChatBubble({
   const [downloadingUrl, setDownloadingUrl] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState("");
 
-  const { activeProfilePopover, setActiveProfilePopover } = useChat();
+  const { activeProfilePopover, setActiveProfilePopover } = useProfilePopover();
   const showPopover = messageId ? activeProfilePopover?.instanceId === messageId : false;
 
   const menuOpenedAtRef = useRef(0);
@@ -225,14 +233,17 @@ export function ChatBubble({
       if (Date.now() - menuOpenedAtRef.current < 300) return;
       setMenuPosition(null);
     };
-    const closeImmediately = () => setMenuPosition(null);
+    const closeOnScroll = () => setMenuPosition(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuPosition(null);
+    };
     window.addEventListener("click", closeOnClick);
-    window.addEventListener("keydown", closeImmediately);
-    window.addEventListener("scroll", closeImmediately, true);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("scroll", closeOnScroll, true);
     return () => {
       window.removeEventListener("click", closeOnClick);
-      window.removeEventListener("keydown", closeImmediately);
-      window.removeEventListener("scroll", closeImmediately, true);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("scroll", closeOnScroll, true);
     };
   }, [menuPosition]);
 
@@ -344,12 +355,14 @@ export function ChatBubble({
     setDownloadError("");
     setDownloadingUrl(file.url);
 
+    // No `finally`: a try/finally would make the React Compiler bail out of
+    // this component; both paths reset the downloading state explicitly.
     try {
-      await downloadAttachment(file.url, file.filename);
+      await FileDownloaderBridge.download(file.url, file.filename);
+      setDownloadingUrl(null);
     } catch (error) {
       console.error(error);
-      setDownloadError(error instanceof Error ? error.message : "Failed to download attachment");
-    } finally {
+      setDownloadError(toErrorMessage(error, "Failed to download attachment"));
       setDownloadingUrl(null);
     }
   };
@@ -404,6 +417,24 @@ export function ChatBubble({
             <div className="flex flex-col items-end text-[10px] text-text-muted font-mono leading-none select-none mb-0.5">
               <span>{timestamp}</span>
             </div>
+          )}
+
+          {isOutgoing && !isRecalled && (
+            <button
+              type="button"
+              aria-label={t("chatroom.messageActions")}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                openMenuAt(rect.left, rect.bottom + 4);
+              }}
+              className="hidden md:inline-flex opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0 self-center p-1 rounded-sm text-text-muted hover:text-foreground hover:bg-surface-muted mb-0.5"
+            >
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                <circle cx="5" cy="12" r="2" />
+                <circle cx="12" cy="12" r="2" />
+                <circle cx="19" cy="12" r="2" />
+              </svg>
+            </button>
           )}
 
           <div
@@ -541,6 +572,24 @@ export function ChatBubble({
               </div>
             )}
           </div>
+
+          {!isOutgoing && !isRecalled && (
+            <button
+              type="button"
+              aria-label={t("chatroom.messageActions")}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                openMenuAt(rect.left, rect.bottom + 4);
+              }}
+              className="hidden md:inline-flex opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0 self-center p-1 rounded-sm text-text-muted hover:text-foreground hover:bg-surface-muted mb-0.5"
+            >
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                <circle cx="5" cy="12" r="2" />
+                <circle cx="12" cy="12" r="2" />
+                <circle cx="19" cy="12" r="2" />
+              </svg>
+            </button>
+          )}
 
           {menuPosition && (
             <div

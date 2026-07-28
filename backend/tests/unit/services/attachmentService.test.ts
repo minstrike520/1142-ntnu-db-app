@@ -1,14 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { UploadedFile } from '../../../src/utils/fileUpload';
+import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { makeAttachmentService } from '../../../src/services/attachmentService';
 
 describe('AttachmentService', () => {
-  let attachmentRepo: { create: ReturnType<typeof vi.fn>; findById: ReturnType<typeof vi.fn> };
+  let attachmentRepo: { create: Mock<any>; findById: Mock<any> };
   let service: ReturnType<typeof makeAttachmentService>;
 
   beforeEach(() => {
     attachmentRepo = {
-      create: vi.fn(),
-      findById: vi.fn(),
+      create: mock(),
+      findById: mock(),
     };
     service = makeAttachmentService(attachmentRepo as any);
   });
@@ -26,7 +27,7 @@ describe('AttachmentService', () => {
       path: '/tmp/file.pdf',
       mimetype: 'application/pdf',
       originalname: 'éç®æç¶­èç¨å¼è¨­è¨å¹³å° å¤åé é».pdf',
-    } as Express.Multer.File);
+    } as UploadedFile);
 
     expect(attachmentRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -37,9 +38,14 @@ describe('AttachmentService', () => {
 
   it('getAttachment returns null when the parent message has been recalled', async () => {
     attachmentRepo.findById.mockResolvedValue({
-      attachment_id: 'att-1',
-      message_id: 'msg-1',
-      message_is_recalled: true,
+      attachmentId: 'att-1',
+      messageId: 'msg-1',
+      uploadedBy: 'user-1',
+      fileUrl: '/api/v1/attachments/att-1',
+      fileType: 'application/pdf',
+      originalName: 'doc.pdf',
+      uploadedAt: new Date(),
+      messageIsRecalled: true,
     });
 
     await expect(service.getAttachment('att-1')).resolves.toBeNull();
@@ -47,9 +53,14 @@ describe('AttachmentService', () => {
 
   it('getAttachment returns the attachment when the parent message has not been recalled', async () => {
     const attachment = {
-      attachment_id: 'att-1',
-      message_id: 'msg-1',
-      message_is_recalled: false,
+      attachmentId: 'att-1',
+      messageId: 'msg-1',
+      uploadedBy: 'user-1',
+      fileUrl: '/api/v1/attachments/att-1',
+      fileType: 'application/pdf',
+      originalName: 'doc.pdf',
+      uploadedAt: new Date(),
+      messageIsRecalled: false,
     };
     attachmentRepo.findById.mockResolvedValue(attachment);
 
@@ -58,9 +69,14 @@ describe('AttachmentService', () => {
 
   it('getAttachment returns the attachment when it is not yet linked to any message', async () => {
     const attachment = {
-      attachment_id: 'att-1',
-      message_id: null,
-      message_is_recalled: null,
+      attachmentId: 'att-1',
+      messageId: undefined,
+      uploadedBy: 'user-1',
+      fileUrl: '/api/v1/attachments/att-1',
+      fileType: 'application/pdf',
+      originalName: 'doc.pdf',
+      uploadedAt: new Date(),
+      messageIsRecalled: undefined,
     };
     attachmentRepo.findById.mockResolvedValue(attachment);
 

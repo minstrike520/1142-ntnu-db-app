@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
 import request from 'supertest';
-let app: any;
 import { resetDb } from '../../helpers/resetDb';
+
+let app: any;
 
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
@@ -22,9 +23,9 @@ describe('Auth E2E', () => {
     });
     if (res.status !== 201) throw new Error("RES: " + JSON.stringify(res.body));
     expect(res.body.token).toBeDefined();
-    expect(res.headers['set-cookie']?.join(';')).toContain('refresh_token=');
-    expect(res.headers['set-cookie']?.join(';')).toContain('HttpOnly');
-    expect(res.headers['set-cookie']?.join(';')).toContain('SameSite=Strict');
+    expect((res.headers['set-cookie'] as any)?.join(';')).toContain('refresh_token=');
+    expect((res.headers['set-cookie'] as any)?.join(';')).toContain('HttpOnly');
+    expect((res.headers['set-cookie'] as any)?.join(';')).toContain('SameSite=Strict');
     expect(res.body.user).toBeDefined();
     expect(res.body.user.name).toBe('Test User');
   });
@@ -58,7 +59,7 @@ describe('Auth E2E', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body.token).toBeDefined();
-    expect(res.headers['set-cookie']?.join(';')).toContain('refresh_token=');
+    expect((res.headers['set-cookie'] as any)?.join(';')).toContain('refresh_token=');
   });
 
   it('should authenticate protected routes with the auth header', async () => {
@@ -76,7 +77,7 @@ describe('Auth E2E', () => {
 
     const logout = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie).set('Authorization', `Bearer ${token}`);
     expect(logout.status).toBe(204);
-    expect(logout.headers['set-cookie']?.join(';')).toContain('refresh_token=');
+    expect((logout.headers['set-cookie'] as any)?.join(';')).toContain('refresh_token=');
   });
 
   it('should refresh access token using refresh token cookie', async () => {
@@ -90,7 +91,7 @@ describe('Auth E2E', () => {
     const res = await request(app).post('/api/v1/auth/refresh').set('Cookie', cookie);
     expect(res.status).toBe(200);
     expect(res.body.token).toBeDefined();
-    expect(res.headers['set-cookie']?.join(';')).toContain('refresh_token=');
+    expect((res.headers['set-cookie'] as any)?.join(';')).toContain('refresh_token=');
   });
 
   it('should fail login with incorrect password', async () => {
