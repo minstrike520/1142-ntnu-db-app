@@ -1,48 +1,58 @@
-# Stage 1: Build/Typecheck the backend application
-FROM oven/bun:1.2-slim AS builder
+# Bun is both the package manager and the runtime, installing from the single
+# root bun.lock. Build context is the repo root.
+
+# Stage 1: Install and typecheck against the full (dev) dependency tree
+FROM oven/bun:1.3-slim AS builder
 ENV CI=true
 WORKDIR /workspace
 
-# Copy global configs and shared files
-COPY tsconfig.base.json package.json pnpm-lock.yaml ./
+COPY package.json bun.lock ./
+COPY backend/package.json ./backend/
+COPY frontend/package.json ./frontend/
 COPY shared/ ./shared/
 
-# Copy backend dependency declarations
-COPY backend/package.json backend/tsconfig.json ./backend/
+RUN bun install --frozen-lockfile --filter './backend' --filter '.'
+
+COPY tsconfig.base.json ./
+COPY backend/tsconfig.json ./backend/
+COPY backend/src ./backend/src
+COPY backend/tests ./backend/tests
 
 WORKDIR /workspace/backend
-RUN bun install
+RUN bun run lint
 
-# Copy backend source code and typecheck
-COPY backend/src ./src
-RUN bun exec tsc --noEmit
-
-# Stage 2: Create a production runner image
-FROM oven/bun:1.2-slim AS runner
+# Stage 2: Production runner with production-only dependencies
+FROM oven/bun:1.3-slim AS runner
 ENV CI=true
-WORKDIR /app
+ENV NODE_ENV=production
 
-# Create uploads directory structure
-RUN mkdir -p /app/uploads/attachments /app/uploads/avatars
+RUN apt-get update -y && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Give the built-in bun user ownership of /app before switching
-RUN chown -R bun:bun /app
+WORKDIR /workspace
+
+# uploads/ is resolved from the backend's cwd (see src/utils/uploads.ts).
+RUN mkdir -p /workspace/backend/uploads/attachments /workspace/backend/uploads/avatars
+RUN chown -R bun:bun /workspace
 
 USER bun
 
-# Copy dependency declarations and install
-COPY --chown=bun:bun backend/package.json ./
-RUN bun install --production
+COPY --chown=bun:bun package.json bun.lock ./
+COPY --chown=bun:bun backend/package.json ./backend/
+COPY --chown=bun:bun frontend/package.json ./frontend/
+COPY --chown=bun:bun shared/ ./shared/
 
-# Copy source code, migrations, and shared files
-COPY --chown=bun:bun backend/src ./src
-COPY --chown=bun:bun backend/migrations ./migrations
-COPY --chown=bun:bun shared /shared
-COPY --chown=bun:bun tsconfig.base.json /tsconfig.base.json
-COPY --chown=bun:bun backend/tsconfig.json ./tsconfig.json
+RUN bun install --frozen-lockfile --production --filter './backend' --filter '.'
 
-# Expose port and run in production
+# `@shared/*` resolves relative to tsconfig.base.json, so it must sit beside
+# backend/ and shared/.
+COPY --chown=bun:bun tsconfig.base.json ./
+COPY --chown=bun:bun backend/tsconfig.json ./backend/
+COPY --chown=bun:bun backend/src ./backend/src
+COPY --chown=bun:bun backend/migrations ./backend/migrations
+
+WORKDIR /workspace/backend
+
 EXPOSE 4000
-ENV NODE_ENV=production
 
 CMD ["sh", "-c", "bun run migrate:up && bun src/index.ts"]

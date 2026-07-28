@@ -10,14 +10,14 @@
 
 ```bash
 cd frontend
-pnpm run analyze
+bun run analyze
 ```
 
 此指令會執行 `next experimental-analyze --output`，以分析模式建置應用程式，並將靜態分析結果寫入 `frontend/.next/diagnostics/analyze/`，而非啟動互動式 UI 伺服器。整個 `.next/` 目錄樹已被 gitignore（`frontend/.gitignore` 與根目錄 `.gitignore` 皆忽略 `/.next/`），因此產生的目錄不會有被誤提交的風險。
 
-若想改為互動瀏覽結果而非寫入檔案，可省略 `--output`/`-o`，改執行 `pnpm exec next experimental-analyze`，會在本機啟動一個網頁 UI（預設 port 4000）。
+若想改為互動瀏覽結果而非寫入檔案，可省略 `--output`/`-o`，改執行 `bunx next experimental-analyze`，會在本機啟動一個網頁 UI（預設 port 4000）。
 
-**注意：** `experimental-analyze` 是 Next.js 的實驗性 CLI 指令，其參數與輸出格式可能隨 Next.js 版本更新而改變。若 Next.js 升級後 `pnpm run analyze` 或下方的解析步驟失效，請重新檢查 `pnpm exec next experimental-analyze --help` 並更新本文件。
+**注意：** `experimental-analyze` 是 Next.js 的實驗性 CLI 指令，其參數與輸出格式可能隨 Next.js 版本更新而改變。若 Next.js 升級後 `bun run analyze` 或下方的解析步驟失效，請重新檢查 `bunx next experimental-analyze --help` 並更新本文件。
 
 ## 本次基準量測所使用的工具鏈版本
 
@@ -28,13 +28,13 @@ pnpm run analyze
 | pnpm | 11.13.1 |
 | Commit | `a087b50`（`dev`，2026-07-18） |
 
-Bundle 位元組大小會隨環境與相依套件版本而變動（隨 `pnpm-lock.yaml`、Node/pnpm 版本、作業系統而變化）。請將下方數字視為**錨定於上述 commit 的近似基準**，而非精確、可跨環境複製的量測值。若需要精確的前後比較，請在同一個 PR 內自行重新執行本指令。
+Bundle 位元組大小會隨環境與相依套件版本而變動（隨 `bun.lock`、Bun/Node 版本、作業系統而變化）。請將下方數字視為**錨定於上述 commit 的近似基準**，而非精確、可跨環境複製的量測值。若需要精確的前後比較，請在同一個 PR 內自行重新執行本指令。
 
 ## 未來 PR 如何比較變更前後差異
 
-1. 在 base 分支（或變更前），執行 `pnpm run analyze`，並依下方方法記錄你變更所影響路由的模組體積排行表。
+1. 在 base 分支（或變更前），執行 `bun run analyze`，並依下方方法記錄你變更所影響路由的模組體積排行表。
 2. 套用你的變更。
-3. 再次執行 `pnpm run analyze`，並以相同方法重新萃取排行表。
+3. 再次執行 `bun run analyze`，並以相同方法重新萃取排行表。
 4. 比較兩次結果：受影響路由的 client JS 總體積是否下降？你鎖定的特定模組是否縮小或從排行榜前段消失？
 5. 在 PR 說明中附上你執行的指令與簡短的前後比較摘要（這是本專案 bundle／效能相關 PR 驗收標準的一部分）。
 

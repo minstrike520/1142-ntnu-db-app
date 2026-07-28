@@ -1,21 +1,28 @@
-FROM node:24-slim
+# Bun is both the package manager and the runtime, installing from the single
+# root bun.lock. Build context is the repo root (see docker-compose.yml).
+FROM oven/bun:1.3-slim
 
-RUN corepack enable && corepack prepare pnpm@11 --activate
+WORKDIR /workspace
 
-WORKDIR /app
+# Give the built-in bun user ownership of /workspace before switching
+RUN chown -R bun:bun /workspace
 
-# Give the built-in node user ownership of /app before switching
-RUN chown -R node:node /app
+USER bun
 
-USER node
+COPY --chown=bun:bun package.json bun.lock ./
+COPY --chown=bun:bun frontend/package.json ./frontend/
+COPY --chown=bun:bun backend/package.json ./backend/
+COPY --chown=bun:bun shared/ ./shared/
 
-COPY --chown=node:node package.json pnpm-lock.yaml ./
+# --filter keeps the backend's dependency tree out of the frontend image; its
+# package.json is still copied above because the workspace lockfile covers it.
+RUN bun install --frozen-lockfile --filter './frontend' --filter '.'
 
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
-    pnpm install --store-dir /pnpm/store --no-frozen-lockfile --ignore-scripts
+COPY --chown=bun:bun tsconfig.base.json ./
+COPY --chown=bun:bun frontend/ ./frontend/
 
-COPY --chown=node:node . .
+WORKDIR /workspace/frontend
 
 EXPOSE 3000
 
-CMD ["pnpm", "dev"]
+CMD ["bun", "run", "dev"]

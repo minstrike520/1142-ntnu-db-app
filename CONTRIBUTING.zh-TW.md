@@ -73,9 +73,9 @@
   - 所有 Schema 的變更都必須透過在 `backend/migrations/` 底下使用 `node-pg-migrate` 撰寫遷移檔來完成。
   - 欄位結構、預設值與外鍵條件請參考 [docs/database-design.md](docs/database-design.md)。
 * **Migration 相關指令**（請於後端容器內執行）：
-  - **建立遷移檔**：`docker compose exec backend pnpm run migrate:create <name>`
-  - **執行資料庫遷移**：`docker compose exec backend pnpm run migrate:up`
-  - **回滾資料庫遷移**：`docker compose exec backend pnpm run migrate:down`
+  - **建立遷移檔**：`docker compose exec backend bun run migrate:create <name>`
+  - **執行資料庫遷移**：`docker compose exec backend bun run migrate:up`
+  - **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`
 
 ---
 
@@ -94,7 +94,7 @@ docker compose up -d
 ```
 將種子資料寫入資料庫（這將清除現有資料並重建測試資料）：
 ```bash
-docker compose exec backend pnpm run db:seed
+docker compose exec backend bun run db:seed
 ```
 *註：預設所有測試帳號的密碼均為 `password123`。*
 
@@ -102,29 +102,29 @@ docker compose exec backend pnpm run db:seed
 1. **TypeScript 編譯檢查**：在兩個目錄中均執行檢查以確保無型別錯誤。
    ```bash
    # 後端型別檢查
-   docker compose exec backend pnpm exec tsc --noEmit
+   docker compose exec backend bun run typecheck
    # 前端型別檢查
-   docker compose exec frontend pnpm exec tsc --noEmit
+   docker compose exec frontend bun run typecheck
    ```
 2. **ESLint 檢查**：驗證語法、程式碼風格以及 React Hooks 遵循情況。
    ```bash
-   docker compose exec frontend pnpm run lint
+   docker compose exec frontend bun run lint
    ```
 3. **執行 Vitest 測試**：
    - **單元測試**：
      ```bash
-     docker compose exec backend pnpm run test:unit
+     docker compose exec backend bun run test:unit
      ```
    - **整合測試**（會針對臨時的測試資料庫 `db-test` 執行）：
      ```bash
      # 1. 啟動測試資料庫
-     pnpm -C backend run test:db:up
+     bun run --filter './backend' test:db:up
      # 2. 套用遷移至測試資料庫
-     docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
+     docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
      # 3. 執行測試
-     docker compose exec backend pnpm run test:integration
+     docker compose exec backend bun run test:integration
      # 4. 關閉測試資料庫
-     pnpm -C backend run test:db:down
+     bun run --filter './backend' test:db:down
      ```
 
 更多詳細資訊請參閱 [docs/ZH-TW/DEVELOPMENT.md](docs/ZH-TW/DEVELOPMENT.md)。

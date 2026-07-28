@@ -37,7 +37,7 @@
 - **後端**: Node.js, Express v5, Socket.IO, `pg` (PostgreSQL 原始驅動)。
 - **資料庫**: PostgreSQL 18。
 - **環境編排**: Docker 與 Docker Compose。
-- **套件管理**: pnpm。
+- **套件管理**: Bun（整個 workspace 共用一份 root `bun.lock`）。
 
 ## 專案目錄結構
 
@@ -93,7 +93,7 @@ docker compose up -d
 ### 3. 匯入 mock 測試資料
 執行 Seeding 腳本以建立測試用使用者：
 ```bash
-docker compose exec backend pnpm run db:seed
+docker compose exec backend bun run db:seed
 ```
 *備註: Seeding 腳本會重置資料庫，並自動建立 6 位預設的使用者（如：`alice@test.com`，預設密碼為 `password123`）供開發測試。*
 
@@ -123,7 +123,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 ### 3. 執行資料庫遷移
 於生產容器中套用最新的資料庫遷移：
 ```bash
-docker compose -f docker-compose.prod.yml exec backend pnpm run migrate:up
+docker compose -f docker-compose.prod.yml exec backend bun run migrate:up
 ```
 
 ### 4. 停止生產服務

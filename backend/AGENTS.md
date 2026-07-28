@@ -13,7 +13,7 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 | [src/index.ts](src/index.ts) | Composition Root: Instantiates database pool, repositories, services, Hono routes, Socket.IO handlers, and launches the HTTP server |
 | [src/db.ts](src/db.ts) | Exports the shared `pg.Pool` instance initialized from the `DATABASE_URL` environment variable |
 | [migrations/](migrations/) | PostgreSQL migration files written in raw SQL managed by `node-pg-migrate` |
-| [package.json](package.json) | NPM scripts (`pnpm dev` for tsx/bun, `pnpm run test`) and dependencies |
+| [package.json](package.json) | NPM scripts (`bun run dev` for tsx/bun, `bun run test`) and dependencies |
 
 ## Subdirectories
 
@@ -27,7 +27,7 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 ### 1. Database Access & Query Policies
 - Prisma has been completely removed.
 - **NEVER** use Prisma or any ORM. You must use raw SQL queries parameterized via `pool.query()` in repositories.
-- Schema modifications must be performed by creating a new migration file under `migrations/` via `pnpm run migrate:create <name>`. Refer to existing migrations to understand table names and schema patterns.
+- Schema modifications must be performed by creating a new migration file under `migrations/` via `bun run migrate:create <name>`. Refer to existing migrations to understand table names and schema patterns.
 
 ### 2. Architecture & Layering Rules
 The server strictly implements a 3-tier Hono architecture:
@@ -47,4 +47,4 @@ Do not bypass these layers (e.g., calling repositories directly from route handl
 - Consult `docs/api-documentation.md` for expected event payloads and names.
 
 ### 5. Running Tests
-- Execute `pnpm run test` or `docker compose exec backend bun run test` to run all unit, integration, and E2E tests.
+- Execute `bun run test` or `docker compose exec backend bun run test` to run all unit, integration, and E2E tests.

@@ -1,7 +1,0 @@
-overrides:
-  form-data: "^4.0.6"
-  vite: "^7.3.5"
-  ws: "^8.21.0"
-  esbuild: "^0.28.1"
-
-dangerouslyAllowAllBuilds: true

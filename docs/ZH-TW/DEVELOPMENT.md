@@ -147,10 +147,10 @@ docker compose exec backend bun run migrate:up
 ### 執行 TypeScript 型別檢查
 ```bash
 # 後端檢查
-pnpm --prefix backend exec tsc --noEmit
+bun run --filter './backend' typecheck
 
 # 前端檢查
-pnpm --prefix frontend exec tsc --noEmit
+bun run --filter './frontend' typecheck
 ```
 
 ### 執行 ESLint 代碼品質與風格檢查
@@ -158,10 +158,10 @@ pnpm --prefix frontend exec tsc --noEmit
 
 ```bash
 # 於前端目錄執行代碼檢查
-pnpm --prefix frontend run lint
+bun run --filter './frontend' lint
 
 # 或於前端 Docker 容器內執行
-docker compose exec frontend pnpm run lint
+docker compose exec frontend bun run lint
 ```
 
 ### 執行單元測試
@@ -175,20 +175,20 @@ docker compose exec backend bun run test:unit
 
 ```bash
 # 1. 啟動臨時測試資料庫並自動套用遷移
-pnpm -C backend run test:db:up
+bun run --filter './backend' test:db:up
 
 # 2. 執行整合測試套件
 docker compose exec backend bun run test:integration
 
 # 3. 關閉測試資料庫
-pnpm -C backend run test:db:down
+bun run --filter './backend' test:db:down
 ```
 
 ### 執行所有測試
 ```bash
-pnpm -C backend run test:db:up
+bun run --filter './backend' test:db:up
 docker compose exec backend bun run test
-pnpm -C backend run test:db:down
+bun run --filter './backend' test:db:down
 ```
 
 ---

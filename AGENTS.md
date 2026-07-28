@@ -48,14 +48,14 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 ### 3. Local Development Workflows
 - Docker Compose handles container orchestration. Root `.env` values are automatically injected.
 - The `db` service must start before `backend`. Run `docker compose up -d` from the root folder.
-- Run database seeding via `docker compose exec backend pnpm run db:seed`. This wipes the database and creates reproducible testing profiles (such as `alice@test.com`, password: `password123`).
+- Run database seeding via `docker compose exec backend bun run db:seed`. This wipes the database and creates reproducible testing profiles (such as `alice@test.com`, password: `password123`).
 - For production deployment testing:
   - Run `docker compose -f docker-compose.prod.yml up -d`.
 - For more setup troubleshooting, refer to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ### 4. Git Workflows
 - The active branch is `dev`.
-- Code changes should be verified with TypeScript compiler checks (`pnpm exec tsc --noEmit` on both backend and frontend) and E2E/integration tests.
+- Code changes should be verified with TypeScript compiler checks (`bun run typecheck` on both backend and frontend) and E2E/integration tests.
 
 ### 5. GitHub Text Language
 - Write all human-readable GitHub text in **Traditional Chinese (繁體中文)**: PR titles (the description after the conventional-commit prefix), PR bodies, and Issue titles/bodies/comments.
