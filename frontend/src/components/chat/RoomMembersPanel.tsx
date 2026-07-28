@@ -1,14 +1,14 @@
 "use client";
 
 import React, { useState } from "react";
-import { ChatRoom, Member, useChat } from "@/context/ChatContext";
+import { ChatRoom, Member, useProfilePopover } from "@/context/ChatContext";
 import { Avatar } from "@/components/ui/Avatar";
 import ProfilePopover from "./ProfilePopover";
 import { useTranslation } from "@/hooks/useTranslation";
 import { resolveAssetUrl } from "@/lib/assets";
 
 export default function RoomMembersPanel({ members }: { room: ChatRoom; members: Member[] }) {
-  const { activeProfilePopover, setActiveProfilePopover } = useChat();
+  const { activeProfilePopover, setActiveProfilePopover } = useProfilePopover();
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const [popoverTop, setPopoverTop] = useState<number>(0);
   const { t } = useTranslation();

@@ -218,6 +218,7 @@
     "pendingApproval": "Pending Approval",
     "pendingApprovalBanner": "Your request to join this group is pending approval. You will be able to read and send messages once an owner or admin approves your request.",
     "editingMessageBanner": "Editing message (Press Esc to cancel)",
+    "messageActions": "Message actions",
     "replyMessage": "Reply Message",
     "editMessage": "Edit Message",
     "recallMessage": "Recall Message",
@@ -350,5 +351,15 @@
     "joining": "Joining...",
     "joinFailed": "Failed to join this group.",
     "pendingApproval": "Your request to join {name} has been sent. You'll be able to open it once an admin approves it."
+  },
+  "chatFilter": {
+    "filterAll": "All",
+    "filterDm": "DM",
+    "filterGroup": "Group",
+    "filterUnread": "Unread",
+    "sortLabel": "Sort",
+    "sortCustom": "Custom",
+    "sortUnread": "Unread first",
+    "emptyResult": "No matching chats"
   }
 }
