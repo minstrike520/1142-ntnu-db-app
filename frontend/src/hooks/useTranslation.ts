@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { useChat } from "@/context/ChatContext";
+import { useUiLanguage } from "@/context/ChatContext";
 import zhTW from "@/locales/zh-TW.json";
 import en from "@/locales/en.json";
 
@@ -11,7 +11,9 @@ const translations = {
 } as const;
 
 export function useTranslation() {
-  const { uiLanguage } = useChat();
+  // Subscribes to the language-only context: translation consumers must not
+  // re-render whenever unrelated chat state (messages, typing, …) changes.
+  const uiLanguage = useUiLanguage();
 
   const t = useCallback((key: string, replacements?: Record<string, string | number>): string => {
     const keys = key.split(".");

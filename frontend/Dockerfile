@@ -1,6 +1,6 @@
-FROM node:lts-slim
+FROM node:24-slim
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11 --activate
 
 WORKDIR /app
 

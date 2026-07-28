@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { MessageRepository } from '../../../src/repositories/messageRepository';
+import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
+import { MessageRepository } from '../../../src/models/messageRepository';
 import { testPool } from '../../helpers/testPool';
 import { resetDb } from '../../helpers/resetDb';
 
@@ -11,19 +11,17 @@ describe('MessageRepository (pg)', () => {
   });
 
   async function createUser(email: string) {
-    const res = await testPool.query(
-      'INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING user_id',
-      ['Message Tester', email, 'hash'],
-    );
-    return res.rows[0].user_id as string;
+    const res = await testPool`
+      INSERT INTO users (name, email, password_hash) VALUES ('Message Tester', ${email}, 'hash') RETURNING user_id
+    `;
+    return res[0].user_id as string;
   }
 
   async function createRoom() {
-    const res = await testPool.query(
-      'INSERT INTO chat_rooms (type, name) VALUES ($1, $2) RETURNING room_id',
-      ['group', 'Message Repo Room'],
-    );
-    return res.rows[0].room_id as string;
+    const res = await testPool`
+      INSERT INTO chat_rooms (type, name) VALUES ('group', 'Message Repo Room') RETURNING room_id
+    `;
+    return res[0].room_id as string;
   }
 
   it('create -> findById -> findByRoom returns camelCase messages in reverse-chronological order', async () => {
@@ -116,13 +114,15 @@ describe('MessageRepository (pg)', () => {
   it('create binds unassigned attachments once and returns attachment objects', async () => {
     const senderId = await createUser('attachment-sender@test.com');
     const roomId = await createRoom();
-    const attachmentRes = await testPool.query(
-      `INSERT INTO attachments (uploaded_by, file_path, file_type, original_name)
-       VALUES ($1, $2, $3, $4)
-       RETURNING attachment_id`,
-      [senderId, 'uploads/test.txt', 'text/plain', 'test.txt'],
-    );
-    const attachmentId = attachmentRes.rows[0].attachment_id as string;
+    const filePath = 'uploads/test.txt';
+    const fileType = 'text/plain';
+    const originalName = 'test.txt';
+    const attachmentRes = await testPool`
+      INSERT INTO attachments (uploaded_by, file_path, file_type, original_name)
+      VALUES (${senderId}, ${filePath}, ${fileType}, ${originalName})
+      RETURNING attachment_id
+    `;
+    const attachmentId = attachmentRes[0].attachment_id as string;
 
     const created = await repo.create({
       roomId,
@@ -179,5 +179,35 @@ describe('MessageRepository (pg)', () => {
 
     const missing = await repo.findById('00000000-0000-0000-0000-000000000000');
     expect(missing).toBeNull();
+  });
+
+  it('markRecalled hides attachments from the recalled message and future fetches', async () => {
+    const senderId = await createUser('recall-attachment-sender@test.com');
+    const roomId = await createRoom();
+    const filePath = 'uploads/recall-test.txt';
+    const fileType = 'text/plain';
+    const originalName = 'recall-test.txt';
+    const attachmentRes = await testPool`
+      INSERT INTO attachments (uploaded_by, file_path, file_type, original_name)
+      VALUES (${senderId}, ${filePath}, ${fileType}, ${originalName})
+      RETURNING attachment_id
+    `;
+    const attachmentId = attachmentRes[0].attachment_id as string;
+
+    const created = await repo.create({
+      roomId,
+      senderId,
+      content: 'recall me with an attachment',
+      attachmentIds: [attachmentId],
+    });
+    expect(created.attachments).toHaveLength(1);
+
+    const recalled = await repo.markRecalled(created.messageId);
+    expect(recalled.isRecalled).toBe(true);
+    expect(recalled.attachments).toBeUndefined();
+
+    const messages = await repo.findByRoom(roomId, { limit: 10 });
+    expect(messages[0].isRecalled).toBe(true);
+    expect(messages[0].attachments).toBeUndefined();
   });
 });

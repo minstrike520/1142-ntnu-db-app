@@ -1,15 +1,8 @@
-/// <reference types="vitest/globals" />
-import { Pool } from 'pg';
-import { UserRepository } from '../../../src/repositories/userRepository';
+import { describe, it, expect, afterAll } from 'bun:test';
+import { testPool } from '../../helpers/testPool';
+import { UserRepository } from '../../../src/models/userRepository';
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL_TEST || process.env.DATABASE_URL,
-});
-const repo = new UserRepository(pool);
-
-afterAll(async () => {
-  await pool.end();
-});
+const repo = new UserRepository(testPool);
 
 describe('UserRepository soft-delete', () => {
   it('findById returns null for a soft-deleted user', async () => {

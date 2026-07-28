@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./Avatar";
 import ProfilePopover from "../chat/ProfilePopover";
-import { downloadAttachment } from "@/lib/api";
-import { useChat } from "@/context/ChatContext";
+import { fetchAttachmentBlobUrl } from "@/lib/api";
+import { FileDownloaderBridge } from "@/lib/fileDownloaderBridge";
+import { useProfilePopover } from "@/context/ChatContext";
 
 export interface Attachment {
   filename: string;
@@ -36,6 +37,12 @@ export interface ChatBubbleProps {
   avatarName?: string;
   searchHighlight?: string;
 }
+
+// Kept outside the component: a conditional expression inside a component-
+// level try/catch (or a try/finally) makes the React Compiler skip the whole
+// component (see docs/frontend-react-render-optimization.md).
+const toErrorMessage = (error: unknown, fallback: string): string =>
+  error instanceof Error ? error.message : fallback;
 
 const highlightText = (text: string, query: string): React.ReactNode => {
   const lowerText = text.toLowerCase();
@@ -82,6 +89,110 @@ const renderMentionContent = (
   );
 };
 
+function ImageAttachmentPreview({
+  file,
+  isOutgoing,
+  isHighEmphasis,
+  onDownload,
+  isDownloading,
+}: {
+  file: Attachment;
+  isOutgoing: boolean;
+  isHighEmphasis: boolean;
+  onDownload: () => void;
+  isDownloading: boolean;
+}) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(!!file.url);
+  const [hasError, setHasError] = useState(false);
+  const [prevUrl, setPrevUrl] = useState(file.url);
+
+  if (file.url !== prevUrl) {
+    setPrevUrl(file.url);
+    setBlobUrl(null);
+    setIsLoading(!!file.url);
+    setHasError(false);
+  }
+
+  useEffect(() => {
+    if (!file.url) {
+      return;
+    }
+    let objectUrl: string | null = null;
+    fetchAttachmentBlobUrl(file.url)
+      .then((url) => {
+        objectUrl = url;
+        setBlobUrl(url);
+      })
+      .catch(() => setHasError(true))
+      .finally(() => setIsLoading(false));
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [file.url]);
+
+  const fallbackClassName = cn(
+    "flex w-full items-center gap-2.5 p-2 border rounded-sm text-xs cursor-pointer select-none transition-colors text-left disabled:cursor-wait disabled:opacity-70",
+    isOutgoing && isHighEmphasis
+      ? "bg-white/10 border-white/20 hover:bg-white/20 text-white"
+      : "bg-surface-card border-border-secondary hover:border-border-primary text-foreground",
+  );
+  const labelClass = cn(
+    "text-[9px] uppercase tracking-wider font-mono mt-0.5 truncate",
+    isOutgoing && isHighEmphasis ? "text-white/60" : "text-text-muted",
+  );
+  const clipIcon = (
+    <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+    </svg>
+  );
+
+  if (isLoading) {
+    return (
+      <div
+        className={cn(
+          "rounded-sm w-48 h-32 animate-pulse",
+          isOutgoing && isHighEmphasis ? "bg-white/20" : "bg-surface-muted",
+        )}
+      />
+    );
+  }
+
+  if (hasError || !blobUrl) {
+    return (
+      <button
+        type="button"
+        onClick={onDownload}
+        disabled={isDownloading}
+        className={fallbackClassName}
+        title={isDownloading ? "Downloading attachment" : "Download attachment"}
+      >
+        {clipIcon}
+        <div className="flex-1 min-w-0">
+          <p className="font-medium truncate leading-tight">{file.filename}</p>
+          <p className={labelClass}>{file.filetype}</p>
+        </div>
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={blobUrl}
+        alt={file.filename}
+        className="max-w-full max-h-64 rounded-sm object-contain cursor-pointer"
+        onClick={onDownload}
+        title="Click to download"
+      />
+      <p className={cn("text-[9px] font-mono truncate", isOutgoing && isHighEmphasis ? "text-white/60" : "text-text-muted")}>
+        {file.filename}
+      </p>
+    </div>
+  );
+}
+
 export function ChatBubble({
   content,
   senderName,
@@ -108,21 +219,89 @@ export function ChatBubble({
   const [downloadingUrl, setDownloadingUrl] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState("");
 
-  const { activeProfilePopover, setActiveProfilePopover } = useChat();
+  const { activeProfilePopover, setActiveProfilePopover } = useProfilePopover();
   const showPopover = messageId ? activeProfilePopover?.instanceId === messageId : false;
+
+  const menuOpenedAtRef = useRef(0);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressTriggeredRef = useRef(false);
 
   useEffect(() => {
     if (!menuPosition) return;
-    const close = () => setMenuPosition(null);
-    window.addEventListener("click", close);
-    window.addEventListener("keydown", close);
-    window.addEventListener("scroll", close, true);
+    const closeOnClick = () => {
+      if (Date.now() - menuOpenedAtRef.current < 300) return;
+      setMenuPosition(null);
+    };
+    const closeOnScroll = () => setMenuPosition(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuPosition(null);
+    };
+    window.addEventListener("click", closeOnClick);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("scroll", closeOnScroll, true);
     return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("keydown", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("click", closeOnClick);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("scroll", closeOnScroll, true);
     };
   }, [menuPosition]);
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    };
+  }, []);
+
+  const openMenuAt = (x: number, y: number) => {
+    const menuWidth = 160;
+    const menuHeight = 170;
+    const clampedX = Math.min(Math.max(x, 8), window.innerWidth - menuWidth - 8);
+    const clampedY = Math.min(Math.max(y, 8), window.innerHeight - menuHeight - 8);
+    menuOpenedAtRef.current = Date.now();
+    setMenuPosition({ x: clampedX, y: clampedY });
+  };
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    touchStartPosRef.current = null;
+  };
+
+  const handleTouchStart = (event: React.TouchEvent) => {
+    if (isRecalled || event.touches.length !== 1) {
+      clearLongPressTimer();
+      return;
+    }
+    clearLongPressTimer();
+    const touch = event.touches[0];
+    touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+    longPressTriggeredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      openMenuAt(touch.clientX, touch.clientY);
+    }, 500);
+  };
+
+  const handleTouchMove = (event: React.TouchEvent) => {
+    if (event.touches.length !== 1) {
+      clearLongPressTimer();
+      return;
+    }
+    if (!touchStartPosRef.current) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - touchStartPosRef.current.x;
+    const dy = touch.clientY - touchStartPosRef.current.y;
+    if (Math.hypot(dx, dy) > 10) {
+      clearLongPressTimer();
+    }
+  };
+
+  const handleTouchEnd = () => {
+    clearLongPressTimer();
+  };
 
   const handleTogglePopover = (event: React.MouseEvent) => {
     if (!senderId) {
@@ -176,18 +355,20 @@ export function ChatBubble({
     setDownloadError("");
     setDownloadingUrl(file.url);
 
+    // No `finally`: a try/finally would make the React Compiler bail out of
+    // this component; both paths reset the downloading state explicitly.
     try {
-      await downloadAttachment(file.url, file.filename);
+      await FileDownloaderBridge.download(file.url, file.filename);
+      setDownloadingUrl(null);
     } catch (error) {
       console.error(error);
-      setDownloadError(error instanceof Error ? error.message : "Failed to download attachment");
-    } finally {
+      setDownloadError(toErrorMessage(error, "Failed to download attachment"));
       setDownloadingUrl(null);
     }
   };
 
   const menuItemClass =
-    "w-full px-3 py-2 text-left text-xs hover:bg-surface-muted disabled:cursor-not-allowed disabled:text-text-muted disabled:hover:bg-transparent";
+    "w-full px-3 py-2 text-left text-xs hover:bg-surface-muted";
 
   return (
     <div
@@ -238,15 +419,40 @@ export function ChatBubble({
             </div>
           )}
 
+          {isOutgoing && !isRecalled && (
+            <button
+              type="button"
+              aria-label={t("chatroom.messageActions")}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                openMenuAt(rect.left, rect.bottom + 4);
+              }}
+              className="hidden md:inline-flex opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0 self-center p-1 rounded-sm text-text-muted hover:text-foreground hover:bg-surface-muted mb-0.5"
+            >
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                <circle cx="5" cy="12" r="2" />
+                <circle cx="12" cy="12" r="2" />
+                <circle cx="19" cy="12" r="2" />
+              </svg>
+            </button>
+          )}
+
           <div
             onContextMenu={(event) => {
               event.preventDefault();
-              if (!isRecalled) {
-                setMenuPosition({ x: event.clientX, y: event.clientY });
+              if (isRecalled) return;
+              if (longPressTriggeredRef.current) {
+                longPressTriggeredRef.current = false;
+                return;
               }
+              openMenuAt(event.clientX, event.clientY);
             }}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
             className={cn(
-              "border rounded-sm p-3 relative flex flex-col gap-2 max-w-md md:max-w-lg",
+              "border rounded-sm p-3 relative flex flex-col gap-2 max-w-md md:max-w-lg touch-pan-y",
               isOutgoing
                 ? isHighEmphasis
                   ? "bg-primary border-primary text-white"
@@ -268,18 +474,40 @@ export function ChatBubble({
               </div>
             )}
 
-            <div
-              className={cn(
-                "text-sm break-words whitespace-pre-wrap",
-                isRecalled && "italic text-text-muted/70",
-              )}
-            >
-              {isRecalled ? t("chatroom.messageRecalled") : renderMentionContent(content, isOutgoing, isHighEmphasis, searchHighlight)}
-            </div>
+            {(isRecalled || content) && (
+              <div
+                className={cn(
+                  "text-sm break-words whitespace-pre-wrap",
+                  isRecalled && "italic text-text-muted/70",
+                )}
+              >
+                {isRecalled ? t("chatroom.messageRecalled") : renderMentionContent(content, isOutgoing, isHighEmphasis, searchHighlight)}
+              </div>
+            )}
 
-            {attachments.length > 0 && (
-              <div className="flex flex-col gap-1.5 mt-1 border-t border-border-secondary/40 pt-2">
+            {!isRecalled && attachments.length > 0 && (
+              <div
+                className={cn(
+                  "flex flex-col gap-1.5",
+                  content && "mt-1 border-t border-border-secondary/40 pt-2",
+                )}
+              >
                 {attachments.map((file, idx) => {
+                  const isImage = file.filetype?.startsWith("image/");
+
+                  if (isImage) {
+                    return (
+                      <ImageAttachmentPreview
+                        key={idx}
+                        file={file}
+                        isOutgoing={isOutgoing}
+                        isHighEmphasis={isHighEmphasis}
+                        onDownload={() => void handleDownloadAttachment(file)}
+                        isDownloading={downloadingUrl === file.url}
+                      />
+                    );
+                  }
+
                   const fileContent = (
                     <>
                       <svg
@@ -345,6 +573,24 @@ export function ChatBubble({
             )}
           </div>
 
+          {!isOutgoing && !isRecalled && (
+            <button
+              type="button"
+              aria-label={t("chatroom.messageActions")}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                openMenuAt(rect.left, rect.bottom + 4);
+              }}
+              className="hidden md:inline-flex opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0 self-center p-1 rounded-sm text-text-muted hover:text-foreground hover:bg-surface-muted mb-0.5"
+            >
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                <circle cx="5" cy="12" r="2" />
+                <circle cx="12" cy="12" r="2" />
+                <circle cx="19" cy="12" r="2" />
+              </svg>
+            </button>
+          )}
+
           {menuPosition && (
             <div
               className="fixed z-50 min-w-32 border border-border-primary bg-surface-card text-foreground shadow-lg rounded-sm overflow-hidden"
@@ -361,28 +607,30 @@ export function ChatBubble({
               >
                 {t("chatroom.replyMessage")}
               </button>
-              <button
-                type="button"
-                className={menuItemClass}
-                disabled={!canEdit}
-                onClick={() => {
-                  onEdit?.();
-                  setMenuPosition(null);
-                }}
-              >
-                {t("chatroom.editMessage")}
-              </button>
-              <button
-                type="button"
-                className={menuItemClass}
-                disabled={!canRecall}
-                onClick={() => {
-                  onRecall?.();
-                  setMenuPosition(null);
-                }}
-              >
-                {t("chatroom.recallMessage")}
-              </button>
+              {canEdit && (
+                <button
+                  type="button"
+                  className={menuItemClass}
+                  onClick={() => {
+                    onEdit?.();
+                    setMenuPosition(null);
+                  }}
+                >
+                  {t("chatroom.editMessage")}
+                </button>
+              )}
+              {canRecall && (
+                <button
+                  type="button"
+                  className={menuItemClass}
+                  onClick={() => {
+                    onRecall?.();
+                    setMenuPosition(null);
+                  }}
+                >
+                  {t("chatroom.recallMessage")}
+                </button>
+              )}
               <button type="button" className={menuItemClass} onClick={handleCopy}>
                 {t("chatroom.copyText")}
               </button>

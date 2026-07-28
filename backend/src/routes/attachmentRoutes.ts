@@ -1,43 +1,92 @@
-import { Router } from 'express';
-import multer from 'multer';
-import { ValidationError } from '../errors/AppError';
+import type { Attachment } from '@shared/types';
+import type { UploadedFile } from '../utils/fileUpload';
+import { Hono } from 'hono';
+import path from 'path';
+import { NotFoundError } from '../utils/AppError';
 import { authMiddleware } from '../middlewares/authMiddleware';
-import { attachmentUploadConfig } from '../lib/attachmentUploadConfig';
-import { ATTACHMENTS_UPLOAD_DIR, ensureUploadDirectories } from '../lib/uploads';
+import { attachmentUploadConfig } from '../utils/attachmentUploadConfig';
+import { ATTACHMENTS_UPLOAD_DIR, ensureUploadDirectories } from '../utils/uploads';
+import { parseSingleFile } from '../utils/fileUpload';
+import { toPublicAttachment } from '../models/attachmentRepository';
 
 ensureUploadDirectories();
 
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => {
-      cb(null, ATTACHMENTS_UPLOAD_DIR);
-    },
-  }),
-  limits: {
-    fileSize: attachmentUploadConfig.maxBytes,
-  },
-  fileFilter: (_req, file, cb) => {
-    if (!attachmentUploadConfig.restrictionEnabled) {
-      return cb(null, true);
-    }
+const encodeDownloadFilename = (filename: string): string => {
+  const asciiFallback = filename.replace(/[^\x20-\x7E]+/g, '_');
+  const encoded = encodeURIComponent(filename)
+    .replace(/['()]/g, escape)
+    .replace(/\*/g, '%2A');
 
-    const mimeType = file.mimetype.toLowerCase();
-    if (!attachmentUploadConfig.allowedMimeTypes.includes(mimeType)) {
-      return cb(new ValidationError(`Attachment MIME type is not allowed: ${file.mimetype}`));
-    }
+  return `attachment; filename="${asciiFallback || 'download'}"; filename*=UTF-8''${encoded}`;
+};
 
-    const extension = file.originalname.toLowerCase().match(/\.[^.]+$/)?.[0];
-    if (!extension || !attachmentUploadConfig.allowedExtensions.includes(extension)) {
-      return cb(new ValidationError(`Attachment file extension is not allowed: ${extension ?? 'unknown'}`));
-    }
-
-    cb(null, true);
-  }
-});
-
-export function makeAttachmentRoutes(attachmentController: any) {
-  const router = Router();
-  router.post('/', authMiddleware, upload.single('file'), attachmentController.upload);
-  router.get('/:id', authMiddleware, attachmentController.download);
-  return router;
+export interface AttachmentService {
+  uploadAttachment(userId: string, file: UploadedFile): Promise<Attachment>;
+  getAttachment(attachmentId: string): Promise<(Attachment & { filePath?: string; file_path?: string; original_name?: string; mime_type?: string }) | null>;
 }
+
+export const makeAttachmentRoutes = (service: AttachmentService) => {
+  const app = new Hono();
+  app.use('*', authMiddleware);
+
+  app.post('/', async (c) => {
+    const userId = c.get('user').userId;
+    const file = await parseSingleFile(c, {
+      fieldName: 'file',
+      maxBytes: attachmentUploadConfig.maxBytes,
+      restrictionEnabled: attachmentUploadConfig.restrictionEnabled,
+      allowedMimeTypes: attachmentUploadConfig.allowedMimeTypes,
+      allowedExtensions: attachmentUploadConfig.allowedExtensions,
+      saveToDir: ATTACHMENTS_UPLOAD_DIR,
+    });
+    const result = await service.uploadAttachment(userId, file);
+    return c.json(result, 201);
+  });
+
+  app.get('/:id', async (c) => {
+    const attachmentId = c.req.param('id');
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(attachmentId);
+    if (!isUuid) {
+      throw new NotFoundError('attachment', attachmentId);
+    }
+    const attachment = await service.getAttachment(attachmentId);
+    if (!attachment) {
+      throw new NotFoundError('attachment', attachmentId);
+    }
+
+    const accept = c.req.header('accept') || '';
+    if (accept.includes('application/json')) {
+      return c.json(toPublicAttachment(attachment), 200);
+    }
+
+    const rawPath = attachment.filePath || attachment.file_path;
+    if (!rawPath) {
+      // The record exists but has no stored file, so there is nothing to stream.
+      throw new NotFoundError('attachment', attachmentId);
+    }
+
+    const filePath = path.isAbsolute(rawPath)
+      ? rawPath
+      : path.resolve(ATTACHMENTS_UPLOAD_DIR, path.basename(rawPath));
+
+    const originalName = attachment.originalName || attachment.original_name || 'download';
+    const mimeType = attachment.fileType || attachment.mime_type || 'application/octet-stream';
+
+    const file = Bun.file(filePath);
+    if (!(await file.exists())) {
+      // Stored file is gone (lost volume, manual deletion). Answering with
+      // metadata and a 200 would make download clients treat JSON as the file.
+      throw new NotFoundError('attachment', attachmentId);
+    }
+
+    return new Response(file, {
+      status: 200,
+      headers: {
+        'Content-Type': mimeType,
+        'Content-Disposition': encodeDownloadFilename(originalName),
+      },
+    });
+  });
+
+  return app;
+};

@@ -25,9 +25,15 @@ services:
       - NODE_ENV=${NODE_ENV}
       - PORT=${PORT}
       - DATABASE_URL=${DATABASE_URL}
+      # Pass through only when set on the host — no db-test default, because this
+      # stack starts only `db`. Deliberately not `${DATABASE_URL_TEST:-}`: an
+      # empty value still counts as set and would shadow backend/.env.test, which
+      # is where the documented in-container test workflow gets this from.
+      - DATABASE_URL_TEST
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
+      - TRUST_PROXY=${TRUST_PROXY:-false}
       - CORS_ORIGINS=${CORS_ORIGINS}
       - ATTACHMENT_TYPE_RESTRICTION_ENABLED=${ATTACHMENT_TYPE_RESTRICTION_ENABLED:-false}
       - ATTACHMENT_ALLOWED_MIME_TYPES=${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
@@ -44,7 +50,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: sh -c "pnpm run migrate:up && pnpm dev"
+    command: sh -c "bun run migrate:up && bun dev"
 
   frontend:
     build:

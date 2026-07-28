@@ -1,55 +1,48 @@
-# Stage 1: Build the backend application
-FROM node:lts-slim AS builder
+# Stage 1: Build/Typecheck the backend application
+FROM oven/bun:1.2-slim AS builder
 ENV CI=true
-
-RUN apt-get update -y && apt-get install -y openssl
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
 WORKDIR /workspace
 
-# Copy global typescript and workspace configs
-COPY tsconfig.base.json package.json ./
+# Copy global configs and shared files
+COPY tsconfig.base.json package.json pnpm-lock.yaml ./
 COPY shared/ ./shared/
 
 # Copy backend dependency declarations
-COPY backend/package.json backend/pnpm-lock.yaml backend/tsconfig.json ./backend/
+COPY backend/package.json backend/tsconfig.json ./backend/
 
 WORKDIR /workspace/backend
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
-    pnpm install --store-dir /pnpm/store --no-frozen-lockfile --ignore-scripts
+RUN bun install
 
-# Copy backend source code and compile
+# Copy backend source code and typecheck
 COPY backend/src ./src
-RUN pnpm build
+RUN bun exec tsc --noEmit
 
 # Stage 2: Create a production runner image
-FROM node:lts-slim AS runner
+FROM oven/bun:1.2-slim AS runner
 ENV CI=true
-
-RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
 WORKDIR /app
 
 # Create uploads directory structure
 RUN mkdir -p /app/uploads/attachments /app/uploads/avatars
 
-# Give the built-in node user ownership of /app before switching
-RUN chown -R node:node /app
+# Give the built-in bun user ownership of /app before switching
+RUN chown -R bun:bun /app
 
-USER node
+USER bun
 
-# Copy production dependency declarations
-COPY --chown=node:node backend/package.json backend/pnpm-lock.yaml ./
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
-    pnpm install --store-dir /pnpm/store --prod --no-frozen-lockfile --ignore-scripts
+# Copy dependency declarations and install
+COPY --chown=bun:bun backend/package.json ./
+RUN bun install --production
 
-# Copy compiled files and migrations
-COPY --from=builder --chown=node:node /workspace/backend/dist ./dist
-COPY --chown=node:node backend/migrations ./migrations
+# Copy source code, migrations, and shared files
+COPY --chown=bun:bun backend/src ./src
+COPY --chown=bun:bun backend/migrations ./migrations
+COPY --chown=bun:bun shared /shared
+COPY --chown=bun:bun tsconfig.base.json /tsconfig.base.json
+COPY --chown=bun:bun backend/tsconfig.json ./tsconfig.json
 
 # Expose port and run in production
 EXPOSE 4000
 ENV NODE_ENV=production
 
-CMD ["sh", "-c", "pnpm run migrate:up && node dist/backend/src/index.js"]
+CMD ["sh", "-c", "bun run migrate:up && bun src/index.ts"]

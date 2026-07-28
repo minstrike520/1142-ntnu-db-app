@@ -1,8 +1,17 @@
 "use client";
+/* eslint-disable react-compiler/react-compiler */
+/* 
+ * NOTE: The React Compiler is disabled for this file because ChatProvider contains 
+ * multiple useEffect hooks that intentionally disable react-hooks/exhaustive-deps 
+ * (specifically for post-mount session hydration, socket connection management, 
+ * and active room member synchronization). The compiler skips optimizing components 
+ * where hook dependencies are suppressed, and would otherwise emit compile-time warnings.
+ */
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { resolveAssetUrl } from "@/lib/assets";
+import { NotificationBridge } from "@/lib/notificationBridge";
 import type {
   Attachment as ApiAttachment,
   EmergencyContactResponse,
@@ -50,7 +59,6 @@ import {
   respondFriendRequest,
   searchUsers,
   sendFriendRequest as sendFriendRequestApi,
-  triggerEmergencyAlert as triggerEmergencyAlertApi,
   unblockUser as unblockUserApi,
   updateFolderRooms,
   updateMe,
@@ -156,8 +164,6 @@ export interface User {
   notifySound?: boolean;
   warningEnabled?: boolean;
   warningDays?: number;
-  demoWarningEnabled?: boolean;
-  demoWarningSeconds?: number;
   lastActivity?: Date | string;
   roomOrder?: Record<string, string[]>;
 }
@@ -199,16 +205,10 @@ export interface EmergencyContact {
 export interface EmergencySettings {
   warningEnabled: boolean;
   warningDays: number;
-  demoWarningEnabled: boolean;
-  demoWarningSeconds: number;
   contacts: EmergencyContact[];
 }
 
-interface TriggerEmergencyAlertResult {
-  alerted: boolean;
-  recipients: string[];
-  reason?: string;
-}
+
 
 export type UiLanguage = "zh-TW" | "en";
 
@@ -254,7 +254,6 @@ interface ChatContextType {
   rooms: ChatRoom[];
   folders: Folder[];
   messages: Message[];
-  typingUsers: Record<string, string[]>;
   groupReadStates: Record<string, Record<string, string>>;
   user: User;
   activeRoomNicknames: Record<string, string>;
@@ -268,8 +267,6 @@ interface ChatContextType {
   roomsInitialized: boolean;
   selectedFriendForSidebar: Friend | null;
   setSelectedFriendForSidebar: React.Dispatch<React.SetStateAction<Friend | null>>;
-  showRightPanel: boolean;
-  setShowRightPanel: React.Dispatch<React.SetStateAction<boolean>>;
   hasUnsavedChanges: boolean;
   setHasUnsavedChanges: (val: boolean) => void;
 
@@ -324,16 +321,92 @@ interface ChatContextType {
   blockFriend: (friendId: string) => Promise<void>;
   unblockUser: (blockedId: string) => Promise<void>;
   saveEmergencySettings: (settings: EmergencySettings) => Promise<void>;
-  triggerEmergencyAlertNow: (message?: string) => Promise<TriggerEmergencyAlertResult>;
   setUiLanguage: (language: UiLanguage) => void;
-  activeProfilePopover: { instanceId: string; userId: string } | null;
-  setActiveProfilePopover: React.Dispatch<React.SetStateAction<{ instanceId: string; userId: string } | null>>;
   refreshSocialData: () => Promise<void>;
   updateRoomSorting: (nextOrder: Record<string, string[]>) => Promise<void>;
   markRoomAsRead: (roomId: string) => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
+
+// ---------------------------------------------------------------------------
+// Leaf contexts for high-frequency / UI-local state (hotspot #2, issue #383).
+//
+// These states change far more often than the chat data (typing events fire
+// on every keystroke of every peer) or are purely presentational (popover,
+// right panel). Keeping them inside the main context value forced every
+// useChat() consumer — including every ChatBubble via useTranslation — to
+// re-render on each change. They still live in ChatProvider's state; only the
+// subscription channel is separate, so this is not a ChatContext re-
+// architecture (that is tracked separately, see
+// docs/frontend-react-render-optimization.md).
+// ---------------------------------------------------------------------------
+
+const TypingUsersContext = createContext<Record<string, string[]> | undefined>(undefined);
+
+const UiLanguageContext = createContext<UiLanguage | undefined>(undefined);
+
+interface ProfilePopoverContextType {
+  activeProfilePopover: { instanceId: string; userId: string } | null;
+  setActiveProfilePopover: React.Dispatch<
+    React.SetStateAction<{ instanceId: string; userId: string } | null>
+  >;
+}
+
+const ProfilePopoverContext = createContext<ProfilePopoverContextType | undefined>(undefined);
+
+interface RightPanelContextType {
+  showRightPanel: boolean;
+  setShowRightPanel: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+const RightPanelContext = createContext<RightPanelContextType | undefined>(undefined);
+
+// Static key list for the stable handler proxies built in ChatProvider. Kept
+// at module level so building the proxies never reads a ref during render.
+// The `NoMissingHandlerKey` check below fails to compile if a handler is
+// added to the `handlers` object without being listed here.
+const HANDLER_KEYS = [
+  "toggleFolder",
+  "handleLogout",
+  "handleSendMessage",
+  "handleTyping",
+  "handleUploadAttachments",
+  "handleRecallMessage",
+  "handleUpdateMessage",
+  "handleUpdateProfile",
+  "handleUpdatePreferences",
+  "handleCreateRoom",
+  "handleOpenPrivateRoom",
+  "handleCreateFolder",
+  "handleDeleteFolder",
+  "handleRenameFolder",
+  "handleCategorizeRoom",
+  "handleModifyNickname",
+  "handleLeaveOrBlock",
+  "handleDeleteAccount",
+  "loadGroupMembers",
+  "saveGroupSettings",
+  "approveGroupMember",
+  "updateGroupMember",
+  "kickGroupMember",
+  "transferGroupOwner",
+  "handleDeleteGroupRoom",
+  "searchUsersForInvite",
+  "handleJoinByInviteCode",
+  "sendFriendRequest",
+  "sendFriendRequestById",
+  "acceptFriendRequest",
+  "rejectFriendRequest",
+  "removeFriend",
+  "blockFriend",
+  "unblockUser",
+  "saveEmergencySettings",
+  "setUiLanguage",
+  "refreshSocialData",
+  "updateRoomSorting",
+] as const;
+type HandlerKey = (typeof HANDLER_KEYS)[number];
 
 const toStoredUser = (
   profile: MyProfile,
@@ -349,9 +422,6 @@ const toStoredUser = (
   notifyDesktop: settings?.notifyDesktop ?? true,
   notifySound: settings?.notifySound ?? true,
   warningEnabled: settings?.warningEnabled ?? false,
-  warningDays: settings?.warningDays ?? 0,
-  demoWarningEnabled: settings?.demoWarningEnabled ?? false,
-  demoWarningSeconds: settings?.demoWarningSeconds ?? 30,
   lastActivity: profile.lastActivity,
   roomOrder: settings?.roomOrder ?? {},
 });
@@ -449,7 +519,9 @@ const hydrateReplyTargets = (items: Message[]): Message[] => {
 
     const nextReplyTo = {
       senderName: replyTarget.senderName,
-      content: replyTarget.isRecalled ? "" : replyTarget.content,
+      content: replyTarget.isRecalled
+        ? ""
+        : replyTarget.content || replyTarget.attachments?.[0]?.filename || "",
     };
 
     if (
@@ -544,13 +616,6 @@ const mapFolders = (apiFolders: ApiFolder[], currentFolders: Folder[]): Folder[]
 const normalizeLanguage = (language?: string): UiLanguage =>
   language === "zh-TW" || language === "en" ? language : "en";
 
-const formatUploadedAttachmentsMessage = (language: UiLanguage, fileNames: string[]) => {
-  if (fileNames.length === 1) {
-    return language === "zh-TW" ? `已上傳附件：${fileNames[0]}` : `Shared attachment: ${fileNames[0]}`;
-  }
-  return language === "zh-TW" ? `已上傳了 ${fileNames.length} 個附件` : `Shared ${fileNames.length} attachments`;
-};
-
 const mapFriend = (item: FriendResponse, emergencyContactIds: Set<string>): Friend => ({
   id: item.friend.userId,
   name: item.friend.name,
@@ -640,6 +705,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const socialDataRefreshResolversRef = useRef<Array<() => void>>([]);
   const tokenRef = useRef<string | null>(null);
   const activeRoomIdRef = useRef<string | null>(null);
+  const notifyDesktopRef = useRef(true);
 
   const [isMounted, setIsMounted] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -659,8 +725,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [emergencySettings, setEmergencySettings] = useState<EmergencySettings>({
     warningEnabled: false,
     warningDays: 0,
-    demoWarningEnabled: false,
-    demoWarningSeconds: 30,
     contacts: [],
   });
   const [selectedFriendForSidebar, setSelectedFriendForSidebar] = useState<Friend | null>(null);
@@ -678,6 +742,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     activeRoomIdRef.current = activeRoomId;
   }, [activeRoomId]);
+
+  useEffect(() => {
+    notifyDesktopRef.current = user.notifyDesktop ?? true;
+  }, [user.notifyDesktop]);
 
 
   const loadGroupMembers = async (roomId: string): Promise<Member[]> => {
@@ -752,6 +820,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setRooms([]);
     setFolders([]);
     setMessages([]);
+
+    if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: "CLEAR_PAGE_CACHE" });
+    }
+    if ("caches" in window) {
+      void caches.keys().then((keys) => {
+        return Promise.all(
+          keys
+            .filter((key) => key.startsWith("near-chat-pages-"))
+            .map((key) => caches.delete(key))
+        );
+      }).catch(console.error);
+    }
+
     socketRef.current?.disconnect();
     socketRef.current = null;
   };
@@ -837,8 +919,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setEmergencySettings({
           warningEnabled: settings?.warningEnabled ?? user.warningEnabled ?? false,
           warningDays: settings?.warningDays ?? user.warningDays ?? 0,
-          demoWarningEnabled: settings?.demoWarningEnabled ?? user.demoWarningEnabled ?? false,
-          demoWarningSeconds: settings?.demoWarningSeconds ?? user.demoWarningSeconds ?? 30,
           contacts,
         });
       } catch (error) {
@@ -994,6 +1074,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     const cleanupNewMessage = onNewMessage(socket, (payload) => {
       const incoming = mapMessage(payload, currentUserId);
+      const incomingRoom = roomsRef.current.find((room) => room.id === incoming.roomId);
+
+      if (
+        document.visibilityState !== "visible" &&
+        incoming.senderId !== currentUserId &&
+        notifyDesktopRef.current
+      ) {
+        const notificationBody =
+          incoming.content.trim() || incoming.attachments?.[0]?.filename || "";
+        const notificationIcon = resolveAssetUrl(
+          payload.sender?.avatarUrl ?? incomingRoom?.avatarUrl,
+        );
+        void NotificationBridge.send({
+          title: payload.sender?.name ?? incomingRoom?.name ?? "Near Chat",
+          body: notificationBody,
+          icon: notificationIcon,
+          tag: `room-${incoming.roomId}`,
+          url: `/chat/${incoming.roomId}`,
+        });
+      }
+
       setMessages((current) => {
         const withoutDuplicate = current.filter((message) => message.id !== incoming.id);
         return hydrateReplyTargets(sortMessages([...withoutDuplicate, incoming]));
@@ -1039,7 +1140,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setMessages((current) =>
         hydrateReplyTargets(
           current.map((message) =>
-            message.id === messageId ? { ...message, isRecalled: true, content: "" } : message,
+            message.id === messageId
+              ? { ...message, isRecalled: true, content: "", attachments: [] }
+              : message,
           ),
         ),
       );
@@ -1325,10 +1428,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     );
     const attachmentIds = uploadedResults.map((res) => res.attachmentId);
 
-    const fileNames = files.map((file) => file.name);
-    const content = options?.content?.trim()
-      ? options.content.trim()
-      : formatUploadedAttachmentsMessage(uiLanguage, fileNames);
+    const content = options?.content?.trim() ?? "";
 
     sendMessage(socketRef.current, {
       roomId,
@@ -1368,8 +1468,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             notifySound: user.notifySound ?? true,
             warningEnabled: user.warningEnabled ?? false,
             warningDays: user.warningDays ?? 14,
-            demoWarningEnabled: user.demoWarningEnabled ?? false,
-            demoWarningSeconds: user.demoWarningSeconds ?? 30,
           }),
         };
       };
@@ -1442,7 +1540,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const handleUpdatePreferences = async (preferences: PreferencesInput) => {
     const nextWarningEnabled = preferences.warningEnabled ?? user.warningEnabled ?? false;
     const nextWarningDays = preferences.warningDays ?? user.warningDays ?? 0;
-    
+
     let nextUser: StoredUser = {
       ...user,
       language: preferences.language,
@@ -1470,8 +1568,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         notifySound: updatedSettings.notifySound, 
         warningEnabled: updatedSettings.warningEnabled, 
         warningDays: updatedSettings.warningDays,
-        demoWarningEnabled: updatedSettings.demoWarningEnabled,
-        demoWarningSeconds: updatedSettings.demoWarningSeconds,
       };
     }
 
@@ -1690,23 +1786,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     return remaining[0]?.id ?? null;
   };
 
-  const getReadAvatarsForMessage = (room: ChatRoom, msg: Message): { name: string; displayName?: string; avatarUrl: string }[] => {
-    if (room.type !== "group" && room.type !== "msg") return [];
+  // Called during render by consumers (Chatroom), so it must be a real
+  // useCallback over its state dependencies rather than a stable proxy that
+  // could observe a previous commit's state.
+  const getReadAvatarsForMessage = useCallback(
+    (room: ChatRoom, msg: Message): { name: string; displayName?: string; avatarUrl: string }[] => {
+      if (room.type !== "group" && room.type !== "msg") return [];
 
-    const roomReads = groupReadStates[room.id];
-    if (!roomReads) return [];
+      const roomReads = groupReadStates[room.id];
+      if (!roomReads) return [];
 
-    return Object.entries(roomReads)
-      .filter(([readerId, lastReadId]) => readerId !== currentUserId && lastReadId === msg.id)
-      .map(([readerId]) => {
-        const member = room.members?.find((m) => m.userId === readerId);
-        return {
-          name: member?.name ?? readerId,
-          displayName: member?.nickname ?? member?.name ?? readerId,
-          avatarUrl: member?.avatarUrl ?? "",
-        };
-      });
-  };
+      return Object.entries(roomReads)
+        .filter(([readerId, lastReadId]) => readerId !== currentUserId && lastReadId === msg.id)
+        .map(([readerId]) => {
+          const member = room.members?.find((m) => m.userId === readerId);
+          return {
+            name: member?.name ?? readerId,
+            displayName: member?.nickname ?? member?.name ?? readerId,
+            avatarUrl: member?.avatarUrl ?? "",
+          };
+        });
+    },
+    [groupReadStates, currentUserId],
+  );
 
   const searchUsersForInvite = async (query: string): Promise<PublicUser[]> => {
     if (!token) throw new Error("Not authenticated");
@@ -1828,13 +1930,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const saveEmergencySettings = async (settings: EmergencySettings) => {
     if (!token) return;
     const nextWarningDays = settings.warningEnabled ? Math.max(1, settings.warningDays) : 0;
-    const nextDemoWarningSeconds = Math.max(1, settings.demoWarningSeconds);
-
     await updateMySettings(token, {
       warningEnabled: settings.warningEnabled,
       warningDays: nextWarningDays,
-      demoWarningEnabled: settings.demoWarningEnabled,
-      demoWarningSeconds: nextDemoWarningSeconds,
     });
 
     const nextContactIds = new Set(settings.contacts.map((contact) => contact.contactId));
@@ -1859,27 +1957,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       notifySound: user.notifySound ?? true,
       warningEnabled: settings.warningEnabled,
       warningDays: nextWarningDays,
-      demoWarningEnabled: settings.demoWarningEnabled,
-      demoWarningSeconds: nextDemoWarningSeconds,
     };
     await refreshSocialData(token, updatedSettings);
     const nextUser = {
       ...user,
       warningEnabled: updatedSettings.warningEnabled,
       warningDays: updatedSettings.warningDays,
-      demoWarningEnabled: updatedSettings.demoWarningEnabled,
-      demoWarningSeconds: updatedSettings.demoWarningSeconds,
     };
     localStorage.setItem("user", JSON.stringify(nextUser));
     setUser(nextUser);
-  };
-
-  const triggerEmergencyAlertNow = async (message?: string): Promise<TriggerEmergencyAlertResult> => {
-    if (!token) {
-      throw new Error("Not authenticated");
-    }
-
-    return triggerEmergencyAlertApi(token, message?.trim() ? message.trim() : undefined);
   };
 
   const setUiLanguage = (language: UiLanguage) => {
@@ -2043,81 +2129,156 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // -------------------------------------------------------------------------
+  // Context value stabilization (hotspot #1, issue #383)
+  //
+  // The React Compiler is disabled for this file (see header), so without
+  // manual memoization every provider render would rebuild all handler
+  // closures and the context value object, forcing every useChat() consumer
+  // to re-render on any provider state change.
+  //
+  // Imperative handlers are exposed through identity-stable proxies that
+  // delegate to the latest implementation via a ref (same pattern as
+  // markRoomAsRead below). The proxies are only ever invoked from event
+  // handlers and effects — never during render — so they always observe the
+  // closures of the last committed render. Functions that consumers call
+  // during render (getReadAvatarsForMessage) use useCallback with real
+  // dependencies instead.
+  // -------------------------------------------------------------------------
+  const handlers = {
+    toggleFolder,
+    handleLogout,
+    handleSendMessage,
+    handleTyping,
+    handleUploadAttachments,
+    handleRecallMessage,
+    handleUpdateMessage,
+    handleUpdateProfile,
+    handleUpdatePreferences,
+    handleCreateRoom,
+    handleOpenPrivateRoom,
+    handleCreateFolder,
+    handleDeleteFolder,
+    handleRenameFolder,
+    handleCategorizeRoom,
+    handleModifyNickname,
+    handleLeaveOrBlock,
+    handleDeleteAccount,
+    loadGroupMembers,
+    saveGroupSettings,
+    approveGroupMember,
+    updateGroupMember,
+    kickGroupMember,
+    transferGroupOwner,
+    handleDeleteGroupRoom,
+    searchUsersForInvite,
+    handleJoinByInviteCode,
+    sendFriendRequest,
+    sendFriendRequestById,
+    acceptFriendRequest,
+    rejectFriendRequest,
+    removeFriend,
+    blockFriend,
+    unblockUser,
+    saveEmergencySettings,
+    setUiLanguage,
+    refreshSocialData: handleRefreshSocialData,
+    updateRoomSorting,
+  };
+  type Handlers = typeof handlers;
+  // Compile-time exhaustiveness check: every key of `handlers` must appear in
+  // the module-level HANDLER_KEYS list (and vice versa via HandlerKey).
+  type NoMissingHandlerKey = Exclude<keyof Handlers, HandlerKey> extends never ? true : never;
+  const assertAllHandlerKeysListed: NoMissingHandlerKey = true;
+  void assertAllHandlerKeysListed;
+
+  const handlersRef = useRef<Handlers>(handlers);
+  useLayoutEffect(() => {
+    handlersRef.current = handlers;
+  });
+
+  const stableHandlers = useMemo(() => {
+    const proxies = {} as Record<HandlerKey, (...args: unknown[]) => unknown>;
+    for (const key of HANDLER_KEYS) {
+      proxies[key] = (...args: unknown[]) =>
+        (handlersRef.current[key] as (...inner: unknown[]) => unknown)(...args);
+    }
+    return proxies as unknown as Handlers;
+  }, []);
+
+  const contextValue = useMemo<ChatContextType>(
+    () => ({
+      rooms: derivedRooms,
+      folders,
+      messages,
+      groupReadStates,
+      user,
+      activeRoomNicknames,
+      friends,
+      friendRequests,
+      blockedUsers,
+      emergencySettings,
+      uiLanguage,
+      isAuthenticated,
+      isMounted,
+      roomsInitialized,
+      selectedFriendForSidebar,
+      setSelectedFriendForSidebar,
+      hasUnsavedChanges,
+      setHasUnsavedChanges,
+      setRooms,
+      setFolders,
+      setMessages,
+      setUser,
+      setActiveRoomNicknames,
+      getReadAvatarsForMessage,
+      markRoomAsRead,
+      ...stableHandlers,
+    }),
+    [
+      derivedRooms,
+      folders,
+      messages,
+      groupReadStates,
+      user,
+      activeRoomNicknames,
+      friends,
+      friendRequests,
+      blockedUsers,
+      emergencySettings,
+      uiLanguage,
+      isAuthenticated,
+      isMounted,
+      roomsInitialized,
+      selectedFriendForSidebar,
+      hasUnsavedChanges,
+      getReadAvatarsForMessage,
+      markRoomAsRead,
+      stableHandlers,
+    ],
+  );
+
+  const profilePopoverValue = useMemo<ProfilePopoverContextType>(
+    () => ({ activeProfilePopover, setActiveProfilePopover }),
+    [activeProfilePopover],
+  );
+
+  const rightPanelValue = useMemo<RightPanelContextType>(
+    () => ({ showRightPanel, setShowRightPanel }),
+    [showRightPanel],
+  );
+
   return (
-    <ChatContext.Provider
-      value={{
-        rooms: derivedRooms,
-        folders,
-        messages,
-        groupReadStates,
-        user,
-        activeRoomNicknames,
-        friends,
-        friendRequests,
-        blockedUsers,
-        emergencySettings,
-        uiLanguage,
-        isAuthenticated,
-        isMounted,
-        roomsInitialized,
-        selectedFriendForSidebar,
-        setSelectedFriendForSidebar,
-        showRightPanel,
-        setShowRightPanel,
-        setRooms,
-        setFolders,
-        setMessages,
-        setUser,
-        setActiveRoomNicknames,
-        toggleFolder,
-        handleLogout,
-        handleSendMessage,
-        handleTyping,
-        handleUploadAttachments,
-        handleRecallMessage,
-        handleUpdateMessage,
-        handleUpdateProfile,
-        handleUpdatePreferences,
-        handleCreateRoom,
-        handleOpenPrivateRoom,
-        handleCreateFolder,
-        handleDeleteFolder,
-        handleRenameFolder,
-        handleCategorizeRoom,
-        handleModifyNickname,
-        handleLeaveOrBlock,
-        handleDeleteAccount,
-        loadGroupMembers,
-        saveGroupSettings,
-        approveGroupMember,
-        updateGroupMember,
-        kickGroupMember,
-        transferGroupOwner,
-        handleDeleteGroupRoom,
-        getReadAvatarsForMessage,
-        searchUsersForInvite,
-        handleJoinByInviteCode,
-        sendFriendRequest,
-        sendFriendRequestById,
-        acceptFriendRequest,
-        rejectFriendRequest,
-        removeFriend,
-        blockFriend,
-        unblockUser,
-        saveEmergencySettings,
-        triggerEmergencyAlertNow,
-        setUiLanguage,
-        typingUsers,
-        activeProfilePopover,
-        setActiveProfilePopover,
-        hasUnsavedChanges,
-        setHasUnsavedChanges,
-        refreshSocialData: handleRefreshSocialData,
-        updateRoomSorting,
-        markRoomAsRead,
-      }}
-    >
-      {children}
+    <ChatContext.Provider value={contextValue}>
+      <UiLanguageContext.Provider value={uiLanguage}>
+        <TypingUsersContext.Provider value={typingUsers}>
+          <ProfilePopoverContext.Provider value={profilePopoverValue}>
+            <RightPanelContext.Provider value={rightPanelValue}>
+              {children}
+            </RightPanelContext.Provider>
+          </ProfilePopoverContext.Provider>
+        </TypingUsersContext.Provider>
+      </UiLanguageContext.Provider>
     </ChatContext.Provider>
   );
 }
@@ -2126,6 +2287,42 @@ export function useChat() {
   const context = useContext(ChatContext);
   if (context === undefined) {
     throw new Error("useChat must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** Per-room typing indicator state. Changes on every remote typing event. */
+export function useTypingUsers() {
+  const context = useContext(TypingUsersContext);
+  if (context === undefined) {
+    throw new Error("useTypingUsers must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** UI language only — lets useTranslation avoid subscribing to chat data. */
+export function useUiLanguage() {
+  const context = useContext(UiLanguageContext);
+  if (context === undefined) {
+    throw new Error("useUiLanguage must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** Shared profile-popover open state (message bubbles, member list). */
+export function useProfilePopover() {
+  const context = useContext(ProfilePopoverContext);
+  if (context === undefined) {
+    throw new Error("useProfilePopover must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/** Right info-panel visibility. */
+export function useRightPanel() {
+  const context = useContext(RightPanelContext);
+  if (context === undefined) {
+    throw new Error("useRightPanel must be used within a ChatProvider");
   }
   return context;
 }

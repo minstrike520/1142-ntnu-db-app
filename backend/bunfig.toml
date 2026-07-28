@@ -1,0 +1,3 @@
+# Bun test-runner configuration for the backend.
+[test]
+preload = ["./tests/preload.ts"]

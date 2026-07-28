@@ -4,7 +4,11 @@ import React from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useChat } from "@/context/ChatContext";
 import { useTranslation } from "@/hooks/useTranslation";
-import { Icon } from "@iconify/react";
+import MessageDetailIcon from "@iconify-react/boxicons/message-detail";
+import GroupIcon from "@iconify-react/boxicons/group";
+import AlertTriangleIcon from "@iconify-react/boxicons/alert-triangle";
+import CogIcon from "@iconify-react/boxicons/cog";
+import LogoutIcon from "@iconify-react/boxicons/arrow-out-left-square-half-filled";
 
 type NavItem = {
   label: string;
@@ -33,7 +37,7 @@ export default function MobileNav() {
       label: t("rail.chats"),
       active: pathname === "/" || pathname.startsWith("/chat"),
       onClick: () => router.push("/"),
-      icon: <Icon icon="boxicons:message-detail" className="h-5 w-5 shrink-0" />,
+      icon: <MessageDetailIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
     {
       label: t("rail.friends"),
@@ -43,25 +47,25 @@ export default function MobileNav() {
         router.push("/friends");
       },
       badge: pendingIncoming,
-      icon: <Icon icon="boxicons:group" className="h-5 w-5 shrink-0" />,
+      icon: <GroupIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
     {
       label: t("rail.emergency"),
       active: pathname === "/emergency",
       onClick: () => router.push("/emergency"),
-      icon: <Icon icon="boxicons:alert-triangle" className="h-5 w-5 shrink-0" />,
+      icon: <AlertTriangleIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
     {
       label: t("sidebar.settings"),
       active: pathname === "/settings",
       onClick: () => router.push("/settings"),
-      icon: <Icon icon="boxicons:cog" className="h-5 w-5 shrink-0" />,
+      icon: <CogIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
     {
       label: t("sidebar.logout"),
       active: false,
       onClick: handleLogout,
-      icon: <Icon icon="boxicons:arrow-out-left-square-half-filled" className="h-5 w-5 shrink-0" />,
+      icon: <LogoutIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
   ];
 

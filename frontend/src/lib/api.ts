@@ -59,7 +59,7 @@ type UpdateMeRequest = Partial<Pick<MyProfile, 'name' | 'email' | 'bio' | 'avata
   currentPassword?: string;
 };
 type UpdateMySettingsRequest = Partial<
-  Pick<UserSettings, 'warningEnabled' | 'warningDays' | 'demoWarningEnabled' | 'demoWarningSeconds' | 'language' | 'theme' | 'notifyDesktop' | 'notifySound' | 'roomOrder'>
+  Pick<UserSettings, 'warningEnabled' | 'warningDays' | 'language' | 'theme' | 'notifyDesktop' | 'notifySound' | 'roomOrder'>
 >;
 
 type CreateGroupRequest = {
@@ -567,30 +567,15 @@ export const uploadAttachment = async (
 export const attachmentDownloadUrl = (fileUrl: string): string =>
   resolveRequestUrl(fileUrl);
 
-export const downloadAttachment = async (fileUrl: string, filename: string): Promise<void> => {
+export const fetchAttachmentBlob = async (fileUrl: string): Promise<Blob> => {
   const response = await request(fileUrl);
-  const blob = await response.blob();
-  const downloadUrl = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-
-  link.href = downloadUrl;
-  link.download = filename;
-  link.style.display = 'none';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+  return response.blob();
 };
 
-export const triggerEmergencyAlert = (token: string, message?: string): Promise<EmergencyAlertResult> =>
-  requestJson<EmergencyAlertResult>(
-    '/users/me/emergency-alert',
-    {
-      method: 'POST',
-      ...withJsonBody(message ? { message } : {}),
-    },
-    { token },
-  );
+export const fetchAttachmentBlobUrl = async (fileUrl: string): Promise<string> => {
+  const blob = await fetchAttachmentBlob(fileUrl);
+  return URL.createObjectURL(blob);
+};
 
 export const listEmergencyContacts = (token: string): Promise<EmergencyContactResponse[]> =>
   requestJson<EmergencyContactResponse[]>('/users/me/emergency-contacts', {}, { token });
