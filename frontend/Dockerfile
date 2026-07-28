@@ -3,7 +3,7 @@
 # Built from the REPOSITORY ROOT as context (see docker-compose.yml), because
 # this repo is a single-lockfile pnpm workspace: the lockfile, the workspace
 # manifest and every package's package.json all live outside frontend/.
-FROM node:24-slim
+FROM node:26-slim
 
 # Pinned to match "packageManager" in the root package.json, and prepared at
 # build time so the image does not fetch pnpm on first use at runtime.
