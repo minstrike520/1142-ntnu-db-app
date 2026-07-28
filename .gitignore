@@ -3,7 +3,11 @@ node_modules
 .pnp
 .pnp.js
 .pnpm-store/
+# bun.lock is the single committed lockfile for the whole workspace.
+# Anything from another package manager is a mistake — keep them out.
 package-lock.json
+pnpm-lock.yaml
+yarn.lock
 
 # testing
 coverage

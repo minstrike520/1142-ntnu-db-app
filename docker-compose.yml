@@ -17,8 +17,8 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./backend/Dockerfile
     ports:
       - "4005:4000"
     environment:
@@ -41,12 +41,16 @@ services:
       - ATTACHMENT_MAX_BYTES=${ATTACHMENT_MAX_BYTES:-10485760}
       - CI=true
     volumes:
-      - ./backend:/app
-      - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/app/uploads
-      - /app/node_modules
-      - ./tsconfig.base.json:/tsconfig.base.json:ro
-      - ./shared:/shared:ro
-      - ./package.json:/package.json:ro
+      - ./backend:/workspace/backend
+      - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/workspace/backend/uploads
+      # Keep the image's installed dependencies; the bind mounts above would
+      # otherwise hide them.
+      - /workspace/backend/node_modules
+      - /workspace/node_modules
+      # `@shared/*` resolves relative to tsconfig.base.json, so both must sit
+      # beside backend/ inside the workspace — not at the container root.
+      - ./tsconfig.base.json:/workspace/tsconfig.base.json:ro
+      - ./shared:/workspace/shared:ro
     depends_on:
       db:
         condition: service_healthy
@@ -54,8 +58,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./frontend/Dockerfile
     ports:
       - "3005:3000"
     environment:
@@ -64,11 +68,11 @@ services:
       - ALLOWED_DEV_ORIGINS=${ALLOWED_DEV_ORIGINS}
       - CI=true
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - ./tsconfig.base.json:/tsconfig.base.json:ro
-      - ./shared:/shared:ro
-      - ./package.json:/package.json:ro
+      - ./frontend:/workspace/frontend
+      - /workspace/frontend/node_modules
+      - /workspace/node_modules
+      - ./tsconfig.base.json:/workspace/tsconfig.base.json:ro
+      - ./shared:/workspace/shared:ro
     depends_on:
       - backend
 

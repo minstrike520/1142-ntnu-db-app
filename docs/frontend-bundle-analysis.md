@@ -10,14 +10,14 @@ This document defines a reproducible process for measuring the frontend producti
 
 ```bash
 cd frontend
-pnpm run analyze
+bun run analyze
 ```
 
 This runs `next experimental-analyze --output`, which builds the app for analysis and writes static results to `frontend/.next/diagnostics/analyze/` instead of starting the interactive UI server. The whole `.next/` tree is already gitignored (`frontend/.gitignore` and root `.gitignore` both ignore `/.next/`), so the generated directory is never at risk of being committed.
 
-To browse the results interactively instead of writing files, drop `--output`/`-o` and run `pnpm exec next experimental-analyze`, which serves a local web UI (default port 4000).
+To browse the results interactively instead of writing files, drop `--output`/`-o` and run `bunx next experimental-analyze`, which serves a local web UI (default port 4000).
 
-**Note:** `experimental-analyze` is an experimental Next.js CLI command; its flags and output format may change between Next.js releases. If `pnpm run analyze` or the parsing steps below stop working after a Next.js upgrade, re-check `pnpm exec next experimental-analyze --help` and update this document.
+**Note:** `experimental-analyze` is an experimental Next.js CLI command; its flags and output format may change between Next.js releases. If `bun run analyze` or the parsing steps below stop working after a Next.js upgrade, re-check `bunx next experimental-analyze --help` and update this document.
 
 ## Toolchain versions used for this baseline
 
@@ -28,13 +28,13 @@ To browse the results interactively instead of writing files, drop `--output`/`-
 | pnpm | 11.13.1 |
 | Commit | `a087b50` (`dev`, 2026-07-18) |
 
-Bundle byte sizes are environment- and dependency-version-sensitive (they shift with `pnpm-lock.yaml`, Node/pnpm versions, and OS). Treat the numbers below as an **approximate baseline anchored to the commit above**, not an exact/portable measurement. Re-run the command yourself for precise before/after comparisons within the same PR.
+Bundle byte sizes are environment- and dependency-version-sensitive (they shift with `bun.lock`, Bun/Node versions, and OS). Treat the numbers below as an **approximate baseline anchored to the commit above**, not an exact/portable measurement. Re-run the command yourself for precise before/after comparisons within the same PR.
 
 ## How to compare before/after in a future PR
 
-1. On the base branch (or before your change), run `pnpm run analyze` and note the ranked module tables for the routes your change touches (see the method below).
+1. On the base branch (or before your change), run `bun run analyze` and note the ranked module tables for the routes your change touches (see the method below).
 2. Apply your change.
-3. Run `pnpm run analyze` again and re-extract the same tables.
+3. Run `bun run analyze` again and re-extract the same tables.
 4. Diff the two: did total client JS size for the affected route(s) drop, and did the specific module(s) you targeted shrink or disappear from the top of the list?
 5. Include both the command you ran and a short before/after summary in the PR description (this is part of the acceptance criteria for bundle/perf PRs in this project).
 

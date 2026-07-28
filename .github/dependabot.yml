@@ -1,27 +1,15 @@
 version: 2
 updates:
-  # 1. 根目錄 npm/pnpm 套件
+  # 1. 整個 workspace 的套件（單一 root bun.lock）
+  #
+  # 收斂成一份 lockfile 後，/frontend 與 /backend 底下已經沒有各自的 lockfile，
+  # 原本分開的三個 npm 設定會找不到目標。改用 directories 一次涵蓋所有
+  # workspace 成員，Dependabot 會回頭更新 root 的 bun.lock。
   - package-ecosystem: "npm"
-    directory: "/"
-    target-branch: "dev"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "root"
-    groups:
-      minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "patch"
-          - "minor"
-
-  # 2. 前端 npm/pnpm 套件 (/frontend)
-  - package-ecosystem: "npm"
-    directory: "/frontend"
+    directories:
+      - "/"
+      - "/frontend"
+      - "/backend"
     target-branch: "dev"
     schedule:
       interval: "weekly"
@@ -29,7 +17,6 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-      - "frontend"
     groups:
       minor-and-patch:
         patterns:
@@ -38,26 +25,7 @@ updates:
           - "patch"
           - "minor"
 
-  # 3. 後端 npm/pnpm 套件 (/backend)
-  - package-ecosystem: "npm"
-    directory: "/backend"
-    target-branch: "dev"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "backend"
-    groups:
-      minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "patch"
-          - "minor"
-
-  # 4. GitHub Actions 工作流 (.github/workflows)
+  # 2. GitHub Actions 工作流 (.github/workflows)
   - package-ecosystem: "github-actions"
     directory: "/"
     target-branch: "dev"
@@ -69,7 +37,7 @@ updates:
       - "ci/cd"
       - "dependencies"
 
-  # 5. 後端 Docker Base Image (/backend)
+  # 3. 後端 Docker Base Image (/backend)
   - package-ecosystem: "docker"
     directory: "/backend"
     target-branch: "dev"
@@ -81,7 +49,7 @@ updates:
       - "docker"
       - "backend"
 
-  # 6. 前端 Docker Base Image (/frontend)
+  # 4. 前端 Docker Base Image (/frontend)
   - package-ecosystem: "docker"
     directory: "/frontend"
     target-branch: "dev"

@@ -37,7 +37,7 @@ A real-time group chat application built as an NTNU Database Theories course pro
 - **Backend**: Node.js, Express v5, Socket.IO, `pg` (PostgreSQL raw client).
 - **Database**: PostgreSQL 18.
 - **Orchestration**: Docker & Docker Compose.
-- **Package Manager**: pnpm.
+- **Package Manager**: Bun (single root `bun.lock` for the whole workspace).
 
 ## Project Structure
 
@@ -94,7 +94,7 @@ The backend container automatically runs all pending database migrations on star
 ### 3. Seed Mock Data
 Populate the database with pre-configured test users:
 ```bash
-docker compose exec backend pnpm run db:seed
+docker compose exec backend bun run db:seed
 ```
 *Note: The seed script resets your database and generates 6 pre-configured users (e.g. `alice@test.com`, password: `password123`) for testing.*
 
@@ -124,7 +124,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 ### 3. Run Database Migrations
 Run the pending database migrations on the production container:
 ```bash
-docker compose -f docker-compose.prod.yml exec backend pnpm run migrate:up
+docker compose -f docker-compose.prod.yml exec backend bun run migrate:up
 ```
 
 ### 4. Stopping Services

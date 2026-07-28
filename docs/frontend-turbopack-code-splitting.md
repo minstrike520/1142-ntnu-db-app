@@ -61,7 +61,7 @@ const spikeConfig: NextConfig = {
 export default spikeConfig;
 ```
 
-and running `pnpm exec tsc --noEmit` in `frontend/` fails with:
+and running `bun run typecheck` in `frontend/` fails with:
 
 ```
 src/__turbopack-splitchunks-spike__.ts(5,5): error TS2353: Object literal may only
@@ -91,7 +91,7 @@ At the time of this investigation, `frontend/package.json` had:
 
 Implications:
 
-- Any `turbopack.*` config we might add would affect `next build` (and `pnpm run analyze`) but **not** the dev server; conversely a `webpack()` callback would affect dev but be ignored by the production build. This split is a real foot-gun for any future bundler-level configuration — one more reason to keep `next.config.ts` bundler-agnostic (as it is today: it currently contains no `webpack` and no `turbopack` key).
+- Any `turbopack.*` config we might add would affect `next build` (and `bun run analyze`) but **not** the dev server; conversely a `webpack()` callback would affect dev but be ignored by the production build. This split is a real foot-gun for any future bundler-level configuration — one more reason to keep `next.config.ts` bundler-agnostic (as it is today: it currently contains no `webpack` and no `turbopack` key).
 - Dev/prod behavioral drift (module resolution, HMR semantics, CSS handling) is possible but has not caused observed issues so far.
 
 **Recommendation:** unify on Turbopack for dev (`next dev` without `--webpack`) — tracked separately in #387 with its own verification (dev-server smoke test of HMR, CSS, and Socket.IO client behavior), not as a rider on this documentation PR. Until then, treat "config that only one bundler reads" as a review red flag.
@@ -109,7 +109,7 @@ Implications:
 ### Adopted
 
 1. **No chunk-splitting configuration is added to `next.config.ts`.** There is no supported API to add, and the config file stays bundler-agnostic while dev and build use different bundlers. (Update 2026-07-19: the bundlers are now unified, retiring the "bundler-agnostic" half of this rationale; the "no supported API" half still holds, so the decision is unchanged — see "Re-evaluation record".)
-2. **Bundle-size work proceeds via supported layers only:** `next/dynamic` boundaries (#381), per-icon subpath imports (#382), measured re-render fixes (#383), all validated with the reproducible `pnpm run analyze` process from `docs/frontend-bundle-analysis.md`.
+2. **Bundle-size work proceeds via supported layers only:** `next/dynamic` boundaries (#381), per-icon subpath imports (#382), measured re-render fixes (#383), all validated with the reproducible `bun run analyze` process from `docs/frontend-bundle-analysis.md`.
 3. **`polyfill-nomodule.js` is closed as "no action":** excluded from client-JS accounting, not a removable or real modern-browser cost.
 
 ### Rejected options (and why)
@@ -123,7 +123,7 @@ Implications:
 Revisit this decision if any of the following happens:
 
 1. Next.js promotes a chunking-control API for Turbopack to **stable** (watch the `turbopack` config reference page across upgrades).
-2. `pnpm run analyze` shows a single oversized client chunk that `next/dynamic` boundaries demonstrably cannot break up (e.g. a shared vendor module that async boundaries keep pulling into the initial chunk).
+2. `bun run analyze` shows a single oversized client chunk that `next/dynamic` boundaries demonstrably cannot break up (e.g. a shared vendor module that async boundaries keep pulling into the initial chunk).
 3. ~~The dev/build bundler unification lands and makes bundler-specific config meaningful for both environments.~~ → **Fired 2026-07-19 and re-evaluated** (see "Re-evaluation record" below); future re-evaluations are governed by triggers 1 and 2.
 
 ### Re-evaluation record

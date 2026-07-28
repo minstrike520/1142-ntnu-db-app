@@ -73,9 +73,9 @@ To ensure consistent project communications:
   - All schema modifications must be done by writing migrations under `backend/migrations/` using `node-pg-migrate`.
   - Refer to [docs/database-design.md](docs/database-design.md) for actual column structures, constraints, and relationships.
 * **Migration Commands** (Execute inside the backend container):
-  - **Create migration**: `docker compose exec backend pnpm run migrate:create <name>`
-  - **Run migrations**: `docker compose exec backend pnpm run migrate:up`
-  - **Rollback migrations**: `docker compose exec backend pnpm run migrate:down`
+  - **Create migration**: `docker compose exec backend bun run migrate:create <name>`
+  - **Run migrations**: `docker compose exec backend bun run migrate:up`
+  - **Rollback migrations**: `docker compose exec backend bun run migrate:down`
 
 ---
 
@@ -94,7 +94,7 @@ docker compose up -d
 ```
 Seed the development database (clears and populates mock data):
 ```bash
-docker compose exec backend pnpm run db:seed
+docker compose exec backend bun run db:seed
 ```
 *Note: The default password for all mock test users is `password123`.*
 
@@ -102,29 +102,29 @@ docker compose exec backend pnpm run db:seed
 1. **TypeScript Compiler Check**: Run in both folders to ensure no type errors.
    ```bash
    # Backend
-   docker compose exec backend pnpm exec tsc --noEmit
+   docker compose exec backend bun run typecheck
    # Frontend
-   docker compose exec frontend pnpm exec tsc --noEmit
+   docker compose exec frontend bun run typecheck
    ```
 2. **ESLint Checks**: Verify syntax, code style, and Hook rules compliance.
    ```bash
-   docker compose exec frontend pnpm run lint
+   docker compose exec frontend bun run lint
    ```
 3. **Running Vitest Tests**:
    - **Unit Tests**:
      ```bash
-     docker compose exec backend pnpm run test:unit
+     docker compose exec backend bun run test:unit
      ```
    - **Integration Tests** (Runs against the ephemeral test database `db-test`):
      ```bash
      # Start test DB
-     pnpm -C backend run test:db:up
+     bun run --filter './backend' test:db:up
      # Run migrations on test DB
-     docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
+     docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
      # Run tests
-     docker compose exec backend pnpm run test:integration
+     docker compose exec backend bun run test:integration
      # Stop test DB
-     pnpm -C backend run test:db:down
+     bun run --filter './backend' test:db:down
      ```
 
 For details, refer to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).

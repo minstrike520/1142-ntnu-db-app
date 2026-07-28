@@ -1,0 +1,30 @@
+name: Setup workspace
+description: >-
+  Install Bun and the workspace dependencies from the single root bun.lock.
+  Bun is both the package manager and the backend runtime, so this is the only
+  toolchain any job needs.
+
+inputs:
+  bun-version:
+    description: Bun version to install. Keep in step with the Dockerfiles.
+    required: false
+    default: '1.3.11'
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: ${{ inputs.bun-version }}
+
+    # Bun's global module cache. Keyed on the lockfile so a dependency bump
+    # invalidates it, with a looser prefix so unrelated bumps still restore.
+    - uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: bun-${{ runner.os }}-${{ inputs.bun-version }}-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          bun-${{ runner.os }}-${{ inputs.bun-version }}-
+
+    - run: bun install --frozen-lockfile
+      shell: bash

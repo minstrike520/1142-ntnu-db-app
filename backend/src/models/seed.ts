@@ -1,5 +1,5 @@
 if (!process.env.DATABASE_URL) {
-  console.error('DATABASE_URL is not set. Copy .env.example to .env or run via: docker compose exec backend pnpm run db:seed');
+  console.error('DATABASE_URL is not set. Copy .env.example to .env or run via: docker compose exec backend bun run db:seed');
   process.exit(1);
 }
 

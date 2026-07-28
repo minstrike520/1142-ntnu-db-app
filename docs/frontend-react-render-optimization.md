@@ -29,8 +29,8 @@
 
 ```bash
 cd frontend
-pnpm test                                  # 全部(行為 + memoization + 量測)
-pnpm exec vitest run tests/perf/render-perf.test.tsx   # 只跑量測情境
+bun run test                                  # 全部(行為 + memoization + 量測)
+bunx vitest run tests/perf/render-perf.test.tsx   # 只跑量測情境
 cat tests/perf/.last-results.txt           # 量測結果(gitignored)
 ```
 

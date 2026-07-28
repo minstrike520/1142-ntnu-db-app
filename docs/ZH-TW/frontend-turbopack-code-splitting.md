@@ -61,7 +61,7 @@ const spikeConfig: NextConfig = {
 export default spikeConfig;
 ```
 
-於 `frontend/` 執行 `pnpm exec tsc --noEmit`,失敗訊息為:
+於 `frontend/` 執行 `bun run typecheck`,失敗訊息為:
 
 ```
 src/__turbopack-splitchunks-spike__.ts(5,5): error TS2353: Object literal may only
@@ -91,7 +91,7 @@ specify known properties, and 'splitChunks' does not exist in type 'TurbopackOpt
 
 影響:
 
-- 未來若加入任何 `turbopack.*` 設定,只會影響 `next build`(及 `pnpm run analyze`),**不影響** dev server;反之 `webpack()` callback 只影響 dev、被 production build 忽略。對任何未來的 bundler 層設定而言,這種分裂是明顯的陷阱——這也是讓 `next.config.ts` 維持 bundler 中立的又一理由(目前它既無 `webpack` 也無 `turbopack` 鍵)。
+- 未來若加入任何 `turbopack.*` 設定,只會影響 `next build`(及 `bun run analyze`),**不影響** dev server;反之 `webpack()` callback 只影響 dev、被 production build 忽略。對任何未來的 bundler 層設定而言,這種分裂是明顯的陷阱——這也是讓 `next.config.ts` 維持 bundler 中立的又一理由(目前它既無 `webpack` 也無 `turbopack` 鍵)。
 - dev/prod 行為漂移(模組解析、HMR 語意、CSS 處理)理論上可能,但目前尚未觀察到實際問題。
 
 **建議:** 統一 dev 也使用 Turbopack(`next dev` 去掉 `--webpack`)——已由 #387 獨立追蹤,並附獨立驗證(dev server 的 HMR、CSS、Socket.IO client 行為煙霧測試),不搭在本文件 PR 上。在那之前,「只有單一 bundler 會讀取的設定」應視為 code review 的警訊。
@@ -109,7 +109,7 @@ specify known properties, and 'splitChunks' does not exist in type 'TurbopackOpt
 ### 採用
 
 1. **不在 `next.config.ts` 加入任何 chunk splitting 設定。** 沒有受支援的 API 可加;且在 dev/build 使用不同 bundler 期間,設定檔維持 bundler 中立。(2026-07-19 更新:bundler 已統一,後半「bundler 中立」理由退役;前半「沒有受支援的 API」仍成立,決策不變——見〈重新評估紀錄〉。)
-2. **Bundle 體積工作僅經由受支援層級進行:** `next/dynamic` 邊界(#381)、逐圖示 subpath 匯入(#382)、有量測依據的重新渲染修正(#383),全部以 `docs/frontend-bundle-analysis.md` 的可重現 `pnpm run analyze` 流程驗證。
+2. **Bundle 體積工作僅經由受支援層級進行:** `next/dynamic` 邊界(#381)、逐圖示 subpath 匯入(#382)、有量測依據的重新渲染修正(#383),全部以 `docs/frontend-bundle-analysis.md` 的可重現 `bun run analyze` 流程驗證。
 3. **`polyfill-nomodule.js` 以「不採取行動」結案:** 排除於 client-JS 統計,非可移除項目,亦非現代瀏覽器的實際成本。
 
 ### 不採用的選項(與原因)
@@ -123,7 +123,7 @@ specify known properties, and 'splitChunks' does not exist in type 'TurbopackOpt
 發生下列任一情況時重新檢視本決策:
 
 1. Next.js 將 Turbopack 的 chunking 控制 API 升為**穩定**(升級時追蹤 `turbopack` 設定參考頁)。
-2. `pnpm run analyze` 顯示存在單一過大的 client chunk,且可證明 `next/dynamic` 邊界無法拆解(例如某共用 vendor 模組始終被拉進初始 chunk)。
+2. `bun run analyze` 顯示存在單一過大的 client chunk,且可證明 `next/dynamic` 邊界無法拆解(例如某共用 vendor 模組始終被拉進初始 chunk)。
 3. ~~dev/build bundler 統一完成,使 bundler 專屬設定對兩個環境同時生效。~~ → **已於 2026-07-19 觸發並完成重新評估**(見下方〈重新評估紀錄〉);後續重新評估以條件 1、2 為準。
 
 ### 重新評估紀錄

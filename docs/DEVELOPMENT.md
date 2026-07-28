@@ -147,10 +147,10 @@ Testing database setup: Integration tests run against an ephemeral Postgres test
 ### Running TypeScript Type Checks
 ```bash
 # Backend Check
-pnpm --prefix backend exec tsc --noEmit
+bun run --filter './backend' typecheck
 
 # Frontend Check
-pnpm --prefix frontend exec tsc --noEmit
+bun run --filter './frontend' typecheck
 ```
 
 ### Running ESLint Checks
@@ -158,10 +158,10 @@ Before committing code or during development, run the linter to verify code form
 
 ```bash
 # Run linting check in the frontend directory
-pnpm --prefix frontend run lint
+bun run --filter './frontend' lint
 
 # Or run it inside the frontend Docker container
-docker compose exec frontend pnpm run lint
+docker compose exec frontend bun run lint
 ```
 
 ### Running Unit Tests
@@ -175,20 +175,20 @@ Integration tests require starting the ephemeral test database (which automatica
 
 ```bash
 # 1. Start the ephemeral test database & automatically apply migrations
-pnpm -C backend run test:db:up
+bun run --filter './backend' test:db:up
 
 # 2. Run the integration test suite
 docker compose exec backend bun run test:integration
 
 # 3. Stop the test database
-pnpm -C backend run test:db:down
+bun run --filter './backend' test:db:down
 ```
 
 ### Running All Tests
 ```bash
-pnpm -C backend run test:db:up
+bun run --filter './backend' test:db:up
 docker compose exec backend bun run test
-pnpm -C backend run test:db:down
+bun run --filter './backend' test:db:down
 ```
 
 ---
