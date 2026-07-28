@@ -26,7 +26,13 @@ docker compose build
 docker compose up -d
 ```
 
-Uploaded files are stored in whatever source is mounted to `/app/uploads` for the backend container. By default, this is the Docker named volume `app_uploads`. Attachments live under `/app/uploads/attachments/` and avatars use `/app/uploads/avatars/`.
+Uploaded files are stored in whatever source is mounted to `/workspace/backend/uploads` for the backend container. By default, this is the Docker named volume `app_uploads`. Attachments live under `/workspace/backend/uploads/attachments/` and avatars use `/workspace/backend/uploads/avatars/`.
+
+> **Upgrading from an older checkout**: the dev containers now lay the repo out
+> as a pnpm workspace at `/workspace`, so the backend moved from `/app` to
+> `/workspace/backend`. Run `docker compose down -v` once before rebuilding —
+> the old anonymous `node_modules` volumes are mounted by path and would
+> otherwise shadow the new layout. This also resets the uploads volume.
 
 If you want uploads to go to a custom folder on the host instead of the default named volume, set `UPLOADS_MOUNT_SOURCE` in `.env` before running Docker Compose:
 

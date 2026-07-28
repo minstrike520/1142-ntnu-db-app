@@ -26,7 +26,11 @@ docker compose build
 docker compose up -d
 ```
 
-上傳的檔案會儲存在掛載到後端容器內 `/app/uploads` 的來源中。預設為 Docker 命名磁碟卷 `app_uploads`。附件會存放在 `/app/uploads/attachments/`，而頭像則會使用 `/app/uploads/avatars/`。
+上傳的檔案會儲存在掛載到後端容器內 `/workspace/backend/uploads` 的來源中。預設為 Docker 命名磁碟卷 `app_uploads`。附件會存放在 `/workspace/backend/uploads/attachments/`，而頭像則會使用 `/workspace/backend/uploads/avatars/`。
+
+> **從舊版 checkout 升級時**：開發容器現在以 pnpm workspace 的形式配置於 `/workspace`，
+> 後端因此由 `/app` 移至 `/workspace/backend`。重新建置前請先執行一次 `docker compose down -v` ——
+> 舊的匿名 `node_modules` volume 是依路徑掛載的，否則會遮蔽新的目錄結構。此指令同時會重置 uploads volume。
 
 如果您希望將上傳檔案儲存在主機上的自訂資料夾中，而非預設的命名磁碟卷，請在執行 Docker Compose 前在 `.env` 中設定 `UPLOADS_MOUNT_SOURCE`：
 
