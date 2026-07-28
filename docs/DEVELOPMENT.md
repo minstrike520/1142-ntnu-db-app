@@ -199,6 +199,22 @@ pnpm -C backend run test:db:down
 * **Path**: `backend/tests/unit/**/*.test.ts`
 * **Guidelines**: Mock database repositories using `mock.module()` to test business logic in isolation without making real database connections.
 
+> **`mock.module()` is process-global.** Every suite now runs as a single
+> `bun test <dir>` process, so a `mock.module()` call in one file replaces that
+> module for *every* file in the same run — and it takes effect at load time, so
+> it can affect files that run before it. Two consequences:
+> * Keep `mock.module()` to `tests/unit/`, never `tests/integration/` or
+>   `tests/e2e/`. A test that mocks `src/models/db` is a unit test by
+>   definition; if it needs a real database it belongs in another tier.
+> * Prefer `spyOn(namespace, 'fn')` with `mockRestore()` when you only need to
+>   replace a function — that genuinely restores, whereas re-calling
+>   `mock.module()` in `afterAll` does not.
+>
+> **Never close a shared singleton in a hook.** `src/models/db` and
+> `tests/helpers/testPool` both export a process-wide connection. Calling
+> `.end()` on either in `afterAll` closes it for every later file in the run.
+> Let the process exit release it.
+
 ```typescript
 // Example: backend/tests/unit/services/userService.test.ts
 import { describe, it, expect } from 'bun:test';
@@ -216,7 +232,7 @@ describe('userService', () => {
 
 ```typescript
 // Example: backend/tests/integration/repositories/userRepository.test.ts
-import { beforeEach, afterAll, describe, it, expect } from 'bun:test';
+import { beforeEach, describe, it, expect } from 'bun:test';
 import { testPool } from '../helpers/testPool';
 import { resetDb } from '../helpers/resetDb';
 
@@ -225,9 +241,8 @@ describe('userRepository', () => {
     await resetDb(); // Clears users, rooms, messages, room_members
   });
 
-  afterAll(async () => {
-    await testPool.end(); // Closes pool connection
-  });
+  // Do NOT call `testPool.end()` here — it is a module singleton shared by
+  // every test file in the run, and closing it breaks all later files.
 
   it('queries database successfully', async () => {
     const result = await testPool.query('SELECT 1 + 1 AS sum');
@@ -245,6 +260,14 @@ describe('userRepository', () => {
   docker compose rm -v -s -f backend
   docker compose up -d --build backend
   ```
+* **`bun test` runs far more tests than expected, or hangs**: `bun test <dir>`
+  treats its argument as a path *substring* filter, not a directory. Because
+  `backend/tsconfig.json` includes `tests/**/*`, running `pnpm build` emits
+  compiled copies to `backend/dist/backend/tests/…`, which also match the filter
+  and run as a stale second copy of the suite. `backend/bunfig.toml` sets
+  `pathIgnorePatterns = ["**/dist/**"]` to prevent this — if you invoke `bun test`
+  with a config that bypasses bunfig, add `--path-ignore-patterns='**/dist/**'`,
+  or clear the stale build with `rm -rf backend/dist`.
 * **`DATABASE_URL_TEST is not set`**: Ensure `backend/.env.test` exists. If not:
   ```bash
   cp backend/.env.test.example backend/.env.test

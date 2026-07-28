@@ -199,6 +199,18 @@ pnpm -C backend run test:db:down
 * **路徑**：`backend/tests/unit/**/*.test.ts`
 * **指南**：使用 `mock.module()` 模擬資料庫 Repository，在不建立真實資料庫連線的情況下，單獨測試業務邏輯。
 
+> **`mock.module()` 的作用範圍是整個 process。** 現在每個測試層級都以單一
+> `bun test <dir>` process 執行，因此某個檔案呼叫 `mock.module()` 會替換掉**同一次執行中所有檔案**
+> 的該模組；而且它在載入期就生效，連排在它前面的檔案都可能受影響。兩個結果：
+> * `mock.module()` 只能用在 `tests/unit/`，不可用於 `tests/integration/` 或 `tests/e2e/`。
+>   會 mock 掉 `src/models/db` 的測試在定義上就是單元測試；若它需要真實資料庫，就該歸到其他層級。
+> * 若只需替換單一函式，優先使用 `spyOn(namespace, 'fn')` 搭配 `mockRestore()` —— 這才會真正還原；
+>   在 `afterAll` 中重新呼叫 `mock.module()` 並不會還原。
+>
+> **不要在 hook 中關閉共用的 singleton。** `src/models/db` 與 `tests/helpers/testPool`
+> 匯出的都是 process 層級的共用連線，在 `afterAll` 對其呼叫 `.end()` 會讓該次執行中
+> 後續所有檔案的查詢全部失敗。交給 process 結束時自然釋放即可。
+
 ```typescript
 // 範例：backend/tests/unit/services/userService.test.ts
 import { describe, it, expect } from 'bun:test';
@@ -216,7 +228,7 @@ describe('userService', () => {
 
 ```typescript
 // 範例：backend/tests/integration/repositories/userRepository.test.ts
-import { beforeEach, afterAll, describe, it, expect } from 'bun:test';
+import { beforeEach, describe, it, expect } from 'bun:test';
 import { testPool } from '../helpers/testPool';
 import { resetDb } from '../helpers/resetDb';
 
@@ -225,9 +237,8 @@ describe('userRepository', () => {
     await resetDb(); // 清空 users, rooms, messages, room_members
   });
 
-  afterAll(async () => {
-    await testPool.end(); // 關閉連接池
-  });
+  // 請勿在此呼叫 `testPool.end()` —— 它是同一次執行中所有測試檔共用的 module singleton，
+  // 關閉後會導致後續所有檔案失敗。
 
   it('queries database successfully', async () => {
     const result = await testPool.query('SELECT 1 + 1 AS sum');
@@ -245,6 +256,12 @@ describe('userRepository', () => {
   docker compose rm -v -s -f backend
   docker compose up -d --build backend
   ```
+* **`bun test` 跑出遠多於預期的測試數量，或直接卡住**：`bun test <dir>` 的參數是**路徑子字串**過濾條件，
+  而非目錄。由於 `backend/tsconfig.json` 的 `include` 包含 `tests/**/*`，執行 `pnpm build` 會把測試一併編譯到
+  `backend/dist/backend/tests/…`，這些檔案同樣符合過濾條件，於是整套測試會以過期的第二份副本再跑一次。
+  `backend/bunfig.toml` 已設定 `pathIgnorePatterns = ["**/dist/**"]` 來避免此問題；
+  若你以繞過 bunfig 的方式呼叫 `bun test`，請自行加上 `--path-ignore-patterns='**/dist/**'`，
+  或以 `rm -rf backend/dist` 清除過期建置產物。
 * **`DATABASE_URL_TEST is not set`**：請確認 `backend/.env.test` 是否存在。若不存在：
   ```bash
   cp backend/.env.test.example backend/.env.test
