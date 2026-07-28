@@ -15,7 +15,7 @@ RUN chown -R bun:bun /app
 
 USER bun
 
-COPY --chown=bun:bun package.json pnpm-lock.yaml ./
+COPY --chown=bun:bun package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
 RUN pnpm install --frozen-lockfile
 

@@ -11,7 +11,7 @@ COPY tsconfig.base.json package.json ./
 COPY shared/ ./shared/
 
 # Copy backend dependency declarations
-COPY backend/package.json backend/pnpm-lock.yaml backend/tsconfig.json ./backend/
+COPY backend/package.json backend/pnpm-lock.yaml backend/pnpm-workspace.yaml backend/tsconfig.json ./backend/
 
 WORKDIR /workspace/backend
 RUN pnpm install --frozen-lockfile
@@ -37,7 +37,7 @@ RUN chown -R bun:bun /app
 USER bun
 
 # Copy dependency declarations and install
-COPY --chown=bun:bun backend/package.json backend/pnpm-lock.yaml ./
+COPY --chown=bun:bun backend/package.json backend/pnpm-lock.yaml backend/pnpm-workspace.yaml ./
 RUN pnpm install --prod --frozen-lockfile
 
 # Copy source code, migrations, and shared files
