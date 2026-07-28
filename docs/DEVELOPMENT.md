@@ -347,12 +347,12 @@ describe('userRepository', () => {
 ## 8. Git Workflow, PR Guidelines & Release Automation
 
 ### Git Branching Strategy
-* **Active Development Branch**: The main development branch is `dev`.
-* **Feature Branches**: All feature and bugfix branches must be created from `dev` (e.g. `feat/my-feature` or `fix/my-bug`).
-* **Pull Requests**: Submit all Pull Requests back to the `dev` branch. Direct pushes to `main` or `dev` are prohibited.
+* **Active Development Branch**: The main development branch is `main`.
+* **Feature Branches**: All feature and bugfix branches must be created from `main` (e.g. `feat/my-feature` or `fix/my-bug`).
+* **Pull Requests**: Submit all Pull Requests back to the `main` branch. Direct pushes to `main` are prohibited.
 
 ### PR Merge Requirement: Squash and Merge
-To keep the commit history clean and prevent cluttered changelogs, **all Pull Requests merged into `dev` must use Squash and Merge**.
+To keep the commit history clean and prevent cluttered changelogs, **all Pull Requests merged into `main` must use Squash and Merge**.
 * **PR Title Format**: PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/) format in English:
   - `feat(scope): short description` - New feature
   - `fix(scope): short description` - Bug fix
@@ -360,10 +360,10 @@ To keep the commit history clean and prevent cluttered changelogs, **all Pull Re
   - `refactor(scope): short description` - Code refactoring
   - `chore: short description` - Maintenance task
   - `BREAKING CHANGE:` or `feat!:` - Breaking API or schema changes
-* **Squash Merge Benefit**: Squashing compresses multiple small/WIP commits in a feature branch into a single, clean conventional commit on `dev`.
+* **Squash Merge Benefit**: Squashing compresses multiple small/WIP commits in a feature branch into a single, clean conventional commit on `main`.
 
-### Automated Version Release Flow (`dev` → `main`)
-When milestone changes on `dev` are merged into `main`, GitHub Actions (`.github/workflows/ci.yml`) automatically triggers the `release` job running `semantic-release` upon CI completion:
+### Automated Version Release Flow (tag-based)
+When changes are merged into `main`, GitHub Actions (`.github/workflows/ci.yml`) automatically triggers the `release` job running `semantic-release` upon CI completion:
 
 1. **Semantic Versioning (`a.b.c`) Calculation**:
    - `fix:` → Increments **Patch (`c`)** (e.g. `v1.0.1` → `v1.0.2`)
