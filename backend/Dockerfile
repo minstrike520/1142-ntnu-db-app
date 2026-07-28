@@ -1,6 +1,10 @@
-FROM oven/bun:1.2-slim
+FROM oven/bun:1.3.14-slim
+
+COPY --from=node:24-slim /usr/local/ /usr/local/
 
 RUN apt-get update -y && apt-get install -y openssl
+
+RUN corepack enable && corepack prepare pnpm@11 --activate
 
 WORKDIR /app
 
@@ -11,9 +15,9 @@ RUN chown -R bun:bun /app
 
 USER bun
 
-COPY --chown=bun:bun package.json pnpm-lock.yaml ./
+COPY --chown=bun:bun package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
-RUN bun install
+RUN pnpm install --frozen-lockfile
 
 COPY --chown=bun:bun . .
 
