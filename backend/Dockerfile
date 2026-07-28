@@ -23,6 +23,13 @@ WORKDIR /workspace
 RUN mkdir -p /workspace/backend/uploads/attachments /workspace/backend/uploads/avatars \
  && chown -R bun:bun /workspace
 
+# Backwards compatibility for attachments uploaded before the workspace move.
+# src/utils/uploads.ts resolves the upload root from process.cwd(), so stored
+# absolute paths used to be /app/uploads/... — and attachmentRoutes.ts streams an
+# absolute stored path verbatim without relocating it. Without this symlink those
+# rows 404 after upgrading, even though the files are still in the same volume.
+RUN mkdir -p /app && ln -s /workspace/backend/uploads /app/uploads && chown -h bun:bun /app/uploads
+
 USER bun
 
 # Every workspace manifest must be present: `--frozen-lockfile` validates the

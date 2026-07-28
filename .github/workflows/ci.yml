@@ -48,15 +48,30 @@ jobs:
       - uses: dorny/paths-filter@v4
         id: filter
         with:
+          # The root workspace files are load-bearing for BOTH packages now that
+          # every job installs from the single root lockfile. Without them here,
+          # a PR touching only pnpm-lock.yaml, the `overrides` block, or the root
+          # package.json would output false for both filters and skip lint,
+          # typecheck, tests, builds and security-scan — and `release` treats
+          # skipped as success, so a dependency or CVE-override change could ship
+          # completely unverified.
           filters: |
             frontend:
               - 'frontend/**'
               - 'shared/**'
               - 'tsconfig.base.json'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/ci.yml'
             backend:
               - 'backend/**'
               - 'shared/**'
               - 'tsconfig.base.json'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/ci.yml'
 
   frontend-lint:
     needs: changes
