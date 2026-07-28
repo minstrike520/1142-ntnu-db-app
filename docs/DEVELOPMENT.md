@@ -30,10 +30,10 @@ Uploaded files are stored in whatever source is mounted to `/workspace/backend/u
 
 > **Upgrading from an older checkout**: the dev containers now lay the repo out
 > as a pnpm workspace at `/workspace`, so the backend moved from `/app` to
-> `/workspace/backend`. No special step is needed — just rebuild:
+> `/workspace/backend`. Rebuild with:
 >
 > ```bash
-> docker compose up -d --build
+> docker compose up -d --build --renew-anon-volumes
 > ```
 >
 > **Do not use `docker compose down -v`.** `-v` removes the named `pgdata` and
@@ -42,9 +42,16 @@ Uploaded files are stored in whatever source is mounted to `/workspace/backend/u
 > mounted at `/app/node_modules` and the new one is at
 > `/workspace/backend/node_modules`, so the two cannot shadow each other — the
 > old volume is simply left orphaned (clear it later with `docker volume prune`
-> if you like). Attachments uploaded before the move keep working too: their
-> stored absolute paths are used verbatim on download, so the image symlinks
-> `/app/uploads` to the new location.
+> if you like).
+>
+> One known consequence, accepted deliberately rather than papered over with a
+> compatibility shim: attachments uploaded *before* this change stored an
+> absolute `/app/uploads/...` path, and `attachmentRoutes.ts` streams a stored
+> absolute path verbatim without relocating it. Those rows will 404 after the
+> move. The files themselves are still in the `app_uploads` volume under the new
+> path. This affects local dev data only — production is unchanged, since
+> `docker-compose.prod.yml` still runs with `/app` as the working directory. Just
+> re-upload anything you still need.
 
 If you want uploads to go to a custom folder on the host instead of the default named volume, set `UPLOADS_MOUNT_SOURCE` in `.env` before running Docker Compose:
 
@@ -184,6 +191,22 @@ workspace filter, using the **package name** rather than the directory name:
 pnpm --filter near-chat-frontend <script>
 pnpm --filter near-chat-backend <script>
 ```
+
+> **After changing dependencies, rebuild with `--renew-anon-volumes`:**
+>
+> ```bash
+> docker compose up -d --build --renew-anon-volumes
+> ```
+>
+> Each service keeps an anonymous volume on its `node_modules` so the source bind
+> mount does not hide it. Under a pnpm workspace that directory is only a farm of
+> symlinks into the real store at `/workspace/node_modules/.pnpm`, which lives in
+> the **image**. `docker compose up --build` reuses the existing anonymous volume
+> rather than re-seeding it from the new image, so after a version change the
+> persisted links can point at store paths the new image no longer has — and the
+> dev server or a migration fails on a module it cannot resolve.
+> `--renew-anon-volumes` recreates only those anonymous volumes; the named
+> `pgdata` and `app_uploads` volumes are untouched.
 
 ### Running TypeScript Type Checks
 ```bash

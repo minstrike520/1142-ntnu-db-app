@@ -29,18 +29,23 @@ docker compose up -d
 上傳的檔案會儲存在掛載到後端容器內 `/workspace/backend/uploads` 的來源中。預設為 Docker 命名磁碟卷 `app_uploads`。附件會存放在 `/workspace/backend/uploads/attachments/`，而頭像則會使用 `/workspace/backend/uploads/avatars/`。
 
 > **從舊版 checkout 升級時**：開發容器現在以 pnpm workspace 的形式配置於 `/workspace`，
-> 後端因此由 `/app` 移至 `/workspace/backend`。不需要任何特殊步驟，直接重新建置即可：
+> 後端因此由 `/app` 移至 `/workspace/backend`。請以下列指令重新建置：
 >
 > ```bash
-> docker compose up -d --build
+> docker compose up -d --build --renew-anon-volumes
 > ```
 >
 > **請勿使用 `docker compose down -v`。** `-v` 會一併刪除具名的 `pgdata` 與 `app_uploads`，
 > 也就是清空你的開發資料庫與所有已上傳檔案。此處並不需要這麼做：舊的匿名 `node_modules`
 > volume 掛載於 `/app/node_modules`，新的則在 `/workspace/backend/node_modules`，
 > 兩者路徑不同因而不會互相遮蔽 —— 舊 volume 只會被留下成為孤兒
-> （日後可用 `docker volume prune` 清理）。搬遷前上傳的附件同樣不受影響：
-> 這些記錄的絕對路徑在下載時是被原樣使用的，因此映像中已將 `/app/uploads` symlink 至新位置。
+> （日後可用 `docker volume prune` 清理）。
+>
+> 有一項已知影響是**刻意不以相容層處理**的：此變更之前上傳的附件，其入庫的是
+> `/app/uploads/...` 絕對路徑，而 `attachmentRoutes.ts` 對絕對路徑是原樣使用、不重新定位，
+> 因此這些記錄在搬遷後會 404。檔案本身仍在 `app_uploads` volume 中的新路徑下。
+> 這只影響本機開發資料 —— 生產環境不受影響，因為 `docker-compose.prod.yml` 的工作目錄
+> 仍是 `/app`。若仍需要這些附件，重新上傳即可。
 
 如果您希望將上傳檔案儲存在主機上的自訂資料夾中，而非預設的命名磁碟卷，請在執行 Docker Compose 前在 `.env` 中設定 `UPLOADS_MOUNT_SOURCE`：
 
@@ -178,6 +183,19 @@ pnpm 版本由根 `package.json` 的 `"packageManager"` 欄位鎖定，執行 `c
 pnpm --filter near-chat-frontend <script>
 pnpm --filter near-chat-backend <script>
 ```
+
+> **變更相依套件後，請以 `--renew-anon-volumes` 重新建置：**
+>
+> ```bash
+> docker compose up -d --build --renew-anon-volumes
+> ```
+>
+> 每個服務都會在自己的 `node_modules` 上掛一個匿名 volume，避免被原始碼的 bind mount 遮蔽。
+> 但在 pnpm workspace 下，該目錄只是指向 `/workspace/node_modules/.pnpm` 這個真實 store 的
+> symlink farm，而 store 位於**映像**中。`docker compose up --build` 會沿用既有的匿名 volume
+> 而非以新映像重新產生其內容，因此套件版本變更後，被保留下來的 symlink 可能指向新映像已不存在的
+> store 路徑 —— dev server 或 migration 便會因為找不到模組而失敗。
+> `--renew-anon-volumes` 只會重建這些匿名 volume，具名的 `pgdata` 與 `app_uploads` 不受影響。
 
 ### 執行 TypeScript 型別檢查
 ```bash
