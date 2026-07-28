@@ -132,6 +132,7 @@ const roomBase = {
   viewHistory: true,
   isArchived: false,
   isReadonly: false,
+  isHidden: false,
   createdAt: new Date(BASE_TIME - 86_400_000),
 };
 
@@ -190,6 +191,7 @@ const groupMembers = (roomId: string, myRole: RoomMember["role"]): RoomMember[] 
     userId: ME_ID,
     role: myRole,
     isMuted: false,
+    isHidden: false,
     lastReadId: roomId === "room-2" ? messageId(roomId, 27) : messageId(roomId, 40),
     joinTime: new Date(BASE_TIME - 86_400_000),
   },
@@ -199,6 +201,7 @@ const groupMembers = (roomId: string, myRole: RoomMember["role"]): RoomMember[] 
       userId,
       role: i === 0 && myRole !== "owner" ? "owner" : "member",
       isMuted: false,
+      isHidden: false,
       // m-1 has read everything: exercises the read-receipt avatar path.
       lastReadId: userId === "m-1" ? lastMessageOf(roomId).messageId : messageId(roomId, 5),
       joinTime: new Date(BASE_TIME - 86_400_000),
@@ -218,6 +221,7 @@ export const membersByRoom: Record<string, RoomMember[]> = {
           userId: ME_ID,
           role: "member",
           isMuted: false,
+          isHidden: false,
           lastReadId: messageId(roomId, 10),
           joinTime: new Date(BASE_TIME - 86_400_000),
         },
@@ -226,6 +230,7 @@ export const membersByRoom: Record<string, RoomMember[]> = {
           userId: friendId,
           role: "member",
           isMuted: false,
+          isHidden: false,
           lastReadId: messageId(roomId, 10),
           joinTime: new Date(BASE_TIME - 86_400_000),
         },

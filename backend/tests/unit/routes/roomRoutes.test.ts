@@ -158,3 +158,55 @@ describe('PATCH /rooms/:id/members/:targetUserId', () => {
     expect(service.updateMember).toHaveBeenCalledWith(ROOM_ID, CALLER_ID, NEW_OWNER_ID, { role: 'admin' });
   });
 });
+
+// Ported from the Express-era roomController test when the controller layer was
+// folded into the route layer: the handler now owns validation and status code.
+describe('PATCH /rooms/:id/hidden', () => {
+  let service: any;
+  let token: string;
+
+  const makeApp = () => {
+    const app = new Hono();
+    app.onError(errorHandler);
+    app.use('/rooms/*', authMiddleware);
+    app.route('/rooms', makeRoomRoutes(service));
+    return app;
+  };
+
+  const patchHidden = (body: unknown) =>
+    makeApp().request(`/rooms/${ROOM_ID}/hidden`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  beforeEach(async () => {
+    token = await signToken({ userId: CALLER_ID, email: 'caller@test.com' } as any);
+    service = { setHidden: mock().mockResolvedValue(undefined) };
+  });
+
+  afterAll(() => {
+    mock.restore();
+  });
+
+  it('returns 204 and forwards the flag to the service', async () => {
+    const res = await patchHidden({ hidden: true });
+
+    expect(res.status).toBe(204);
+    expect(service.setHidden).toHaveBeenCalledWith(CALLER_ID, ROOM_ID, true);
+  });
+
+  it('supports unhiding', async () => {
+    const res = await patchHidden({ hidden: false });
+
+    expect(res.status).toBe(204);
+    expect(service.setHidden).toHaveBeenCalledWith(CALLER_ID, ROOM_ID, false);
+  });
+
+  it('rejects a non-boolean hidden value before reaching the service', async () => {
+    const res = await patchHidden({ hidden: 'yes' });
+
+    expect(res.status).toBe(400);
+    expect(service.setHidden).not.toHaveBeenCalled();
+  });
+});

@@ -32,6 +32,8 @@ export default function ChatList({ searchQuery }: ChatListProps) {
     handleRenameFolder,
     handleCategorizeRoom,
     updateRoomSorting,
+    handleLeaveOrBlock,
+    setRoomHidden,
   } = useChat();
 
   const activeRoomId = params?.chatId as string | undefined;
@@ -43,6 +45,8 @@ export default function ChatList({ searchQuery }: ChatListProps) {
   const [dragOverUncategorized, setDragOverUncategorized] = React.useState(false);
   const [isRootDropActive, setIsRootDropActive] = React.useState(false);
   const [isUncategorizedCollapsed, setIsUncategorizedCollapsed] = React.useState(false);
+  const [isHiddenCollapsed, setIsHiddenCollapsed] = React.useState(true);
+  const [roomMenu, setRoomMenu] = React.useState<{ roomId: string; x: number; y: number } | null>(null);
   const [dropTargetRoomId, setDropTargetRoomId] = React.useState<string | null>(null);
   const [dropPlacement, setDropPlacement] = React.useState<"above" | "below" | null>(null);
   const [roomOrderMap, setRoomOrderMap] = React.useState<Record<string, string[]>>(() => {
@@ -74,7 +78,10 @@ export default function ChatList({ searchQuery }: ChatListProps) {
   const [alertMessage, setAlertMessage] = React.useState("");
 
   React.useEffect(() => {
-    const handleCloseMenu = () => setContextMenu(null);
+    const handleCloseMenu = () => {
+      setContextMenu(null);
+      setRoomMenu(null);
+    };
     window.addEventListener("click", handleCloseMenu);
     return () => window.removeEventListener("click", handleCloseMenu);
   }, []);
@@ -215,6 +222,7 @@ export default function ChatList({ searchQuery }: ChatListProps) {
     const hasMatchingRooms = rooms.some(
       (room) =>
         room.folderId === folder.id &&
+        !room.isHidden &&
         room.name.toLowerCase().includes(searchQuery.toLowerCase()),
     );
     return folderMatches || hasMatchingRooms;
@@ -224,12 +232,13 @@ export default function ChatList({ searchQuery }: ChatListProps) {
     const folder = folders.find((item) => item.id === folderId);
     const folderMatches = folder?.name.toLowerCase().includes(searchQuery.toLowerCase()) ?? false;
     if (folderMatches) {
-      return rooms.filter((room) => room.folderId === folderId);
+      return rooms.filter((room) => room.folderId === folderId && !room.isHidden);
     }
 
     return rooms.filter(
       (room) =>
         room.folderId === folderId &&
+        !room.isHidden &&
         room.name.toLowerCase().includes(searchQuery.toLowerCase()),
     );
   };
@@ -237,6 +246,13 @@ export default function ChatList({ searchQuery }: ChatListProps) {
   const rootRooms = rooms.filter(
     (room) =>
       !room.folderId &&
+      !room.isHidden &&
+      room.name.toLowerCase().includes(searchQuery.toLowerCase()),
+  );
+
+  const hiddenRooms = rooms.filter(
+    (room) =>
+      room.isHidden &&
       room.name.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
@@ -255,6 +271,44 @@ export default function ChatList({ searchQuery }: ChatListProps) {
       console.error(error);
       setAlertTitle(t("folders.errorTitle"));
       setAlertMessage(error instanceof Error ? error.message : (t("folders.deleteFailed")));
+      setAlertOpen(true);
+    }
+  };
+
+  const handleToggleHidden = async (roomId: string, hidden: boolean) => {
+    try {
+      await setRoomHidden(roomId, hidden);
+    } catch (error) {
+      console.error(error);
+      setAlertTitle(t("folders.errorTitle"));
+      setAlertMessage(error instanceof Error ? error.message : t("folders.errorTitle"));
+      setAlertOpen(true);
+    }
+  };
+
+  const handleLeaveOrBlockFromMenu = async (roomId: string) => {
+    const target = rooms.find((item) => item.id === roomId);
+    if (!target) return;
+    const action =
+      target.type === "group"
+        ? t("chatroom.leave")
+        : target.isReadonly
+          ? t("chatroom.unblock")
+          : t("chatroom.block");
+    if (!confirm(t("chatroom.confirmLeaveOrBlock", { action, name: target.name }))) return;
+    try {
+      const { isDeleted, newActiveId } = await handleLeaveOrBlock(roomId);
+      if (isDeleted) {
+        if (newActiveId) {
+          router.push(`/chat/${newActiveId}`);
+        } else if (activeRoomId === roomId) {
+          router.push("/");
+        }
+      }
+    } catch (error) {
+      console.error(error);
+      setAlertTitle(t("folders.errorTitle"));
+      setAlertMessage(error instanceof Error ? error.message : t("folders.errorTitle"));
       setAlertOpen(true);
     }
   };
@@ -313,7 +367,9 @@ export default function ChatList({ searchQuery }: ChatListProps) {
           return true;
       }
     };
-    let list = rooms.filter((room) => matchesSearch(room) && matchesFilter(room));
+    // Hidden rooms keep their own collapsed section (rendered in every mode), so
+    // they must stay out of the flat list too — otherwise they'd appear twice.
+    let list = rooms.filter((room) => !room.isHidden && matchesSearch(room) && matchesFilter(room));
     if (sortMode === "unread") {
       list = [...list].sort((a, b) => (b.unreadCount ?? 0) - (a.unreadCount ?? 0));
     }
@@ -491,6 +547,7 @@ export default function ChatList({ searchQuery }: ChatListProps) {
                     })()}
                     noMessagesText={t("sidebar.noMessages")}
                     isPending={isPending}
+                    onOpenMenu={(x, y) => setRoomMenu({ roomId: room.id, x, y })}
                   />
                 );
               })}
@@ -615,6 +672,7 @@ export default function ChatList({ searchQuery }: ChatListProps) {
                           })()}
                           noMessagesText={t("sidebar.noMessages")}
                           isPending={isPending}
+                          onOpenMenu={(x, y) => setRoomMenu({ roomId: room.id, x, y })}
                         />
                       );
                     })}
@@ -625,6 +683,105 @@ export default function ChatList({ searchQuery }: ChatListProps) {
           })}
         </div>
       )}
+
+      {hiddenRooms.length > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setIsHiddenCollapsed((current) => !current)}
+            className="w-full px-4 py-2 flex items-center justify-between text-xs font-semibold text-foreground hover:bg-surface-muted transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <span className={isHiddenCollapsed ? "" : "rotate-90"}>{">"}</span>
+              {t("sidebar.hiddenChats")}
+            </span>
+            <Badge variant="default" className="scale-90">
+              {hiddenRooms.length}
+            </Badge>
+          </button>
+
+          {!isHiddenCollapsed && (
+            <div className="pl-4 border-l border-border-secondary/40 ml-5">
+              {hiddenRooms.map((room) => {
+                const isPending = room.myRole === "pending";
+                return (
+                  <RoomItem
+                    key={room.id}
+                    room={room}
+                    isActive={room.id === activeRoomId && isChatPage}
+                    onClick={() => router.push(`/chat/${room.id}`)}
+                    onDragStart={() => {}}
+                    onDragEnd={() => {}}
+                    onOpenMenu={(x, y) => setRoomMenu({ roomId: room.id, x, y })}
+                    avatarSrc={(() => {
+                      if (room.avatarUrl) {
+                        return resolveAssetUrl(room.avatarUrl);
+                      }
+                      if (room.type === "msg") {
+                        const otherMember = room.members?.find((m) => m.userId !== user.userId);
+                        if (otherMember?.avatarUrl) {
+                          return resolveAssetUrl(otherMember.avatarUrl);
+                        }
+                        const friend = friends.find((f) => f.id === room.otherMemberId || f.name === room.name);
+                        if (friend?.avatarUrl) {
+                          return resolveAssetUrl(friend.avatarUrl);
+                        }
+                      }
+                      return getAvatarForUser(room.name, user.avatar, user.username);
+                    })()}
+                    noMessagesText={t("sidebar.noMessages")}
+                    isPending={isPending}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {roomMenu && (() => {
+        const menuRoom = rooms.find((item) => item.id === roomMenu.roomId);
+        if (!menuRoom) return null;
+        return (
+          <div
+            style={{
+              position: "fixed",
+              top: roomMenu.y,
+              left: roomMenu.x,
+            }}
+            className="bg-surface-card border border-border-primary rounded-sm shadow-md py-1 z-50 min-w-[140px]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setRoomMenu(null);
+                void handleToggleHidden(menuRoom.id, !menuRoom.isHidden);
+              }}
+              className="w-full text-left px-3 py-1.5 hover:bg-surface-muted text-foreground transition-colors font-normal text-xs block"
+            >
+              {menuRoom.isHidden ? t("sidebar.unhideChat") : t("sidebar.hideChat")}
+            </button>
+            {menuRoom.myRole !== "owner" && (
+              <button
+                type="button"
+                onClick={() => {
+                  setRoomMenu(null);
+                  void handleLeaveOrBlockFromMenu(menuRoom.id);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-surface-muted text-red-600 transition-colors font-normal text-xs block"
+              >
+                {menuRoom.type === "group"
+                  ? t("chatroom.leave")
+                  : menuRoom.isReadonly
+                    ? t("chatroom.unblock")
+                    : t("chatroom.block")}
+              </button>
+            )}
+          </div>
+        );
+      })()}
+
       {contextMenu && (
         <div
           style={{
@@ -768,6 +925,7 @@ function RoomItem({
   avatarSrc,
   noMessagesText,
   isPending,
+  onOpenMenu,
   draggable = true,
 }: {
   room: ChatRoom;
@@ -782,6 +940,7 @@ function RoomItem({
   avatarSrc?: string;
   noMessagesText: string;
   isPending?: boolean;
+  onOpenMenu?: (x: number, y: number) => void;
   draggable?: boolean;
 }) {
   const { t } = useTranslation();
@@ -790,6 +949,11 @@ function RoomItem({
     <div
       onDragOver={onDragOver}
       onDrop={onDrop}
+      onContextMenu={(event) => {
+        if (!onOpenMenu) return;
+        event.preventDefault();
+        onOpenMenu(event.clientX, event.clientY);
+      }}
       className={`group relative flex w-full items-center gap-2.5 px-4 py-2.5 transition-all ${
         isActive ? "bg-surface-muted" : "hover:bg-surface-muted/70"
       } ${isDropTarget ? "bg-primary/5" : ""}`}
@@ -831,6 +995,20 @@ function RoomItem({
           </span>
         </span>
       </button>
+      {onOpenMenu && (
+        <button
+          type="button"
+          aria-label="Room actions"
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            onOpenMenu(rect.right - 140, rect.bottom + 4);
+          }}
+          className="rounded-sm border border-transparent px-1.5 py-0.5 text-xs text-text-muted opacity-0 transition-all hover:border-border-primary hover:text-foreground group-hover:opacity-100 focus:opacity-100 shrink-0"
+        >
+          ...
+        </button>
+      )}
       <Badge variant="default" className="scale-75 font-mono">
         {room.type === "group" ? "G" : "DM"}
       </Badge>

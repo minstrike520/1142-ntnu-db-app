@@ -5,6 +5,7 @@ import {
   createRoomSchema,
   patchRoomSchema,
   joinByCodeSchema,
+  setHiddenSchema,
   updateMemberSchema,
   type PatchRoomInput,
 } from '../routes/roomSchemas';
@@ -21,6 +22,7 @@ export interface RoomService {
   update(roomId: string, callerId: string, data: unknown): Promise<unknown>;
   joinByCode(userId: string, inviteCode: string): Promise<unknown>;
   leave(userId: string, roomId: string): Promise<void>;
+  setHidden(userId: string, roomId: string, hidden: unknown): Promise<void>;
   deleteGroup(roomId: string, callerId: string): Promise<void>;
   uploadAvatar(roomId: string, callerId: string, file: UploadedFile): Promise<unknown>;
   listMembers(roomId: string, callerId: string): Promise<unknown>;
@@ -81,6 +83,14 @@ export const makeRoomRoutes = (service: RoomService) => {
     const userId = c.get('user').userId;
     const roomId = c.req.param('id');
     await service.leave(userId, roomId);
+    return c.body(null, 204);
+  });
+
+  app.patch('/:id/hidden', validate('json', setHiddenSchema), async (c) => {
+    const userId = c.get('user').userId;
+    const roomId = c.req.param('id');
+    const body = c.req.valid('json') as { hidden: boolean };
+    await service.setHidden(userId, roomId, body.hidden);
     return c.body(null, 204);
   });
 

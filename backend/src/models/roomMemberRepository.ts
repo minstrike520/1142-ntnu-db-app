@@ -9,6 +9,7 @@ export interface RoomMemberRow {
   role: 'owner' | 'admin' | 'member' | 'pending';
   nickname?: string | null;
   is_muted: boolean;
+  is_hidden: boolean;
   last_read_id?: string | null;
   join_time: Date;
 }
@@ -20,6 +21,7 @@ function mapRowToRoomMember(row: RoomMemberRow): RoomMember {
     role: row.role,
     nickname: row.nickname ?? undefined,
     isMuted: row.is_muted,
+    isHidden: row.is_hidden,
     lastReadId: row.last_read_id ?? undefined,
     joinTime: row.join_time,
   };
@@ -54,11 +56,12 @@ export class RoomMemberRepository implements IRoomMemberRepository {
   async update(
     roomId: string,
     userId: string,
-    data: Partial<Pick<RoomMember, 'role' | 'nickname' | 'isMuted' | 'lastReadId'>>,
+    data: Partial<Pick<RoomMember, 'role' | 'nickname' | 'isMuted' | 'isHidden' | 'lastReadId'>>,
   ): Promise<RoomMember> {
     const roleVal = data.role !== undefined ? data.role : this.sql`role`;
     const nickVal = data.nickname !== undefined ? data.nickname : this.sql`nickname`;
     const muteVal = data.isMuted !== undefined ? data.isMuted : this.sql`is_muted`;
+    const hiddenVal = data.isHidden !== undefined ? data.isHidden : this.sql`is_hidden`;
     const readVal = data.lastReadId !== undefined ? data.lastReadId : this.sql`last_read_id`;
 
     const rows = await this.sql<RoomMemberRow[]>`
@@ -66,6 +69,7 @@ export class RoomMemberRepository implements IRoomMemberRepository {
         role = ${roleVal},
         nickname = ${nickVal},
         is_muted = ${muteVal},
+        is_hidden = ${hiddenVal},
         last_read_id = ${readVal}
       WHERE room_id = ${roomId} AND user_id = ${userId}
       RETURNING *

@@ -39,7 +39,10 @@
     "createGroupDesc": "建立一個新的多人群組聊天室",
     "joinGroupDesc": "透過邀請碼加入已有的群組",
     "createFolderDesc": "建立一個資料夾來分類聊天室",
-    "back": "返回"
+    "back": "返回",
+    "hiddenChats": "隱藏的聊天室",
+    "hideChat": "隱藏聊天室",
+    "unhideChat": "取消隱藏"
   },
   "emergencyPage": {
     "title": "緊急聯絡設定"

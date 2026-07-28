@@ -98,6 +98,7 @@ export interface RoomSummary extends Room {
   otherMemberId?: string;
   lastReadId?: string;
   role?: RoomMemberRole;
+  isHidden: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +135,7 @@ export interface RoomMember {
   role: RoomMemberRole;
   nickname?: string;
   isMuted: boolean;
+  isHidden: boolean;
   lastReadId?: string;
   joinTime: Date;
 }

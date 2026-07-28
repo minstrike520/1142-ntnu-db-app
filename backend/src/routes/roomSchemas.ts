@@ -79,6 +79,12 @@ export const joinByCodeSchema = z.object({
   inviteCode: z.string().trim().min(1, 'inviteCode is required'),
 });
 
+export const setHiddenSchema = z.object({
+  hidden: z.boolean(),
+});
+
+export type SetHiddenInput = z.input<typeof setHiddenSchema>;
+
 // `isMuted` matches the API contract, the frontend request type and
 // RoomService.updateMember. Declaring it as `muted` made Zod strip the field, so
 // the handler silently answered 200 without ever touching is_muted.

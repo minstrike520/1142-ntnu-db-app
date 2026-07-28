@@ -11,6 +11,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import {
   createRoomSchema,
   updateRoomSchema,
+  setHiddenSchema,
   type CreateRoomInput,
   type UpdateRoomInput,
 } from '../routes/roomSchemas';
@@ -232,6 +233,18 @@ export const makeRoomService = (
           }
         }
       }
+    },
+
+    async setHidden(userId: string, roomId: string, hidden: unknown): Promise<void> {
+      const parsed = setHiddenSchema.safeParse({ hidden });
+      if (!parsed.success) {
+        throw new ValidationError(validationMessage(parsed.error.issues));
+      }
+      const room = await repo.findById(roomId);
+      if (!room) throw new NotFoundError('room', roomId);
+      const member = await roomMemberRepo.findMember(roomId, userId);
+      if (!member) throw new ForbiddenError('User is not a member of this room');
+      await roomMemberRepo.update(roomId, userId, { isHidden: parsed.data.hidden });
     },
 
     async transferOwnership(roomId: string, callerId: string, targetUserId: string): Promise<void> {

@@ -445,6 +445,16 @@ export const deleteRoom = (token: string, roomId: string): Promise<void> =>
 export const leaveRoom = (token: string, roomId: string): Promise<void> =>
   requestJson<void>(`/rooms/${roomId}/members/me`, { method: 'DELETE' }, { token });
 
+export const setRoomHidden = (token: string, roomId: string, hidden: boolean): Promise<void> =>
+  requestJson<void>(
+    `/rooms/${roomId}/hidden`,
+    {
+      method: 'PATCH',
+      ...withJsonBody({ hidden }),
+    },
+    { token },
+  );
+
 export const listRoomMembers = (token: string, roomId: string): Promise<RoomMember[]> =>
   requestJson<RoomMember[]>(`/rooms/${roomId}/members`, {}, { token });
 

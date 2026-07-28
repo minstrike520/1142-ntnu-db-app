@@ -36,6 +36,7 @@ function mapRowToRoomSummary(row: RoomRow & {
   other_member_id?: string | null;
   last_read_id?: string | null;
   role?: string;
+  is_hidden?: boolean;
   latest_message_id?: string | null;
   latest_sender_id?: string | null;
   latest_content?: string | null;
@@ -47,6 +48,7 @@ function mapRowToRoomSummary(row: RoomRow & {
     otherMemberId: row.other_member_id ?? undefined,
     lastReadId: row.last_read_id ?? undefined,
     role: (row.role as RoomMemberRole) ?? undefined,
+    isHidden: row.is_hidden ?? false,
   };
 
   if (row.latest_message_id) {
@@ -70,6 +72,7 @@ export interface MemberRoomRow extends RoomRow {
   latest_content?: string | null;
   latest_sent_at?: Date | null;
   role: string;
+  is_hidden: boolean;
 }
 
 export interface OtherMemberRow {
@@ -113,6 +116,7 @@ export class RoomRepository implements IRoomRepository {
         rm.join_time,
         rm.last_read_id,
         rm.role,
+        rm.is_hidden,
         last_read.sent_at AS last_read_sent_at,
         latest.message_id AS latest_message_id,
         latest.sender_id AS latest_sender_id,

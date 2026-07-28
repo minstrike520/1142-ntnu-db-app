@@ -45,6 +45,7 @@ describe('roomService', () => {
     userId: 'user-1',
     role: 'owner',
     isMuted: false,
+    isHidden: false,
     joinTime: new Date('2026-01-01T00:00:00.000Z'),
   };
 
@@ -244,6 +245,55 @@ describe('roomService', () => {
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue(ownerMember);
       await expect(roomService.leave('user-1', 'room-1')).rejects.toThrow(ForbiddenError);
+    });
+  });
+
+  describe('setHidden', () => {
+    it('allows a member to hide a room', async () => {
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue({ ...ownerMember, role: 'member' } as RoomMember);
+
+      await roomService.setHidden('user-1', 'room-1', true);
+
+      expect(mockMemberRepo.update).toHaveBeenCalledWith('room-1', 'user-1', { isHidden: true });
+    });
+
+    it('allows unhiding a room', async () => {
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue({ ...ownerMember, role: 'member', isHidden: true } as RoomMember);
+
+      await roomService.setHidden('user-1', 'room-1', false);
+
+      expect(mockMemberRepo.update).toHaveBeenCalledWith('room-1', 'user-1', { isHidden: false });
+    });
+
+    it('allows the owner to hide their own room', async () => {
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue(ownerMember);
+
+      await roomService.setHidden('user-1', 'room-1', true);
+
+      expect(mockMemberRepo.update).toHaveBeenCalledWith('room-1', 'user-1', { isHidden: true });
+    });
+
+    it('throws NotFoundError when room does not exist', async () => {
+      mockRepo.findById.mockResolvedValue(null);
+      await expect(roomService.setHidden('user-1', 'room-1', true)).rejects.toThrow(NotFoundError);
+      expect(mockMemberRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenError when caller is not a member', async () => {
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue(null);
+      await expect(roomService.setHidden('user-1', 'room-1', true)).rejects.toThrow(ForbiddenError);
+      expect(mockMemberRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('throws ValidationError when hidden is not a boolean', async () => {
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue({ ...ownerMember, role: 'member' } as RoomMember);
+      await expect(roomService.setHidden('user-1', 'room-1', 'yes')).rejects.toThrow(ValidationError);
+      expect(mockMemberRepo.update).not.toHaveBeenCalled();
     });
   });
 
