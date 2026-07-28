@@ -1,53 +1,68 @@
-# Stage 1: Build/Typecheck the backend application
+# Stage 1: Install + typecheck against the pnpm workspace.
+#
+# Previously this stage copied the ROOT pnpm-lock.yaml and then ran
+# `bun install`, which ignores pnpm lockfiles entirely — the image was
+# effectively built from unpinned dependency resolution.
 FROM oven/bun:1.3.14-slim AS builder
 ENV CI=true
+
+# pnpm 11 requires `node:sqlite`, which bun does not implement, so pnpm cannot
+# execute on a bun-only image. Graft the node toolchain in rather than switching
+# the base image — bun stays the runtime. (Approach from #419.)
+COPY --from=node:24-slim /usr/local/ /usr/local/
+RUN corepack enable pnpm && corepack prepare pnpm@11.15.0 --activate
+
 WORKDIR /workspace
 
-COPY --from=node:24-slim /usr/local/ /usr/local/
-RUN corepack enable && corepack prepare pnpm@11 --activate
+# All workspace manifests are required: `--frozen-lockfile` validates the
+# lockfile against every importer it contains.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY backend/package.json ./backend/
+COPY frontend/package.json ./frontend/
 
-# Copy global configs and shared files
-COPY tsconfig.base.json package.json ./
+RUN pnpm install --frozen-lockfile --filter near-chat-backend...
+
+COPY tsconfig.base.json ./
 COPY shared/ ./shared/
-
-# Copy backend dependency declarations
-COPY backend/package.json backend/pnpm-lock.yaml backend/pnpm-workspace.yaml backend/tsconfig.json ./backend/
+COPY backend/tsconfig.json ./backend/
+COPY backend/src ./backend/src
 
 WORKDIR /workspace/backend
-RUN pnpm install --frozen-lockfile
+# `pnpm exec`, not `bun exec`: the binary lives in pnpm's
+# node_modules/.bin symlink farm, which bun does not add to PATH.
+RUN pnpm exec tsc --noEmit
 
-# Copy backend source code and typecheck
-COPY backend/src ./src
-RUN bun exec tsc --noEmit
+# Flatten the symlinked pnpm store into a standalone node_modules. Copying a
+# pnpm tree across stages directly would yield dangling symlinks, because the
+# real packages live in /workspace/node_modules/.pnpm outside the copied path.
+WORKDIR /workspace
+RUN pnpm deploy --filter near-chat-backend --prod --legacy /deploy
 
-# Stage 2: Create a production runner image
+# Stage 2: Production runner.
+#
+# Runtime is bun only — no node, no pnpm, no install step, because stage 1
+# already produced a self-contained node_modules. Note the layout deliberately
+# keeps /shared and /tsconfig.base.json at the filesystem root: backend/
+# tsconfig.json sets "rootDir": "..", so the app resolves them one level above
+# its own directory. This is not a workspace and must not be reshaped into one.
 FROM oven/bun:1.3.14-slim AS runner
 ENV CI=true
 WORKDIR /app
 
-COPY --from=node:24-slim /usr/local/ /usr/local/
-RUN corepack enable && corepack prepare pnpm@11 --activate
-
-# Create uploads directory structure
-RUN mkdir -p /app/uploads/attachments /app/uploads/avatars
-
-# Give the built-in bun user ownership of /app before switching
-RUN chown -R bun:bun /app
+RUN mkdir -p /app/uploads/attachments /app/uploads/avatars \
+ && chown -R bun:bun /app
 
 USER bun
 
-# Copy dependency declarations and install
-COPY --chown=bun:bun backend/package.json backend/pnpm-lock.yaml backend/pnpm-workspace.yaml ./
-RUN pnpm install --prod --frozen-lockfile
+COPY --from=builder --chown=bun:bun /deploy/node_modules ./node_modules
+COPY --chown=bun:bun backend/package.json ./
 
-# Copy source code, migrations, and shared files
 COPY --chown=bun:bun backend/src ./src
 COPY --chown=bun:bun backend/migrations ./migrations
 COPY --chown=bun:bun shared /shared
 COPY --chown=bun:bun tsconfig.base.json /tsconfig.base.json
 COPY --chown=bun:bun backend/tsconfig.json ./tsconfig.json
 
-# Expose port and run in production
 EXPOSE 4000
 ENV NODE_ENV=production
 

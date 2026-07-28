@@ -26,7 +26,26 @@ docker compose build
 docker compose up -d
 ```
 
-上傳的檔案會儲存在掛載到後端容器內 `/app/uploads` 的來源中。預設為 Docker 命名磁碟卷 `app_uploads`。附件會存放在 `/app/uploads/attachments/`，而頭像則會使用 `/app/uploads/avatars/`。
+上傳的檔案會儲存在掛載到後端容器內 `/workspace/backend/uploads` 的來源中。預設為 Docker 命名磁碟卷 `app_uploads`。附件會存放在 `/workspace/backend/uploads/attachments/`，而頭像則會使用 `/workspace/backend/uploads/avatars/`。
+
+> **從舊版 checkout 升級時**：開發容器現在以 pnpm workspace 的形式配置於 `/workspace`，
+> 後端因此由 `/app` 移至 `/workspace/backend`。請以下列指令重新建置：
+>
+> ```bash
+> docker compose up -d --build --renew-anon-volumes
+> ```
+>
+> **請勿使用 `docker compose down -v`。** `-v` 會一併刪除具名的 `pgdata` 與 `app_uploads`，
+> 也就是清空你的開發資料庫與所有已上傳檔案。此處並不需要這麼做：舊的匿名 `node_modules`
+> volume 掛載於 `/app/node_modules`，新的則在 `/workspace/backend/node_modules`，
+> 兩者路徑不同因而不會互相遮蔽 —— 舊 volume 只會被留下成為孤兒
+> （日後可用 `docker volume prune` 清理）。
+>
+> 有一項已知影響是**刻意不以相容層處理**的：此變更之前上傳的附件，其入庫的是
+> `/app/uploads/...` 絕對路徑，而 `attachmentRoutes.ts` 對絕對路徑是原樣使用、不重新定位，
+> 因此這些記錄在搬遷後會 404。檔案本身仍在 `app_uploads` volume 中的新路徑下。
+> 這只影響本機開發資料 —— 生產環境不受影響，因為 `docker-compose.prod.yml` 的工作目錄
+> 仍是 `/app`。若仍需要這些附件，重新上傳即可。
 
 如果您希望將上傳檔案儲存在主機上的自訂資料夾中，而非預設的命名磁碟卷，請在執行 Docker Compose 前在 `.env` 中設定 `UPLOADS_MOUNT_SOURCE`：
 
@@ -144,13 +163,47 @@ docker compose exec backend bun run migrate:up
 
 測試資料庫設定：整合測試會在一台臨時的 Postgres 測試資料庫實例（`db-test`）上運行，該實例定義於 `docker-compose.test.yml` 中，以將開發數據與測試數據隔離開來。
 
+### 安裝相依套件
+本專案是**單一 lockfile 的 pnpm workspace**：整個 repo 只有根目錄一份 `pnpm-lock.yaml`，
+同時涵蓋 root、`frontend/` 與 `backend/`。
+
+```bash
+# 一律在 repo 根目錄安裝
+pnpm install
+```
+
+**切勿在 `frontend/` 或 `backend/` 目錄內執行 `pnpm install`。** 這麼做會產生巢狀的
+`frontend/pnpm-lock.yaml` 或 `backend/pnpm-lock.yaml` 並與根 lockfile 分歧 ——
+這正是 issue #420 所記錄的故障成因。CI 會拒絕任何被提交的巢狀 lockfile。
+
+pnpm 版本由根 `package.json` 的 `"packageManager"` 欄位鎖定，執行 `corepack enable` 即可套用。
+若要針對單一套件執行指令，請使用 workspace filter，並且用**套件名稱**而非目錄名稱：
+
+```bash
+pnpm --filter near-chat-frontend <script>
+pnpm --filter near-chat-backend <script>
+```
+
+> **變更相依套件後，請以 `--renew-anon-volumes` 重新建置：**
+>
+> ```bash
+> docker compose up -d --build --renew-anon-volumes
+> ```
+>
+> 每個服務都會在自己的 `node_modules` 上掛一個匿名 volume，避免被原始碼的 bind mount 遮蔽。
+> 但在 pnpm workspace 下，該目錄只是指向 `/workspace/node_modules/.pnpm` 這個真實 store 的
+> symlink farm，而 store 位於**映像**中。`docker compose up --build` 會沿用既有的匿名 volume
+> 而非以新映像重新產生其內容，因此套件版本變更後，被保留下來的 symlink 可能指向新映像已不存在的
+> store 路徑 —— dev server 或 migration 便會因為找不到模組而失敗。
+> `--renew-anon-volumes` 只會重建這些匿名 volume，具名的 `pgdata` 與 `app_uploads` 不受影響。
+
 ### 執行 TypeScript 型別檢查
 ```bash
 # 後端檢查
-pnpm --prefix backend exec tsc --noEmit
+pnpm --filter near-chat-backend exec tsc --noEmit
 
 # 前端檢查
-pnpm --prefix frontend exec tsc --noEmit
+pnpm --filter near-chat-frontend exec tsc --noEmit
 ```
 
 ### 執行 ESLint 代碼品質與風格檢查
@@ -158,7 +211,7 @@ pnpm --prefix frontend exec tsc --noEmit
 
 ```bash
 # 於前端目錄執行代碼檢查
-pnpm --prefix frontend run lint
+pnpm --filter near-chat-frontend lint
 
 # 或於前端 Docker 容器內執行
 docker compose exec frontend pnpm run lint
@@ -175,20 +228,20 @@ docker compose exec backend bun run test:unit
 
 ```bash
 # 1. 啟動臨時測試資料庫並自動套用遷移
-pnpm -C backend run test:db:up
+pnpm --filter near-chat-backend test:db:up
 
 # 2. 執行整合測試套件
 docker compose exec backend bun run test:integration
 
 # 3. 關閉測試資料庫
-pnpm -C backend run test:db:down
+pnpm --filter near-chat-backend test:db:down
 ```
 
 ### 執行所有測試
 ```bash
-pnpm -C backend run test:db:up
+pnpm --filter near-chat-backend test:db:up
 docker compose exec backend bun run test
-pnpm -C backend run test:db:down
+pnpm --filter near-chat-backend test:db:down
 ```
 
 ---
@@ -198,6 +251,18 @@ pnpm -C backend run test:db:down
 ### 單元測試
 * **路徑**：`backend/tests/unit/**/*.test.ts`
 * **指南**：使用 `mock.module()` 模擬資料庫 Repository，在不建立真實資料庫連線的情況下，單獨測試業務邏輯。
+
+> **`mock.module()` 的作用範圍是整個 process。** 現在每個測試層級都以單一
+> `bun test <dir>` process 執行，因此某個檔案呼叫 `mock.module()` 會替換掉**同一次執行中所有檔案**
+> 的該模組；而且它在載入期就生效，連排在它前面的檔案都可能受影響。兩個結果：
+> * `mock.module()` 只能用在 `tests/unit/`，不可用於 `tests/integration/` 或 `tests/e2e/`。
+>   會 mock 掉 `src/models/db` 的測試在定義上就是單元測試；若它需要真實資料庫，就該歸到其他層級。
+> * 若只需替換單一函式，優先使用 `spyOn(namespace, 'fn')` 搭配 `mockRestore()` —— 這才會真正還原；
+>   在 `afterAll` 中重新呼叫 `mock.module()` 並不會還原。
+>
+> **不要在 hook 中關閉共用的 singleton。** `src/models/db` 與 `tests/helpers/testPool`
+> 匯出的都是 process 層級的共用連線，在 `afterAll` 對其呼叫 `.end()` 會讓該次執行中
+> 後續所有檔案的查詢全部失敗。交給 process 結束時自然釋放即可。
 
 ```typescript
 // 範例：backend/tests/unit/services/userService.test.ts
@@ -216,7 +281,7 @@ describe('userService', () => {
 
 ```typescript
 // 範例：backend/tests/integration/repositories/userRepository.test.ts
-import { beforeEach, afterAll, describe, it, expect } from 'bun:test';
+import { beforeEach, describe, it, expect } from 'bun:test';
 import { testPool } from '../helpers/testPool';
 import { resetDb } from '../helpers/resetDb';
 
@@ -225,9 +290,8 @@ describe('userRepository', () => {
     await resetDb(); // 清空 users, rooms, messages, room_members
   });
 
-  afterAll(async () => {
-    await testPool.end(); // 關閉連接池
-  });
+  // 請勿在此呼叫 `testPool.end()` —— 它是同一次執行中所有測試檔共用的 module singleton，
+  // 關閉後會導致後續所有檔案失敗。
 
   it('queries database successfully', async () => {
     const result = await testPool.query('SELECT 1 + 1 AS sum');
@@ -245,6 +309,12 @@ describe('userRepository', () => {
   docker compose rm -v -s -f backend
   docker compose up -d --build backend
   ```
+* **`bun test` 跑出遠多於預期的測試數量，或直接卡住**：`bun test <dir>` 的參數是**路徑子字串**過濾條件，
+  而非目錄。由於 `backend/tsconfig.json` 的 `include` 包含 `tests/**/*`，執行 `pnpm build` 會把測試一併編譯到
+  `backend/dist/backend/tests/…`，這些檔案同樣符合過濾條件，於是整套測試會以過期的第二份副本再跑一次。
+  `backend/bunfig.toml` 已設定 `pathIgnorePatterns = ["**/dist/**"]` 來避免此問題；
+  若你以繞過 bunfig 的方式呼叫 `bun test`，請自行加上 `--path-ignore-patterns='**/dist/**'`，
+  或以 `rm -rf backend/dist` 清除過期建置產物。
 * **`DATABASE_URL_TEST is not set`**：請確認 `backend/.env.test` 是否存在。若不存在：
   ```bash
   cp backend/.env.test.example backend/.env.test

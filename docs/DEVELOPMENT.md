@@ -26,7 +26,32 @@ docker compose build
 docker compose up -d
 ```
 
-Uploaded files are stored in whatever source is mounted to `/app/uploads` for the backend container. By default, this is the Docker named volume `app_uploads`. Attachments live under `/app/uploads/attachments/` and avatars use `/app/uploads/avatars/`.
+Uploaded files are stored in whatever source is mounted to `/workspace/backend/uploads` for the backend container. By default, this is the Docker named volume `app_uploads`. Attachments live under `/workspace/backend/uploads/attachments/` and avatars use `/workspace/backend/uploads/avatars/`.
+
+> **Upgrading from an older checkout**: the dev containers now lay the repo out
+> as a pnpm workspace at `/workspace`, so the backend moved from `/app` to
+> `/workspace/backend`. Rebuild with:
+>
+> ```bash
+> docker compose up -d --build --renew-anon-volumes
+> ```
+>
+> **Do not use `docker compose down -v`.** `-v` removes the named `pgdata` and
+> `app_uploads` volumes, which would wipe your dev database and every uploaded
+> file. It is not required here: the old anonymous `node_modules` volume was
+> mounted at `/app/node_modules` and the new one is at
+> `/workspace/backend/node_modules`, so the two cannot shadow each other — the
+> old volume is simply left orphaned (clear it later with `docker volume prune`
+> if you like).
+>
+> One known consequence, accepted deliberately rather than papered over with a
+> compatibility shim: attachments uploaded *before* this change stored an
+> absolute `/app/uploads/...` path, and `attachmentRoutes.ts` streams a stored
+> absolute path verbatim without relocating it. Those rows will 404 after the
+> move. The files themselves are still in the `app_uploads` volume under the new
+> path. This affects local dev data only — production is unchanged, since
+> `docker-compose.prod.yml` still runs with `/app` as the working directory. Just
+> re-upload anything you still need.
 
 If you want uploads to go to a custom folder on the host instead of the default named volume, set `UPLOADS_MOUNT_SOURCE` in `.env` before running Docker Compose:
 
@@ -144,13 +169,52 @@ The development environment runs entirely within Docker. There is no `node_modul
 
 Testing database setup: Integration tests run against an ephemeral Postgres test database instance (`db-test`) defined in `docker-compose.test.yml`, separating development data from tests.
 
+### Installing Dependencies
+This repository is a **single-lockfile pnpm workspace**. There is exactly one
+`pnpm-lock.yaml`, at the repo root, covering the root, `frontend/` and `backend/`.
+
+```bash
+# Always install from the repository root
+pnpm install
+```
+
+**Never run `pnpm install` inside `frontend/` or `backend/`.** Doing so creates a
+nested `frontend/pnpm-lock.yaml` or `backend/pnpm-lock.yaml` that drifts away
+from the root one — which is exactly the failure issue #420 documented. CI
+rejects any committed nested lockfile.
+
+The pnpm version is pinned by `"packageManager"` in the root `package.json`;
+`corepack enable` is enough to pick it up. Target a single package with a
+workspace filter, using the **package name** rather than the directory name:
+
+```bash
+pnpm --filter near-chat-frontend <script>
+pnpm --filter near-chat-backend <script>
+```
+
+> **After changing dependencies, rebuild with `--renew-anon-volumes`:**
+>
+> ```bash
+> docker compose up -d --build --renew-anon-volumes
+> ```
+>
+> Each service keeps an anonymous volume on its `node_modules` so the source bind
+> mount does not hide it. Under a pnpm workspace that directory is only a farm of
+> symlinks into the real store at `/workspace/node_modules/.pnpm`, which lives in
+> the **image**. `docker compose up --build` reuses the existing anonymous volume
+> rather than re-seeding it from the new image, so after a version change the
+> persisted links can point at store paths the new image no longer has — and the
+> dev server or a migration fails on a module it cannot resolve.
+> `--renew-anon-volumes` recreates only those anonymous volumes; the named
+> `pgdata` and `app_uploads` volumes are untouched.
+
 ### Running TypeScript Type Checks
 ```bash
 # Backend Check
-pnpm --prefix backend exec tsc --noEmit
+pnpm --filter near-chat-backend exec tsc --noEmit
 
 # Frontend Check
-pnpm --prefix frontend exec tsc --noEmit
+pnpm --filter near-chat-frontend exec tsc --noEmit
 ```
 
 ### Running ESLint Checks
@@ -158,7 +222,7 @@ Before committing code or during development, run the linter to verify code form
 
 ```bash
 # Run linting check in the frontend directory
-pnpm --prefix frontend run lint
+pnpm --filter near-chat-frontend lint
 
 # Or run it inside the frontend Docker container
 docker compose exec frontend pnpm run lint
@@ -175,20 +239,20 @@ Integration tests require starting the ephemeral test database (which automatica
 
 ```bash
 # 1. Start the ephemeral test database & automatically apply migrations
-pnpm -C backend run test:db:up
+pnpm --filter near-chat-backend test:db:up
 
 # 2. Run the integration test suite
 docker compose exec backend bun run test:integration
 
 # 3. Stop the test database
-pnpm -C backend run test:db:down
+pnpm --filter near-chat-backend test:db:down
 ```
 
 ### Running All Tests
 ```bash
-pnpm -C backend run test:db:up
+pnpm --filter near-chat-backend test:db:up
 docker compose exec backend bun run test
-pnpm -C backend run test:db:down
+pnpm --filter near-chat-backend test:db:down
 ```
 
 ---
@@ -198,6 +262,22 @@ pnpm -C backend run test:db:down
 ### Unit Tests
 * **Path**: `backend/tests/unit/**/*.test.ts`
 * **Guidelines**: Mock database repositories using `mock.module()` to test business logic in isolation without making real database connections.
+
+> **`mock.module()` is process-global.** Every suite now runs as a single
+> `bun test <dir>` process, so a `mock.module()` call in one file replaces that
+> module for *every* file in the same run — and it takes effect at load time, so
+> it can affect files that run before it. Two consequences:
+> * Keep `mock.module()` to `tests/unit/`, never `tests/integration/` or
+>   `tests/e2e/`. A test that mocks `src/models/db` is a unit test by
+>   definition; if it needs a real database it belongs in another tier.
+> * Prefer `spyOn(namespace, 'fn')` with `mockRestore()` when you only need to
+>   replace a function — that genuinely restores, whereas re-calling
+>   `mock.module()` in `afterAll` does not.
+>
+> **Never close a shared singleton in a hook.** `src/models/db` and
+> `tests/helpers/testPool` both export a process-wide connection. Calling
+> `.end()` on either in `afterAll` closes it for every later file in the run.
+> Let the process exit release it.
 
 ```typescript
 // Example: backend/tests/unit/services/userService.test.ts
@@ -216,7 +296,7 @@ describe('userService', () => {
 
 ```typescript
 // Example: backend/tests/integration/repositories/userRepository.test.ts
-import { beforeEach, afterAll, describe, it, expect } from 'bun:test';
+import { beforeEach, describe, it, expect } from 'bun:test';
 import { testPool } from '../helpers/testPool';
 import { resetDb } from '../helpers/resetDb';
 
@@ -225,9 +305,8 @@ describe('userRepository', () => {
     await resetDb(); // Clears users, rooms, messages, room_members
   });
 
-  afterAll(async () => {
-    await testPool.end(); // Closes pool connection
-  });
+  // Do NOT call `testPool.end()` here — it is a module singleton shared by
+  // every test file in the run, and closing it breaks all later files.
 
   it('queries database successfully', async () => {
     const result = await testPool.query('SELECT 1 + 1 AS sum');
@@ -245,6 +324,14 @@ describe('userRepository', () => {
   docker compose rm -v -s -f backend
   docker compose up -d --build backend
   ```
+* **`bun test` runs far more tests than expected, or hangs**: `bun test <dir>`
+  treats its argument as a path *substring* filter, not a directory. Because
+  `backend/tsconfig.json` includes `tests/**/*`, running `pnpm build` emits
+  compiled copies to `backend/dist/backend/tests/…`, which also match the filter
+  and run as a stale second copy of the suite. `backend/bunfig.toml` sets
+  `pathIgnorePatterns = ["**/dist/**"]` to prevent this — if you invoke `bun test`
+  with a config that bypasses bunfig, add `--path-ignore-patterns='**/dist/**'`,
+  or clear the stale build with `rm -rf backend/dist`.
 * **`DATABASE_URL_TEST is not set`**: Ensure `backend/.env.test` exists. If not:
   ```bash
   cp backend/.env.test.example backend/.env.test
