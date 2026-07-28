@@ -27,7 +27,6 @@
         ],
         "message": "chore(release): ${nextRelease.version} [skip release]\n\n${nextRelease.notes}"
       }
-    ],
-    "@semantic-release/github"
+    ]
   ]
 }
