@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
     paths-ignore:
       - 'docs/**'
       - 'README.md'
@@ -11,7 +11,7 @@ on:
       - 'LICENSE'
       - 'AGENTS.md'
   pull_request:
-    branches: [main, dev]
+    branches: [main]
     paths-ignore:
       - 'docs/**'
       - 'README.md'

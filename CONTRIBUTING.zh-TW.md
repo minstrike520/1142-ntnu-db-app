@@ -21,11 +21,12 @@
 
 ## 1. Git 工作流程與分支規範
 
-* **主要開發分支**：本專案的主要開發分支為 **`dev`**。
+* **主要開發分支**：本專案的主要開發分支為 **`main`**。
 * **分支策略**：
-  - 所有的開發都應從 `dev` 分支切出（例如：`feat/my-feature` 或 `fix/my-bug`）。
-  - 所有的 Pull Request 都必須提交回 `dev` 分支。
-  - 請避免將變更直接 Push 至 `main` 或 `dev` 分支。
+  - 所有的開發都應從 `main` 分支切出（例如：`feat/my-feature` 或 `fix/my-bug`）。
+  - 所有的 Pull Request 都必須提交回 `main` 分支。
+  - 請避免將變更直接 Push 至 `main` 分支。
+* **版本發布**：發布是在 `main` 上推送版本 tag（例如 `v1.2.0`）觸發，不再維護長期的發布分支。
 
 ---
 
@@ -143,7 +144,7 @@ docker compose exec backend pnpm run db:seed
 ## 7. 提交 Pull Request
 
 1. **自我檢查**：請先在本地執行 ESLint、型別檢查與所有測試。
-2. **分支對象**：確保 PR 的 Base Branch 設定為 **`dev`**。
+2. **分支對象**：確保 PR 的 Base Branch 設定為 **`main`**。
 3. **Commit 訊息**：檢查 Commit 訊息是否符合 Conventional Commit 格式。
 4. **內容描述**：請套用我們的 Pull Request 範本，並以 **繁體中文 (Traditional Chinese)** 描述您的變更。
 5. **測試計畫**：在 PR 說明中清楚記錄您的驗證步驟。

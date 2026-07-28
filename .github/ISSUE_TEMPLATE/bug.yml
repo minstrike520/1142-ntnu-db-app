@@ -66,7 +66,7 @@ body:
     attributes:
       label: 6. Checks (確認事項)
       options:
-        - label: I confirm this issue exists on the latest dev branch.
+        - label: I confirm this issue exists on the latest main branch.
           required: true
         - label: I have provided reproduction steps and sufficient log/error details.
           required: true

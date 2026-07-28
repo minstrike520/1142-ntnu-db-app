@@ -21,11 +21,12 @@ Please read through this guide to understand our development, testing, and contr
 
 ## 1. Git Workflow & Branching
 
-* **Active Development Branch**: The main branch for development is **`dev`**.
+* **Active Development Branch**: The main branch for development is **`main`**.
 * **Branching Strategy**: 
-  - Always branch off `dev` (e.g., `feat/my-feature` or `fix/my-bug`).
-  - Submit all Pull Requests back to the `dev` branch.
-  - Avoid pushing changes directly to `main` or `dev`.
+  - Always branch off `main` (e.g., `feat/my-feature` or `fix/my-bug`).
+  - Submit all Pull Requests back to the `main` branch.
+  - Avoid pushing changes directly to `main`.
+* **Releases**: Releases are cut by pushing a version tag (e.g., `v1.2.0`) on `main`; there is no long-lived release branch.
 
 ---
 
@@ -143,7 +144,7 @@ For details, refer to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 ## 7. Submitting a Pull Request
 
 1. **Self-Review**: Run ESLint, Type checks, and the full test suite locally.
-2. **Branch base**: Ensure the base branch of your PR is set to **`dev`**.
+2. **Branch base**: Ensure the base branch of your PR is set to **`main`**.
 3. **Commit Messages**: Verify your commit messages match the Conventional Commit format.
 4. **Description**: Describe your changes in **Traditional Chinese (繁體中文)** using our Pull Request Template.
 5. **Test Plan**: Document your verification steps clearly in the PR description.
