@@ -30,9 +30,21 @@ Uploaded files are stored in whatever source is mounted to `/workspace/backend/u
 
 > **Upgrading from an older checkout**: the dev containers now lay the repo out
 > as a pnpm workspace at `/workspace`, so the backend moved from `/app` to
-> `/workspace/backend`. Run `docker compose down -v` once before rebuilding —
-> the old anonymous `node_modules` volumes are mounted by path and would
-> otherwise shadow the new layout. This also resets the uploads volume.
+> `/workspace/backend`. No special step is needed — just rebuild:
+>
+> ```bash
+> docker compose up -d --build
+> ```
+>
+> **Do not use `docker compose down -v`.** `-v` removes the named `pgdata` and
+> `app_uploads` volumes, which would wipe your dev database and every uploaded
+> file. It is not required here: the old anonymous `node_modules` volume was
+> mounted at `/app/node_modules` and the new one is at
+> `/workspace/backend/node_modules`, so the two cannot shadow each other — the
+> old volume is simply left orphaned (clear it later with `docker volume prune`
+> if you like). Attachments uploaded before the move keep working too: their
+> stored absolute paths are used verbatim on download, so the image symlinks
+> `/app/uploads` to the new location.
 
 If you want uploads to go to a custom folder on the host instead of the default named volume, set `UPLOADS_MOUNT_SOURCE` in `.env` before running Docker Compose:
 

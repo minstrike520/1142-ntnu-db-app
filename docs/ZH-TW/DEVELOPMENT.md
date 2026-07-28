@@ -29,8 +29,18 @@ docker compose up -d
 上傳的檔案會儲存在掛載到後端容器內 `/workspace/backend/uploads` 的來源中。預設為 Docker 命名磁碟卷 `app_uploads`。附件會存放在 `/workspace/backend/uploads/attachments/`，而頭像則會使用 `/workspace/backend/uploads/avatars/`。
 
 > **從舊版 checkout 升級時**：開發容器現在以 pnpm workspace 的形式配置於 `/workspace`，
-> 後端因此由 `/app` 移至 `/workspace/backend`。重新建置前請先執行一次 `docker compose down -v` ——
-> 舊的匿名 `node_modules` volume 是依路徑掛載的，否則會遮蔽新的目錄結構。此指令同時會重置 uploads volume。
+> 後端因此由 `/app` 移至 `/workspace/backend`。不需要任何特殊步驟，直接重新建置即可：
+>
+> ```bash
+> docker compose up -d --build
+> ```
+>
+> **請勿使用 `docker compose down -v`。** `-v` 會一併刪除具名的 `pgdata` 與 `app_uploads`，
+> 也就是清空你的開發資料庫與所有已上傳檔案。此處並不需要這麼做：舊的匿名 `node_modules`
+> volume 掛載於 `/app/node_modules`，新的則在 `/workspace/backend/node_modules`，
+> 兩者路徑不同因而不會互相遮蔽 —— 舊 volume 只會被留下成為孤兒
+> （日後可用 `docker volume prune` 清理）。搬遷前上傳的附件同樣不受影響：
+> 這些記錄的絕對路徑在下載時是被原樣使用的，因此映像中已將 `/app/uploads` symlink 至新位置。
 
 如果您希望將上傳檔案儲存在主機上的自訂資料夾中，而非預設的命名磁碟卷，請在執行 Docker Compose 前在 `.env` 中設定 `UPLOADS_MOUNT_SOURCE`：
 
