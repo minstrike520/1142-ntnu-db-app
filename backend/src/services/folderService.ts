@@ -1,7 +1,7 @@
-import { IFolderRepository } from '../repositories/folderRepository';
-import type { IRoomMemberRepository } from '../repositories/IRoomMemberRepository';
+import { IFolderRepository } from '../models/folderRepository';
+import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
 import type { Folder } from '../../../shared/types';
-import { ForbiddenError } from '../errors/AppError';
+import { ForbiddenError } from '../utils/AppError';
 
 export interface FolderService {
   createFolder(userId: string, name: string): Promise<Folder>;

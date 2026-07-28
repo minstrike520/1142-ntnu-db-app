@@ -1,8 +1,14 @@
 "use client";
 
-import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
+import React, { useCallback, useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { useChat, getAvatarForUser, Message } from "@/context/ChatContext";
+import {
+  useChat,
+  useRightPanel,
+  useTypingUsers,
+  getAvatarForUser,
+  Message,
+} from "@/context/ChatContext";
 import { resolveAssetUrl } from "@/lib/assets";
 import { Button } from "@/components/ui/Button";
 import { Dropdown } from "@/components/ui/Dropdown";
@@ -12,7 +18,12 @@ import { ChatBubble } from "@/components/ui/ChatBubble";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
-import { Icon } from "@iconify/react";
+import SliderVerticalIcon from "@iconify-react/boxicons/slider-vertical";
+import SearchIcon from "@iconify-react/boxicons/search";
+import DotsHorizontalRoundedIcon from "@iconify-react/boxicons/dots-horizontal-rounded";
+import SidebarRightIcon from "@iconify-react/boxicons/sidebar-right";
+import XIcon from "@iconify-react/boxicons/x";
+import PaperclipIcon from "@iconify-react/boxicons/paperclip";
 
 interface ChatroomProps {
   roomId: string;
@@ -34,11 +45,201 @@ interface MentionCandidate {
 
 const EVERYONE_MENTION = "everyone";
 
+// Kept outside the component (and free of React Compiler restrictions): the
+// conditional expression inside a component-level try/catch would make the
+// compiler skip the whole component (see docs/frontend-react-render-optimization.md).
+const reportActionError = (error: unknown, fallback: string) => {
+  console.error(error);
+  alert(error instanceof Error ? error.message : fallback);
+};
+
 const formatFileSize = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
+
+// Isolated so remote typing events (which fire on every peer keystroke) only
+// re-render this one element instead of the whole conversation pane.
+function TypingIndicator({ roomId }: { roomId: string }) {
+  const typingUsers = useTypingUsers();
+  const names = typingUsers[roomId] ?? [];
+  if (names.length === 0) return null;
+  const label =
+    names.length === 1
+      ? `${names[0]} is typing...`
+      : `${names.slice(0, 2).join(", ")} are typing...`;
+  return (
+    <div className="px-3 md:px-6 py-1 text-xs text-text-muted italic select-none">
+      {label}
+    </div>
+  );
+}
+
+interface ReadReceiptReader {
+  name: string;
+  displayName?: string;
+  avatarUrl: string;
+}
+
+interface MessageRowProps {
+  msg: Message;
+  members?: { userId: string; name: string; role: string; nickname?: string; avatarUrl?: string }[];
+  showUnreadMarker: boolean;
+  isRead: boolean;
+  readers?: ReadReceiptReader[];
+  isRoomOwner: boolean;
+  isRoomAdmin: boolean;
+  currentUsername: string;
+  currentUserAvatar: string;
+  searchHighlight?: string;
+  onReply: (msg: Message) => void;
+  onEdit: (msg: Message) => void;
+  onRecall: (msgId: string) => void;
+}
+
+/**
+ * One message row (unread marker + bubble + read receipts + hover actions).
+ *
+ * Wrapped in React.memo with identity-stable callbacks from Chatroom so that
+ * appending one message — or any unrelated Chatroom state change — only
+ * renders the rows whose props actually changed, instead of the whole list
+ * (hotspot #3, issue #383). Do not pass freshly-created objects/closures from
+ * the parent, or the memo boundary silently stops working; the render-count
+ * assertions in tests/chat-memoization.test.tsx guard this.
+ */
+const MessageRow = React.memo(function MessageRow({
+  msg,
+  members,
+  showUnreadMarker,
+  isRead,
+  readers,
+  isRoomOwner,
+  isRoomAdmin,
+  currentUsername,
+  currentUserAvatar,
+  searchHighlight,
+  onReply,
+  onEdit,
+  onRecall,
+}: MessageRowProps) {
+  const { t } = useTranslation();
+
+  const unreadMarker = showUnreadMarker ? (
+    <div data-unread-marker="true" className="w-full flex items-center my-3 select-none">
+      <div className="flex-1 border-t border-red-500/50"></div>
+      <span className="px-3 text-red-500 text-xs font-semibold uppercase tracking-wider font-sans">
+        {t("chatroom.newMessages")}
+      </span>
+      <div className="flex-1 border-t border-red-500/50"></div>
+    </div>
+  ) : null;
+
+  if (msg.content.startsWith("[System] ")) {
+    return (
+      <>
+        {unreadMarker}
+        <div data-msg-id={msg.id} className="w-full flex justify-center my-2 select-none">
+          <div className="bg-surface-card border border-border-secondary px-3 py-1 rounded-full text-xs text-text-muted">
+            {msg.content.substring(9)}
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  const senderMember = members?.find((m) => m.userId === msg.senderId);
+  const displayName = senderMember?.nickname || msg.senderName;
+  const isSenderOwnerOrAdmin = senderMember?.role === "owner" || senderMember?.role === "admin";
+  const canAdminRecall = isRoomAdmin && !isSenderOwnerOrAdmin;
+  const canRecall = Boolean(msg.isOutgoing) || isRoomOwner || canAdminRecall;
+
+  return (
+    <>
+      {unreadMarker}
+      <div
+        data-msg-id={msg.id}
+        className={`group/msg flex flex-col ${msg.isOutgoing ? "items-end" : "items-start"}`}
+      >
+        <ChatBubble
+          content={msg.content}
+          senderName={displayName}
+          timestamp={msg.timestamp}
+          isOutgoing={msg.isOutgoing}
+          isHighEmphasis={msg.isOutgoing}
+          isRecalled={msg.isRecalled}
+          replyTo={msg.replyTo || undefined}
+          attachments={msg.attachments}
+          senderAvatar={
+            msg.isOutgoing
+              ? currentUserAvatar
+              : senderMember?.avatarUrl
+              ? resolveAssetUrl(senderMember.avatarUrl)
+              : undefined
+          }
+          isRead={isRead}
+          senderId={msg.senderId || undefined}
+          messageId={msg.id}
+          onReply={() => onReply(msg)}
+          onRecall={() => onRecall(msg.id)}
+          onEdit={() => onEdit(msg)}
+          canRecall={canRecall}
+          canEdit={msg.isOutgoing && !msg.isRecalled}
+          avatarName={
+            msg.isOutgoing ? currentUsername : senderMember?.name || msg.senderName
+          }
+          searchHighlight={searchHighlight}
+        />
+
+        {/* Render read receipt avatars on the far right of the screen */}
+        {readers && readers.length > 0 && (
+          <div className="self-stretch flex gap-1 mt-1 justify-end px-0.5 select-none">
+            {readers.map((reader, idx) => (
+              <div
+                key={idx}
+                className="h-4.5 w-4.5 border border-border-primary bg-surface-muted rounded-sm overflow-hidden flex items-center justify-center"
+                title={reader.displayName || reader.name}
+              >
+                {reader.avatarUrl ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img src={resolveAssetUrl(reader.avatarUrl)} alt={reader.name} className="h-full w-full object-cover" />
+                ) : (
+                  <span className="text-[8px] font-bold leading-none">
+                    {reader.name
+                      .split(" ")
+                      .map((n) => n[0])
+                      .join("")
+                      .slice(0, 2)
+                      .toUpperCase() || "U"}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!msg.isRecalled && (
+          <div className="opacity-0 group-hover/msg:opacity-100 flex gap-2.5 mt-1 select-none text-[10px] text-text-muted transition-opacity">
+            <button
+              onClick={() => onReply(msg)}
+              className="hover:text-primary transition-colors cursor-pointer"
+            >
+              {t("chatroom.reply")}
+            </button>
+            {canRecall && (
+              <button
+                onClick={() => onRecall(msg.id)}
+                className="hover:text-danger transition-colors cursor-pointer"
+              >
+                {t("chatroom.recall")}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+});
 
 const getMentionDraft = (value: string, cursorPosition: number): MentionDraft | null => {
   const beforeCursor = value.slice(0, cursorPosition);
@@ -71,13 +272,10 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     handleUpdateMessage,
     handleModifyNickname,
     handleLeaveOrBlock,
-    getReadAvatarsForMessage,
-    showRightPanel,
-    setShowRightPanel,
-    typingUsers,
     groupReadStates,
     markRoomAsRead,
   } = useChat();
+  const { showRightPanel, setShowRightPanel } = useRightPanel();
 
   const [inputText, setInputText] = useState("");
   const [mentionDraft, setMentionDraft] = useState<MentionDraft | null>(null);
@@ -308,6 +506,20 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     }
   };
 
+  // Identity-stable callbacks for the memoized MessageRow list. Inline
+  // closures here would invalidate every row's memo on each Chatroom render.
+  const handleReplySelect = useCallback((msg: Message) => {
+    setReplyTarget(msg);
+  }, []);
+
+  const handleEditSelect = useCallback((msg: Message) => {
+    setEditingMessage(msg);
+    setInputText(msg.content);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  }, []);
+
   if (!activeRoom) {
     return (
       <div className="flex-1 flex items-center justify-center bg-background text-foreground font-sans">
@@ -315,6 +527,67 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
       </div>
     );
   }
+
+  // ---- Derived message-list tables ----------------------------------------
+  // Plain derivations (no useMemo): the React Compiler memoizes them against
+  // their inputs now that this component compiles again (no try/finally).
+  const roomMessages = messages.filter((m) => m.roomId === activeRoom.id);
+  const normalizedSearchQuery = msgSearchQuery.trim().toLowerCase();
+  const visibleMessages = normalizedSearchQuery
+    ? roomMessages.filter(
+        (m) =>
+          !m.content.startsWith("[System] ") &&
+          m.content.toLowerCase().includes(normalizedSearchQuery),
+      )
+    : roomMessages;
+
+  // Read-receipt avatars, grouped once per read-state change instead of a
+  // per-message scan over all members.
+  const roomReads = groupReadStates[activeRoom.id];
+  const readersByMessageId = new Map<string, ReadReceiptReader[]>();
+  if (roomReads) {
+    for (const [readerId, lastReadId] of Object.entries(roomReads)) {
+      if (readerId === user.userId) continue;
+      const member = activeRoom.members?.find((m) => m.userId === readerId);
+      const reader: ReadReceiptReader = {
+        name: member?.name ?? readerId,
+        displayName: member?.nickname ?? member?.name ?? readerId,
+        avatarUrl: member?.avatarUrl ?? "",
+      };
+      const readers = readersByMessageId.get(lastReadId);
+      if (readers) {
+        readers.push(reader);
+      } else {
+        readersByMessageId.set(lastReadId, [reader]);
+      }
+    }
+  }
+
+  // In private chats an outgoing message counts as read when it is at or
+  // before the other member's last-read message.
+  let otherLastReadIndex = -1;
+  if (activeRoom.type === "msg") {
+    const otherUserId =
+      activeRoom.otherMemberId ||
+      activeRoom.members?.find((m) => m.userId !== user.userId)?.userId;
+    const otherLastReadId = otherUserId ? roomReads?.[otherUserId] : undefined;
+    if (otherLastReadId) {
+      otherLastReadIndex = roomMessages.findIndex((m) => m.id === otherLastReadId);
+    }
+  }
+  const messageIndexById = new Map(roomMessages.map((m, i) => [m.id, i]));
+  const rowIsRead = (msg: Message): boolean => {
+    if (msg.isRead) return true;
+    if (activeRoom.type !== "msg" || !msg.isOutgoing || otherLastReadIndex === -1) {
+      return false;
+    }
+    const idx = messageIndexById.get(msg.id);
+    return idx !== undefined && idx <= otherLastReadIndex;
+  };
+
+  const myMember = activeRoom.members?.find((m) => m.userId === user.userId);
+  const isRoomOwnerForRecall = myMember?.role === "owner";
+  const isRoomAdminForRecall = myMember?.role === "admin";
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -327,12 +600,13 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
         setEditingMessage(null);
         setInputText("");
       } catch (error) {
-        console.error(error);
-        alert(error instanceof Error ? error.message : "Failed to update message");
+        reportActionError(error, "Failed to update message");
       }
       return;
     }
 
+    // No `finally` here: a try/finally (or conditional expressions inside
+    // try/catch) makes the React Compiler bail out of the entire component.
     try {
       if (pendingAttachments.length > 0) {
         setIsUploadingAttachment(true);
@@ -348,10 +622,9 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
       handleTyping(activeRoom.id, false);
       setInputText("");
       setReplyTarget(null);
+      setIsUploadingAttachment(false);
     } catch (error) {
-      console.error(error);
-      alert(error instanceof Error ? error.message : "Failed to send message");
-    } finally {
+      reportActionError(error, "Failed to send message");
       setIsUploadingAttachment(false);
     }
   };
@@ -383,11 +656,11 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     e.preventDefault();
     if (!activeRoom) return;
     const trimmed = nickInputValue.trim();
+    const nextNickname = trimmed || user.username;
     try {
-      await handleModifyNickname(activeRoom.id, trimmed || user.username);
+      await handleModifyNickname(activeRoom.id, nextNickname);
     } catch (error) {
-      console.error(error);
-      alert(error instanceof Error ? error.message : "Failed to update nickname");
+      reportActionError(error, "Failed to update nickname");
     }
     setIsModifyNickOpen(false);
   };
@@ -523,7 +796,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
               onClick={onOpenGroupSettings}
               className="py-1 px-3 text-xs flex items-center gap-1.5"
             >
-              <Icon icon="boxicons:slider-vertical" className="h-3.5 w-3.5" />
+              <SliderVerticalIcon aria-hidden="true" className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">{t("chatroom.groupSettings")}</span>
             </Button>
           )}
@@ -537,7 +810,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
             }`}
             title={isSearchOpen ? t("chatroom.closeSearch") : t("chatroom.searchMessages")}
           >
-            <Icon icon="boxicons:search" className="h-4 w-4" />
+            <SearchIcon aria-hidden="true" className="h-4 w-4" />
           </button>
 
           <Dropdown
@@ -546,7 +819,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
                 className="p-1.5 border border-border-secondary hover:border-border-primary rounded-sm text-text-muted hover:text-foreground transition-colors cursor-pointer"
                 title={t("chatroom.chatOptions")}
               >
-                <Icon icon="bx:dots-horizontal-rounded" className="h-4 w-4" />
+                <DotsHorizontalRoundedIcon aria-hidden="true" className="h-4 w-4" />
               </button>
             }
             items={[
@@ -576,7 +849,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
             }`}
             title={showRightPanel ? t("chatroom.hideInfoPanel") : t("chatroom.showInfoPanel")}
           >
-            <Icon icon="boxicons:sidebar-right" className="h-4 w-4" />
+            <SidebarRightIcon aria-hidden="true" className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -584,7 +857,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
       {/* Search Bar */}
       {isSearchOpen && (
         <div className="border-b border-border-primary bg-surface-card px-3 md:px-6 py-2 flex items-center gap-2 shrink-0">
-          <Icon icon="boxicons:search" className="h-4 w-4 text-text-muted shrink-0" />
+          <SearchIcon aria-hidden="true" className="h-4 w-4 text-text-muted shrink-0" />
           <input
             ref={searchInputRef}
             type="text"
@@ -596,7 +869,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
           />
           {msgSearchQuery.trim() && (
             <span className="text-[10px] text-text-muted font-mono shrink-0">
-              {messages.filter((m) => m.roomId === activeRoom.id && !m.content.startsWith("[System] ") && m.content.toLowerCase().includes(msgSearchQuery.toLowerCase().trim())).length} 筆結果
+              {visibleMessages.length} 筆結果
             </span>
           )}
           <button
@@ -604,173 +877,31 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
             onClick={handleToggleSearch}
             className="p-0.5 text-text-muted hover:text-foreground transition-colors cursor-pointer shrink-0"
           >
-            <Icon icon="boxicons:x" className="h-4 w-4" />
+            <XIcon aria-hidden="true" className="h-4 w-4" />
           </button>
         </div>
       )}
 
       {/* Chat Messages Area */}
       <div ref={scrollAreaRef} className="flex-1 overflow-y-auto p-3 md:p-6 flex flex-col gap-4">
-        {messages
-          .filter((m) => {
-            if (m.roomId !== activeRoom.id) return false;
-            const q = msgSearchQuery.trim().toLowerCase();
-            if (!q) return true;
-            return !m.content.startsWith("[System] ") && m.content.toLowerCase().includes(q);
-          })
-          .map((msg) => {
-            if (msg.content.startsWith("[System] ")) {
-              return (
-                <React.Fragment key={msg.id}>
-                  {currentRoomUnreadId === msg.id && (
-                    <div data-unread-marker="true" className="w-full flex items-center my-3 select-none">
-                      <div className="flex-1 border-t border-red-500/50"></div>
-                      <span className="px-3 text-red-500 text-xs font-semibold uppercase tracking-wider font-sans">
-                        {t("chatroom.newMessages")}
-                      </span>
-                      <div className="flex-1 border-t border-red-500/50"></div>
-                    </div>
-                  )}
-                  <div
-                    data-msg-id={msg.id}
-                    className="w-full flex justify-center my-2 select-none"
-                  >
-                    <div className="bg-surface-card border border-border-secondary px-3 py-1 rounded-full text-xs text-text-muted">
-                      {msg.content.substring(9)}
-                    </div>
-                  </div>
-                </React.Fragment>
-              );
-            }
-
-            const senderMember = activeRoom.members?.find((m) => m.userId === msg.senderId);
-            const displayName = senderMember?.nickname || msg.senderName;
-
-            // Calculate isRead for private chats
-            let isRead = msg.isRead || false;
-            if (activeRoom.type === "msg" && msg.isOutgoing) {
-              const otherUserId = activeRoom.otherMemberId || activeRoom.members?.find((m) => m.userId !== user.userId)?.userId;
-              if (otherUserId) {
-                const otherLastReadId = groupReadStates[activeRoom.id]?.[otherUserId];
-                if (otherLastReadId) {
-                  const roomMessages = messages.filter((m) => m.roomId === activeRoom.id);
-                  const msgIndex = roomMessages.findIndex((m) => m.id === msg.id);
-                  const lastReadIndex = roomMessages.findIndex((m) => m.id === otherLastReadId);
-                  isRead = lastReadIndex !== -1 && msgIndex !== -1 && msgIndex <= lastReadIndex;
-                }
-              }
-            }
-
-            const currentMember = activeRoom.members?.find((m) => m.userId === user.userId);
-            const isRoomOwner = currentMember?.role === "owner";
-            const isRoomAdmin = currentMember?.role === "admin";
-            const isSenderOwnerOrAdmin = senderMember?.role === "owner" || senderMember?.role === "admin";
-            const canAdminRecall = isRoomAdmin && !isSenderOwnerOrAdmin;
-            const canRecall = Boolean(msg.isOutgoing) || isRoomOwner || canAdminRecall;
-
-            return (
-              <React.Fragment key={msg.id}>
-                {currentRoomUnreadId === msg.id && (
-                  <div data-unread-marker="true" className="w-full flex items-center my-3 select-none">
-                    <div className="flex-1 border-t border-red-500/50"></div>
-                    <span className="px-3 text-red-500 text-xs font-semibold uppercase tracking-wider font-sans">
-                      {t("chatroom.newMessages")}
-                    </span>
-                    <div className="flex-1 border-t border-red-500/50"></div>
-                  </div>
-                )}
-                <div
-                  data-msg-id={msg.id}
-                  className={`group/msg flex flex-col ${msg.isOutgoing ? "items-end" : "items-start"}`}
-                >
-                  <ChatBubble
-                    content={msg.content}
-                    senderName={displayName}
-                    timestamp={msg.timestamp}
-                    isOutgoing={msg.isOutgoing}
-                    isHighEmphasis={msg.isOutgoing}
-                    isRecalled={msg.isRecalled}
-                    replyTo={msg.replyTo || undefined}
-                    attachments={msg.attachments}
-                    senderAvatar={
-                      msg.isOutgoing
-                        ? user.avatar
-                        : senderMember?.avatarUrl
-                        ? resolveAssetUrl(senderMember.avatarUrl)
-                        : undefined
-                    }
-                    isRead={isRead}
-                    senderId={msg.senderId || undefined}
-                    messageId={msg.id}
-                    onReply={() => setReplyTarget(msg)}
-                    onRecall={() => handleRecallMessage(msg.id)}
-                    onEdit={() => {
-                      setEditingMessage(msg);
-                      setInputText(msg.content);
-                      requestAnimationFrame(() => {
-                        inputRef.current?.focus();
-                      });
-                    }}
-                    canRecall={canRecall}
-                    canEdit={msg.isOutgoing && !msg.isRecalled}
-                    avatarName={
-                      msg.isOutgoing
-                        ? user.username
-                        : senderMember?.name || msg.senderName
-                    }
-                    searchHighlight={msgSearchQuery.trim() || undefined}
-                  />
-
-                  {/* Render read receipt avatars on the far right of the screen */}
-                  {((activeRoom.type === "group" || activeRoom.type === "msg") &&
-                    getReadAvatarsForMessage(activeRoom, msg).length > 0) && (
-                    <div className="self-stretch flex gap-1 mt-1 justify-end px-0.5 select-none">
-                      {getReadAvatarsForMessage(activeRoom, msg).map((reader, idx) => (
-                        <div
-                          key={idx}
-                          className="h-4.5 w-4.5 border border-border-primary bg-surface-muted rounded-sm overflow-hidden flex items-center justify-center"
-                          title={reader.displayName || reader.name}
-                        >
-                          {reader.avatarUrl ? (
-                            /* eslint-disable-next-line @next/next/no-img-element */
-                            <img src={resolveAssetUrl(reader.avatarUrl)} alt={reader.name} className="h-full w-full object-cover" />
-                          ) : (
-                            <span className="text-[8px] font-bold leading-none">
-                              {reader.name
-                                .split(" ")
-                                .map((n) => n[0])
-                                .join("")
-                                .slice(0, 2)
-                                .toUpperCase() || "U"}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {!msg.isRecalled && (
-                    <div className="opacity-0 group-hover/msg:opacity-100 flex gap-2.5 mt-1 select-none text-[10px] text-text-muted transition-opacity">
-                      <button
-                        onClick={() => setReplyTarget(msg)}
-                        className="hover:text-primary transition-colors cursor-pointer"
-                      >
-                        {t("chatroom.reply")}
-                      </button>
-                      {canRecall && (
-                        <button
-                          onClick={() => handleRecallMessage(msg.id)}
-                          className="hover:text-danger transition-colors cursor-pointer"
-                        >
-                          {t("chatroom.recall")}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </React.Fragment>
-            );
-          })}
+        {visibleMessages.map((msg) => (
+          <MessageRow
+            key={msg.id}
+            msg={msg}
+            members={activeRoom.members}
+            showUnreadMarker={currentRoomUnreadId === msg.id}
+            isRead={rowIsRead(msg)}
+            readers={readersByMessageId.get(msg.id)}
+            isRoomOwner={isRoomOwnerForRecall}
+            isRoomAdmin={isRoomAdminForRecall}
+            currentUsername={user.username}
+            currentUserAvatar={user.avatar}
+            searchHighlight={msgSearchQuery.trim() || undefined}
+            onReply={handleReplySelect}
+            onEdit={handleEditSelect}
+            onRecall={handleRecallMessage}
+          />
+        ))}
         <div ref={messageEndRef} />
       </div>
 
@@ -786,23 +917,12 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
             onClick={() => setReplyTarget(null)}
             className="text-text-muted hover:text-foreground cursor-pointer p-0.5 border border-transparent hover:border-border-primary rounded-sm ml-4"
           >
-            <Icon icon="boxicons:x" className="h-3.5 w-3.5" />
+            <XIcon aria-hidden="true" className="h-3.5 w-3.5" />
           </button>
         </div>
       )}
 
-      {(() => {
-        const names = typingUsers[activeRoom.id] ?? [];
-        if (names.length === 0) return null;
-        const label = names.length === 1
-          ? `${names[0]} is typing...`
-          : `${names.slice(0, 2).join(", ")} are typing...`;
-        return (
-          <div className="px-3 md:px-6 py-1 text-xs text-text-muted italic select-none">
-            {label}
-          </div>
-        );
-      })()}
+      <TypingIndicator roomId={activeRoom.id} />
 
       {/* Input Box Area */}
       <div className="border-t border-border-primary bg-surface-card px-3 py-3 md:px-6 md:py-4 shrink-0">
@@ -861,7 +981,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
                 title={t("chatroom.uploadAttachment")}
                 className="p-2.5 border border-border-secondary hover:border-border-primary rounded-sm text-text-muted hover:text-foreground transition-colors cursor-pointer shrink-0 mb-0.5"
               >
-                <Icon icon="boxicons:paperclip" className="h-4 w-4" />
+                <PaperclipIcon aria-hidden="true" className="h-4 w-4" />
               </button>
               <div className="relative flex-1">
                 {editingMessage && (

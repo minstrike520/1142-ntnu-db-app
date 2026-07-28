@@ -1,10 +1,10 @@
-import { AppError, ValidationError } from '../errors/AppError';
-import type { makeFriendRepository } from '../repositories/friendRepository';
+import { AppError, ConflictError, ValidationError } from '../utils/AppError';
+import type { makeFriendRepository } from '../models/friendRepository';
 import { isUserOnline } from '../realtime/presence';
 
 export function makeFriendService(
   repo: ReturnType<typeof makeFriendRepository>,
-  notifyUser?: (userId: string, eventName: string, payload: any) => void,
+  notifyUser?: (userId: string, eventName: string, payload: unknown) => void,
   privateRooms?: {
     markPrivateReadOnly(userA: string, userB: string): Promise<void>;
     createPrivate?(userA: string, userB: string): Promise<unknown>;
@@ -40,7 +40,16 @@ export function makeFriendService(
         return accepted;
       }
 
-      const request = await repo.sendFriendRequest(requesterId, targetUserId);
+      let request;
+      try {
+        request = await repo.sendFriendRequest(requesterId, targetUserId);
+      } catch (err: unknown) {
+        const pgErr = err as { code?: string; message?: string };
+        if (pgErr?.code === '23505' || (typeof pgErr?.message === 'string' && (pgErr.message.includes('23505') || pgErr.message.includes('duplicate key')))) {
+          throw new ConflictError('Friend request already sent');
+        }
+        throw err;
+      }
       
       if (notifyUser) {
         notifyUser(targetUserId, 'friend_request', request);
@@ -110,7 +119,7 @@ export function makeFriendService(
         notifyUser(friendId, 'friend_request', {
           requesterId: userId,
           addresseeId: friendId,
-          status: 'deleted' as any,
+          status: 'deleted',
           createdAt: new Date(),
         });
       }
@@ -126,7 +135,7 @@ export function makeFriendService(
         notifyUser(targetUserId, 'friend_request', {
           requesterId: userId,
           addresseeId: targetUserId,
-          status: 'blocked' as any,
+          status: 'blocked',
           createdAt: new Date(),
         });
       }
@@ -142,7 +151,7 @@ export function makeFriendService(
         notifyUser(blockedId, 'friend_request', {
           requesterId: userId,
           addresseeId: blockedId,
-          status: 'unblocked' as any,
+          status: 'unblocked',
           createdAt: new Date(),
         });
       }

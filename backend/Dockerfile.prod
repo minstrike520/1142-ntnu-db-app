@@ -1,55 +1,69 @@
-# Stage 1: Build the backend application
-FROM node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS builder
+# Stage 1: Install + typecheck against the pnpm workspace.
+#
+# Previously this stage copied the ROOT pnpm-lock.yaml and then ran
+# `bun install`, which ignores pnpm lockfiles entirely — the image was
+# effectively built from unpinned dependency resolution.
+FROM oven/bun:1.3.14-slim AS builder
 ENV CI=true
 
-RUN apt-get update -y && apt-get install -y openssl
-RUN corepack enable && corepack prepare pnpm@11.15.0 --activate
+# pnpm 11 requires `node:sqlite`, which bun does not implement, so pnpm cannot
+# execute on a bun-only image. Graft the node toolchain in rather than switching
+# the base image — bun stays the runtime. (Approach from #419.)
+COPY --from=node:24-slim /usr/local/ /usr/local/
+RUN corepack enable pnpm && corepack prepare pnpm@11.15.0 --activate
 
 WORKDIR /workspace
 
-# Copy global typescript and workspace configs
-COPY tsconfig.base.json package.json ./
-COPY shared/ ./shared/
+# All workspace manifests are required: `--frozen-lockfile` validates the
+# lockfile against every importer it contains.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY backend/package.json ./backend/
+COPY frontend/package.json ./frontend/
 
-# Copy backend dependency declarations
-COPY backend/package.json backend/pnpm-lock.yaml backend/tsconfig.json ./backend/
+RUN pnpm install --frozen-lockfile --filter near-chat-backend...
+
+COPY tsconfig.base.json ./
+COPY shared/ ./shared/
+COPY backend/tsconfig.json ./backend/
+COPY backend/src ./backend/src
 
 WORKDIR /workspace/backend
-RUN --mount=type=cache,id=pnpm-v11-builder,target=/pnpm/store,uid=1000,gid=1000 \
-    pnpm install --store-dir /pnpm/store --no-frozen-lockfile --ignore-scripts
+# `pnpm exec`, not `bun exec`: the binary lives in pnpm's
+# node_modules/.bin symlink farm, which bun does not add to PATH.
+RUN pnpm exec tsc --noEmit
 
-# Copy backend source code and compile
-COPY backend/src ./src
-RUN pnpm build
+# Flatten the symlinked pnpm store into a standalone node_modules. Copying a
+# pnpm tree across stages directly would yield dangling symlinks, because the
+# real packages live in /workspace/node_modules/.pnpm outside the copied path.
+WORKDIR /workspace
+RUN pnpm deploy --filter near-chat-backend --prod --legacy /deploy
 
-# Stage 2: Create a production runner image
-FROM node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS runner
+# Stage 2: Production runner.
+#
+# Runtime is bun only — no node, no pnpm, no install step, because stage 1
+# already produced a self-contained node_modules. Note the layout deliberately
+# keeps /shared and /tsconfig.base.json at the filesystem root: backend/
+# tsconfig.json sets "rootDir": "..", so the app resolves them one level above
+# its own directory. This is not a workspace and must not be reshaped into one.
+FROM oven/bun:1.3.14-slim AS runner
 ENV CI=true
-
-RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
-RUN corepack enable && corepack prepare pnpm@11.15.0 --activate
-
 WORKDIR /app
 
-# Create uploads directory structure
-RUN mkdir -p /app/uploads/attachments /app/uploads/avatars
+RUN mkdir -p /app/uploads/attachments /app/uploads/avatars \
+ && chown -R bun:bun /app
 
-# Give the built-in node user ownership of /app before switching
-RUN chown -R node:node /app
+USER bun
 
-USER node
+COPY --from=builder --chown=bun:bun /deploy/node_modules ./node_modules
+COPY --chown=bun:bun backend/package.json ./
 
-# Copy production dependency declarations
-COPY --chown=node:node backend/package.json backend/pnpm-lock.yaml ./
-RUN --mount=type=cache,id=pnpm-v11-runner,target=/pnpm/store,uid=1000,gid=1000 \
-    pnpm install --store-dir /pnpm/store --prod --no-frozen-lockfile --ignore-scripts
+COPY --chown=bun:bun backend/src ./src
+COPY --chown=bun:bun backend/migrations ./migrations
+COPY --chown=bun:bun shared /shared
+COPY --chown=bun:bun tsconfig.base.json /tsconfig.base.json
+COPY --chown=bun:bun backend/tsconfig.json ./tsconfig.json
 
-# Copy compiled files and migrations
-COPY --from=builder --chown=node:node /workspace/backend/dist ./dist
-COPY --chown=node:node backend/migrations ./migrations
-
-# Expose port and run in production
 EXPOSE 4000
 ENV NODE_ENV=production
 
-CMD ["sh", "-c", "pnpm run migrate:up && node dist/backend/src/index.js"]
+CMD ["sh", "-c", "bun run migrate:up && bun src/index.ts"]

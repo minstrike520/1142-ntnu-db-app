@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
 import request from 'supertest';
-let app: any;
 import { resetDb } from '../../helpers/resetDb';
+
+let app: any;
 
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;

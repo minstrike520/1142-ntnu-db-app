@@ -32,16 +32,36 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       backend: ${{ steps.filter.outputs.backend }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      # This repo is a single-root-lockfile pnpm workspace. Running
+      # `pnpm install` from inside frontend/ or backend/ silently creates a
+      # nested lockfile, which is how the root lockfile drifted out of sync
+      # with frontend/package.json in the first place (issue #420).
+      - name: Reject nested lockfiles
+        run: |
+          nested="$(git ls-files '*/pnpm-lock.yaml' '*/bun.lock')"
+          if [ -n "$nested" ]; then
+            echo "::error::Nested lockfile(s) committed. Only the root pnpm-lock.yaml is allowed:"
+            echo "$nested"
+            exit 1
+          fi
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
+          # The root workspace files are load-bearing for BOTH packages now that
+          # every job installs from the single root lockfile. Without them here,
+          # a PR touching only pnpm-lock.yaml, the `overrides` block, or the root
+          # package.json would output false for both filters and skip lint,
+          # typecheck, tests, builds and security-scan — and `release` treats
+          # skipped as success, so a dependency or CVE-override change could ship
+          # completely unverified.
           filters: |
             frontend:
               - 'frontend/**'
               - 'shared/**'
               - 'tsconfig.base.json'
               - 'package.json'
+              - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - '.dockerignore'
               - 'docker-compose*.yml'
@@ -51,6 +71,7 @@ jobs:
               - 'shared/**'
               - 'tsconfig.base.json'
               - 'package.json'
+              - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - '.dockerignore'
               - 'docker-compose*.yml'
@@ -61,85 +82,90 @@ jobs:
     if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - run: pnpm --prefix frontend install --frozen-lockfile
-      - run: pnpm --prefix frontend run lint
+      - run: pnpm install --frozen-lockfile --filter near-chat-frontend...
+      - run: pnpm --filter near-chat-frontend lint
 
   frontend-typecheck:
     needs: changes
     if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - run: pnpm --prefix frontend install --frozen-lockfile
-      - run: pnpm --prefix frontend exec tsc --noEmit
+      - run: pnpm install --frozen-lockfile --filter near-chat-frontend...
+      - run: pnpm --filter near-chat-frontend exec tsc --noEmit
+
+  frontend-test:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile --filter near-chat-frontend...
+      - run: pnpm --filter near-chat-frontend test
 
   frontend-build:
     needs: changes
     if: (needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - run: pnpm --prefix frontend install --frozen-lockfile
-      - run: pnpm --prefix frontend run build
+      - run: pnpm install --frozen-lockfile --filter near-chat-frontend...
+      - run: pnpm --filter near-chat-frontend build
 
   backend-build:
     needs: changes
     if: (needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
-          cache-dependency-path: backend/pnpm-lock.yaml
-      - run: pnpm --prefix backend install --frozen-lockfile
-      - run: pnpm --prefix backend run build
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: pnpm install --frozen-lockfile --filter near-chat-backend...
+      - run: pnpm --filter near-chat-backend build
 
   unit-tests:
     needs: changes
     if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
-          cache-dependency-path: backend/pnpm-lock.yaml
-      - run: pnpm --prefix backend install --frozen-lockfile
-      - run: pnpm --prefix backend run test:unit
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: pnpm install --frozen-lockfile --filter near-chat-backend...
+      - run: pnpm --filter near-chat-backend test:unit
 
   integration-tests:
     needs: changes
@@ -162,18 +188,18 @@ jobs:
     env:
       DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5433/ntnu_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
-          cache-dependency-path: backend/pnpm-lock.yaml
-      - run: pnpm --prefix backend install --frozen-lockfile
-      - run: DATABASE_URL=$DATABASE_URL_TEST pnpm --prefix backend run migrate:up
-      - run: pnpm --prefix backend run test:integration
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: pnpm install --frozen-lockfile --filter near-chat-backend...
+      - run: DATABASE_URL=$DATABASE_URL_TEST pnpm --filter near-chat-backend migrate:up
+      - run: pnpm --filter near-chat-backend test:integration
 
   e2e-tests:
     needs: changes
@@ -196,18 +222,18 @@ jobs:
     env:
       DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5433/ntnu_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
-          cache-dependency-path: backend/pnpm-lock.yaml
-      - run: pnpm --prefix backend install --frozen-lockfile
-      - run: DATABASE_URL=$DATABASE_URL_TEST pnpm --prefix backend run migrate:up
-      - run: pnpm --prefix backend run test:e2e
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: pnpm install --frozen-lockfile --filter near-chat-backend...
+      - run: DATABASE_URL=$DATABASE_URL_TEST pnpm --filter near-chat-backend migrate:up
+      - run: pnpm --filter near-chat-backend test:e2e
 
   security-scan:
     needs: changes
@@ -217,44 +243,121 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
-      - name: Scan backend dependencies for vulnerabilities
-        uses: OWASP/cve-lite-cli@v1
+      - uses: actions/checkout@v7
+      # Scans the whole workspace from the repo root. `./backend` and
+      # `./frontend` no longer contain a lockfile — there is exactly one root
+      # pnpm-lock.yaml covering every importer — so the previous per-package
+      # scans would have found nothing to read and could have passed silently,
+      # losing CVE coverage without ever turning the build red.
+      # Invoked directly rather than via OWASP/cve-lite-cli@v1: the action
+      # exposes no `ratchet` input, and `--ratchet` is what keeps the two
+      # unfixable findings in .cve-lite/baseline.json from blocking `release`
+      # without disarming `--fail-on high` for everything else. The baseline
+      # pins name+version, so a bump to either package re-reports it.
+      #
+      # Rejected alternative: the action's `only-used: true`. It suppresses any
+      # package the source never imports, which would permanently hide
+      # runtime-only transitive deps — sharp among them — instead of the two
+      # findings we actually accepted.
+      - uses: actions/setup-node@v7
         with:
-          path: "./backend"
-          all: "true"
-          verbose: "true"
-          fail-on: high
-          sarif: "true"
-      - name: Rename backend SARIF file
+          node-version: 24
+      # `--ratchet` with no baseline present exits 0 and writes one, even with
+      # findings at or above --fail-on. A runner always starts from a clean
+      # checkout, so if .cve-lite/baseline.json ever stops being tracked, every
+      # run would silently self-baseline and the gate would pass forever with
+      # nothing to show it had been disarmed. Fail loudly instead.
+      - name: Verify CVE baseline is tracked
+        run: |
+          if [ ! -f .cve-lite/baseline.json ]; then
+            echo "::error::.cve-lite/baseline.json is missing. --ratchet would" \
+                 "self-baseline and silently disable the security gate." \
+                 "Commit the baseline instead of letting CI regenerate it."
+            exit 1
+          fi
+      - name: Scan workspace dependencies for vulnerabilities
+        run: |
+          npm install --no-save --prefix "$RUNNER_TEMP/cve-lite" cve-lite-cli@1
+          "$RUNNER_TEMP/cve-lite/node_modules/.bin/cve-lite" . \
+            --all --verbose --fail-on high --ratchet --sarif --no-open
+      # `--ratchet` writes no SARIF at all when nothing exceeds the baseline —
+      # the common case on a green build. Falling through with no file would
+      # fail the `if: always()` upload below, and worse, leave the `workspace`
+      # category with no analysis on main until GitHub flags the configuration
+      # as erroring. So synthesise an empty-but-valid run: same tool driver
+      # name, zero results, which clears stale alerts and keeps the tool
+      # reporting.
+      - name: Rename workspace SARIF file
         if: always()
         run: |
           if ls cve-lite-scan-*.sarif 1> /dev/null 2>&1; then
-            mv cve-lite-scan-*.sarif backend.sarif
+            mv cve-lite-scan-*.sarif workspace.sarif
+          else
+            cat > workspace.sarif <<'SARIF'
+          {
+            "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [
+              {
+                "tool": {
+                  "driver": {
+                    "name": "CVE Lite CLI",
+                    "informationUri": "https://owasp.org/cve-lite-cli/",
+                    "rules": []
+                  }
+                },
+                "results": []
+              }
+            ]
+          }
+          SARIF
           fi
-      - name: Upload backend scan to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+      - name: Upload workspace scan to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: backend.sarif
-          category: backend
-      - name: Scan frontend dependencies for vulnerabilities
-        uses: OWASP/cve-lite-cli@v1
+          sarif_file: workspace.sarif
+          category: workspace
+
+  release:
+    needs:
+      - frontend-lint
+      - frontend-typecheck
+      - frontend-build
+      - backend-build
+      - unit-tests
+      - integration-tests
+      - e2e-tests
+      - security-scan
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      (needs.frontend-lint.result == 'success' || needs.frontend-lint.result == 'skipped') &&
+      (needs.frontend-typecheck.result == 'success' || needs.frontend-typecheck.result == 'skipped') &&
+      (needs.frontend-build.result == 'success' || needs.frontend-build.result == 'skipped') &&
+      (needs.backend-build.result == 'success' || needs.backend-build.result == 'skipped') &&
+      (needs.unit-tests.result == 'success' || needs.unit-tests.result == 'skipped') &&
+      (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped') &&
+      (needs.e2e-tests.result == 'success' || needs.e2e-tests.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
         with:
-          path: "./frontend"
-          all: "true"
-          verbose: "true"
-          fail-on: high
-          sarif: "true"
-      - name: Rename frontend SARIF file
-        if: always()
-        run: |
-          if ls cve-lite-scan-*.sarif 1> /dev/null 2>&1; then
-            mv cve-lite-scan-*.sarif frontend.sarif
-          fi
-      - name: Upload frontend scan to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          sarif_file: frontend.sarif
-          category: frontend
+          node-version: 24
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run Semantic Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release

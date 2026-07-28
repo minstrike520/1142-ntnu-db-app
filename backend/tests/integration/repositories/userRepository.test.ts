@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { UserRepository } from "../../../src/repositories/userRepository";
+import { describe, it, expect, beforeEach } from "bun:test";
+import { UserRepository } from "../../../src/models/userRepository";
 import { testPool } from "../../helpers/testPool";
 import { resetDb } from "../../helpers/resetDb";
 

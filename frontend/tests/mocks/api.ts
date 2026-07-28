@@ -1,0 +1,248 @@
+/**
+ * Fixture-backed replacement for `@/lib/api` (see vitest.config.ts alias).
+ * Read endpoints serve the deterministic fixtures; mutation endpoints resolve
+ * with minimal plausible shapes. No network is touched.
+ */
+import type {
+  AuthResponse,
+  EmergencyContactResponse,
+  Folder,
+  FriendRequestResponse,
+  FriendResponse,
+  MessageWithSender,
+  MyProfile,
+  PublicUser,
+  Room,
+  RoomMember,
+  RoomSummary,
+  SearchUserResult,
+  UserProfile,
+  UserSettings,
+} from "@shared/types";
+import {
+  TEST_TOKEN,
+  emergencyContacts,
+  folders,
+  friendRequestResponses,
+  friendResponses,
+  membersByRoom,
+  messagesByRoom,
+  myProfile,
+  mySettings,
+  profiles,
+  publicUser,
+  roomSummaries,
+} from "../fixtures";
+
+let activeAccessToken: string | null = TEST_TOKEN;
+let settingsState: UserSettings = { ...mySettings };
+
+/** Recorded mutation calls, for asserting handler behaviour in tests. */
+const apiCallLog: Array<{ fn: string; args: unknown[] }> = [];
+
+export const __getApiCallLog = (fn?: string): Array<{ fn: string; args: unknown[] }> =>
+  fn ? apiCallLog.filter((entry) => entry.fn === fn) : [...apiCallLog];
+
+export const __resetApiMock = (): void => {
+  activeAccessToken = TEST_TOKEN;
+  settingsState = { ...mySettings };
+  apiCallLog.length = 0;
+};
+
+export const getApiBaseUrl = (): string => "http://mock-api.test";
+
+export const getActiveAccessToken = (): string | null => activeAccessToken;
+export const setActiveAccessToken = (token: string | null): void => {
+  activeAccessToken = token;
+};
+
+export const refreshTokens = async (): Promise<AuthResponse> => ({
+  token: TEST_TOKEN,
+  user: publicUser(myProfile.userId),
+});
+
+export const register = async (): Promise<AuthResponse> => refreshTokens();
+export const login = async (): Promise<AuthResponse> => refreshTokens();
+export const logout = async (): Promise<void> => undefined;
+
+export const getMe = async (): Promise<MyProfile> => ({ ...myProfile });
+
+export const getUserProfile = async (userId: string): Promise<UserProfile> => {
+  const profile = profiles[userId];
+  if (!profile) throw new Error(`Unknown user ${userId}`);
+  return { ...profile };
+};
+
+export const updateMe = async (
+  _token: string,
+  data: Partial<MyProfile> & { name?: string },
+): Promise<MyProfile> => ({ ...myProfile, ...data, name: data.name ?? myProfile.name });
+
+export const uploadAvatar = async (): Promise<MyProfile> => ({ ...myProfile });
+export const deleteMe = async (): Promise<void> => undefined;
+
+export const getMySettings = async (): Promise<UserSettings> => ({ ...settingsState });
+
+export const updateMySettings = async (
+  _token: string,
+  data: Partial<UserSettings>,
+): Promise<UserSettings> => {
+  settingsState = { ...settingsState, ...data };
+  return { ...settingsState };
+};
+
+export const searchUsers = async (
+  _token: string,
+  params: { query: string },
+): Promise<SearchUserResult[]> => {
+  const q = params.query.trim().toLowerCase();
+  return Object.values(profiles)
+    .filter((p) => p.name.toLowerCase().includes(q) || p.userId.toLowerCase() === q)
+    .map((p) => ({ userId: p.userId, name: p.name }));
+};
+
+export const listFriends = async (): Promise<FriendResponse[]> => friendResponses;
+export const deleteFriend = async (): Promise<void> => undefined;
+export const listFriendRequests = async (): Promise<FriendRequestResponse[]> =>
+  friendRequestResponses;
+export const sendFriendRequest = async (): Promise<{ status: string }> => ({
+  status: "pending",
+});
+export const respondFriendRequest = async (): Promise<{ status: string }> => ({
+  status: "accepted",
+});
+export const getBlockedUsers = async (): Promise<
+  { userId: string; name: string; email: string; avatarUrl?: string }[]
+> => [];
+export const blockUser = async (): Promise<{ status: "blocked" }> => ({ status: "blocked" });
+export const unblockUser = async (): Promise<void> => undefined;
+
+export const listRooms = async (): Promise<RoomSummary[]> => roomSummaries;
+
+const roomFromSummary = (summary: RoomSummary): Room => ({
+  roomId: summary.roomId,
+  type: summary.type,
+  name: summary.name,
+  avatarUrl: summary.avatarUrl,
+  inviteCode: summary.inviteCode,
+  requireApproval: summary.requireApproval,
+  viewHistory: summary.viewHistory,
+  isArchived: summary.isArchived,
+  isReadonly: summary.isReadonly,
+  createdAt: summary.createdAt,
+});
+
+export const createGroup = async (
+  _token: string,
+  data: { name: string },
+): Promise<Room> => ({
+  ...roomFromSummary(roomSummaries[0]),
+  roomId: "room-new",
+  name: data.name,
+});
+
+export const createPrivateRoom = async (): Promise<Room> =>
+  roomFromSummary(roomSummaries[2]);
+
+export const joinRoomByCode = async (): Promise<Room> => roomFromSummary(roomSummaries[1]);
+
+export const updateRoom = async (
+  _token: string,
+  roomId: string,
+  data: Record<string, unknown>,
+): Promise<Room> => ({
+  ...roomFromSummary(roomSummaries.find((r) => r.roomId === roomId) ?? roomSummaries[0]),
+  ...data,
+});
+
+export const uploadRoomAvatar = async (
+  _token: string,
+  roomId: string,
+): Promise<Room> =>
+  roomFromSummary(roomSummaries.find((r) => r.roomId === roomId) ?? roomSummaries[0]);
+
+export const deleteRoom = async (): Promise<void> => undefined;
+export const leaveRoom = async (): Promise<void> => undefined;
+
+export const listRoomMembers = async (
+  _token: string,
+  roomId: string,
+): Promise<RoomMember[]> => membersByRoom[roomId] ?? [];
+
+export const approveRoomMember = async (): Promise<void> => undefined;
+export const updateRoomMember = async (): Promise<void> => undefined;
+export const kickRoomMember = async (): Promise<void> => undefined;
+export const transferRoomOwner = async (): Promise<void> => undefined;
+
+export const listMessages = async (
+  _token: string,
+  roomId: string,
+  options?: { limit?: number },
+): Promise<MessageWithSender[]> => {
+  const log = messagesByRoom[roomId] ?? [];
+  const limit = options?.limit ?? 50;
+  // The real API returns newest-first; ChatContext reverses it back.
+  return [...log].slice(-limit).reverse();
+};
+
+export const listFolders = async (): Promise<Folder[]> => folders;
+
+export const createFolder = async (_token: string, name: string): Promise<Folder> => ({
+  folderId: `folder-${name}`,
+  userId: myProfile.userId,
+  name,
+  createdAt: new Date(),
+  roomIds: [],
+});
+
+export const deleteFolder = async (): Promise<void> => undefined;
+
+export const renameFolder = async (
+  _token: string,
+  folderId: string,
+  name: string,
+): Promise<Folder> => ({
+  folderId,
+  userId: myProfile.userId,
+  name,
+  createdAt: new Date(),
+  roomIds: [],
+});
+
+export const updateFolderRooms = async (
+  _token: string,
+  folderId: string,
+  roomIds: string[],
+): Promise<void> => {
+  apiCallLog.push({ fn: "updateFolderRooms", args: [folderId, roomIds] });
+};
+
+export const uploadAttachment = async (): Promise<{ attachmentId: string }> => ({
+  attachmentId: "att-1",
+});
+
+export const attachmentDownloadUrl = (fileUrl: string): string =>
+  `http://mock-api.test${fileUrl}`;
+
+export const fetchAttachmentBlob = async (): Promise<Blob> => {
+  throw new Error("attachments are not fetched in tests");
+};
+
+export const fetchAttachmentBlobUrl = async (): Promise<string> => {
+  throw new Error("attachments are not fetched in tests");
+};
+
+export const listEmergencyContacts = async (): Promise<EmergencyContactResponse[]> =>
+  emergencyContacts;
+export const upsertEmergencyContact = async (): Promise<{ success: boolean }> => ({
+  success: true,
+});
+export const deleteEmergencyContact = async (): Promise<{ success: boolean }> => ({
+  success: true,
+});
+export const checkEmergencyInactivity = async (): Promise<{ triggered: boolean }> => ({
+  triggered: false,
+});
+
+// Re-exported so tests can build PublicUser payloads without importing fixtures.
+export type { PublicUser };

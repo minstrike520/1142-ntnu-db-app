@@ -1,0 +1,9 @@
+# Bun test-runner configuration for the backend.
+[test]
+preload = ["./tests/preload.ts"]
+
+# `bun test <dir>` treats its argument as a path *substring* filter, not a
+# directory. `tsconfig.json` includes `tests/**/*`, so `pnpm build` emits
+# compiled copies to `dist/backend/tests/unit/...` — which also match the
+# filter and get run as a second, stale copy of the suite. Ignore them.
+pathIgnorePatterns = ["**/dist/**"]

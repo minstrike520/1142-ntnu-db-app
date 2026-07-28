@@ -140,6 +140,9 @@
     "email": "Email",
     "notifications": "Notifications",
     "desktopNotifications": "Desktop notifications",
+    "notificationsBlocked": "Desktop notifications are blocked by the browser. Please unblock in your browser settings and try again.",
+    "notificationsDefaultTip": "(Notifications enabled for this account, but this browser is not authorized yet)",
+    "notificationsAllowButton": "Authorize now",
     "messageSounds": "Message sounds",
     "appearance": "Appearance",
     "light": "Light",
@@ -215,6 +218,7 @@
     "pendingApproval": "Pending Approval",
     "pendingApprovalBanner": "Your request to join this group is pending approval. You will be able to read and send messages once an owner or admin approves your request.",
     "editingMessageBanner": "Editing message (Press Esc to cancel)",
+    "messageActions": "Message actions",
     "replyMessage": "Reply Message",
     "editMessage": "Edit Message",
     "recallMessage": "Recall Message",
@@ -329,5 +333,15 @@
     "renameFailed": "Failed to rename folder",
     "deleteFailed": "Failed to delete folder",
     "confirmAction": "Confirm"
+  },
+  "chatFilter": {
+    "filterAll": "All",
+    "filterDm": "DM",
+    "filterGroup": "Group",
+    "filterUnread": "Unread",
+    "sortLabel": "Sort",
+    "sortCustom": "Custom",
+    "sortUnread": "Unread first",
+    "emptyResult": "No matching chats"
   }
 }
