@@ -63,7 +63,9 @@ jobs:
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
-              - '.github/workflows/ci.yml'
+              - '.dockerignore'
+              - 'docker-compose*.yml'
+              - '.github/workflows/**'
             backend:
               - 'backend/**'
               - 'shared/**'
@@ -71,7 +73,9 @@ jobs:
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
-              - '.github/workflows/ci.yml'
+              - '.dockerignore'
+              - 'docker-compose*.yml'
+              - '.github/workflows/**'
 
   frontend-lint:
     needs: changes

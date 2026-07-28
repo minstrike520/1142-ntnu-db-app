@@ -1,5 +1,7 @@
 # 貢獻指南 (Contributing to Near Chat)
 
+[English](CONTRIBUTING.md) | 繁體中文
+
 首先，非常感謝您願意花時間為 Near Chat 做出貢獻！本專案是一門資料庫課程的專案，結構為 Monorepo，包含 React/Next.js 前端、Node.js/Express 後端 API，以及 PostgreSQL 18 資料庫，並在本地透過 Docker Compose 進行容器編排與整合。
 
 請仔細閱讀本指南，以瞭解我們的開發、測試與貢獻工作流程。

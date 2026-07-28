@@ -19,6 +19,7 @@ frontend/next-env.d.ts
 # production
 build/
 dist/
+*/dist/
 
 # misc
 .DS_Store

@@ -15,6 +15,7 @@
 - [快速開始](#快速開始)
 - [生產環境部署](#生產環境部署)
 - [測試指令](#測試指令)
+- [完整 Stack 版本發布](#完整-stack-版本發布)
 
 ---
 
@@ -111,6 +112,8 @@ docker compose exec backend pnpm run db:seed
 
 本專案提供專為生產環境設計的配置檔 `docker-compose.prod.yml`。此配置會建置最佳化後的生產映像檔 (`Dockerfile.prod`)，並啟動 Cloudflare Tunnel 以實現安全的外網連線。
 
+若要使用已發布的版本 artifact，請從 GitHub Release 下載 `near-chat-stack-vX.Y.Z.tar.gz`，再使用其中的 `docker-compose.release.yml`。該 bundle 會把前端、後端 image digest、PostgreSQL 18 runtime digest 與 migration 步驟固定在同一份部署描述中。詳見[完整 Stack 版本發布指南](docs/ZH-TW/backend-release.md)。
+
 ### 1. 配置生產環境變數
 請確保 `.env` 檔案中已填寫所有生產環境所需的變數（例如 `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB`、`DATABASE_URL`、`JWT_SECRET`、`NEXT_PUBLIC_API_URL` 以及 Cloudflare Tunnel 的 `TUNNEL_TOKEN`）。
 
@@ -138,3 +141,6 @@ docker compose -f docker-compose.prod.yml down
 
 關於如何執行單元測試、整合測試與 E2E 測試的詳細說明，請直接參閱 [開發者與測試指南](docs/ZH-TW/DEVELOPMENT.md#5-測試指南)。
 
+## 完整 Stack 版本發布
+
+推送 annotated `vX.Y.Z` tag 後，系統會自動發布不可變的 GHCR 前後端映像、固定版本的 PostgreSQL 18 runtime、migration、Docker Compose bundle，以及記錄 digest 的 GitHub Release。詳見[完整 Stack 版本發布指南](docs/ZH-TW/backend-release.md)。
