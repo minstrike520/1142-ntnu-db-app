@@ -90,13 +90,25 @@ jobs:
           # 通過 CI 是不可能滿足的條件，必須退到父 commit 的 run。
           #
           # 但這個退路必須綁定在「這確實是一個 semantic-release 版本號 commit」的
-          # 事實上，也就是它相對父 commit 的變更完全落在 .releaserc.json 的
-          # @semantic-release/git assets 白名單內。否則任何人只要把一個未經測試的
-          # commit 連同 tag 一起推上 main，就能靠父 commit 的舊 run 通過這道驗證。
+          # 事實上，否則任何人只要把一個未經測試的 commit 連同 tag 一起推上 main，
+          # 就能靠父 commit 的舊 run 通過這道驗證。判定分兩層：
+          #
+          #   (a) 變更的路徑必須全部落在 @semantic-release/git 的 assets 白名單內。
+          #   (b) 三份 package.json 相對父 commit 必須「除了 version 之外完全相同」。
+          #
+          # (b) 不能省略：只比對路徑的話，一個同時改了三份版本號、又在
+          # backend/package.json 的 scripts 動手腳的 commit 也會通過。該檔會被
+          # backend/Dockerfile.prod 複製進 runtime 映像，其 migrate:up 由映像的 CMD
+          # 與部署 bundle 的 migrate service 實際執行 —— 未經 CI 驗證的行為會直接
+          # 進入正式環境。
+          #
+          # CHANGELOG.md 只比對路徑：它不會被任何 Dockerfile 複製進映像，也不會被
+          # 執行，最壞情況只是 release notes 內容不實。
           candidate_shas=("$GITHUB_SHA")
           parent_sha="$(git rev-parse --verify --quiet "${GITHUB_SHA}^" || true)"
           if [[ -n "$parent_sha" ]]; then
             release_assets_only=true
+
             while IFS= read -r changed_file; do
               [[ -z "$changed_file" ]] && continue
               case "$changed_file" in
@@ -107,6 +119,16 @@ jobs:
                   ;;
               esac
             done < <(git diff --name-only "$parent_sha" "$GITHUB_SHA")
+
+            for pkg_file in package.json frontend/package.json backend/package.json; do
+              if ! diff -q \
+                <(git show "${parent_sha}:${pkg_file}" | jq -S 'del(.version)') \
+                <(git show "${GITHUB_SHA}:${pkg_file}" | jq -S 'del(.version)') \
+                >/dev/null 2>&1; then
+                release_assets_only=false
+                echo "Tag commit 對 $pkg_file 的變更不只有 version 欄位。"
+              fi
+            done
 
             if [[ "$release_assets_only" == "true" ]]; then
               candidate_shas+=("$parent_sha")

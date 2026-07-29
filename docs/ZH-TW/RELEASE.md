@@ -43,7 +43,14 @@ PR 一律以 squash merge 合併，因此進入 `main` 的 commit 就是 **PR �
 
 後者就是橋接存在的理由。前者則是為什麼階段 3 的 CI 驗證接受 tag commit **或其第一個父 commit** 的成功 run —— 要求 `R` 自己通過 CI 是一個永遠無法滿足的條件。
 
-這個退路不是無條件的。階段 3 會比對 tag commit 與其第一個父 commit 的 diff，只有在變更的路徑**全部**落在 `@semantic-release/git` 的四個 `assets` 之內（`package.json`、`frontend/package.json`、`backend/package.json`、`CHANGELOG.md`）時才允許退回父 commit。夾帶其他任何變更的 commit 一律必須自己通過 CI，因此把未經測試的 commit 連同 tag 一起推上來，並不能借用父 commit 的綠燈。
+這個退路不是無條件的。階段 3 會比對 tag commit 與其第一個父 commit 的 diff，**兩個條件同時成立**才允許退回父 commit：
+
+- 變更的路徑**全部**落在 `@semantic-release/git` 的四個 `assets` 之內（`package.json`、`frontend/package.json`、`backend/package.json`、`CHANGELOG.md`）；且
+- 三份 `package.json` 相對父 commit **除了 `version` 之外完全相同**（以解析後的 JSON 比對，格式差異不影響判定）。
+
+第二個條件不是多餘的。`backend/package.json` 會被複製進 runtime 映像（`backend/Dockerfile.prod`），其中的 `migrate:up` 正是映像 `CMD` 與部署 bundle 的 `migrate` service 實際執行的指令 —— 一個把三份版本號都正確同步、卻偷改該腳本的 commit，否則就能靠借來的綠燈把未經審查的行為送進正式環境。`CHANGELOG.md` 只比對路徑：沒有任何 Dockerfile 會複製它，也不會被執行，最壞情況只是 release notes 內容不實。
+
+任一條件不成立的 commit，一律必須自己通過完整 CI。
 
 ### 仍然強制的條件
 

@@ -43,7 +43,14 @@ merge commit M lands on main
 
 The second is why the bridge exists. The first is why stage 3's CI gate accepts a successful run for the tag commit **or its first parent**: requiring `R` to have passed CI itself would be an unsatisfiable condition.
 
-That fallback is not unconditional. Stage 3 diffs the tag commit against its first parent and only falls back when every changed path is one of the four `@semantic-release/git` `assets` — `package.json`, `frontend/package.json`, `backend/package.json`, `CHANGELOG.md`. A commit carrying anything else must have passed CI itself, so pushing an untested commit together with a tag cannot borrow its parent's green run.
+That fallback is not unconditional. Stage 3 diffs the tag commit against its first parent and only falls back when **both** hold:
+
+- every changed path is one of the four `@semantic-release/git` `assets` — `package.json`, `frontend/package.json`, `backend/package.json`, `CHANGELOG.md`; and
+- the three `package.json` files are identical to the parent's apart from `version` (compared as parsed JSON, so formatting does not matter).
+
+The second condition is not redundant. `backend/package.json` is copied into the runtime image (`backend/Dockerfile.prod`), and its `migrate:up` script is what the image's `CMD` and the release bundle's `migrate` service actually execute — a commit that bumps all three versions correctly while quietly editing that script would otherwise ship unreviewed behaviour into production on a borrowed green run. `CHANGELOG.md` is checked by path only: no Dockerfile copies it and nothing executes it, so the worst case is inaccurate release notes.
+
+Anything failing either condition must have passed CI as itself.
 
 ### What is still enforced
 
