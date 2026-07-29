@@ -2,7 +2,7 @@
 
 [English](CONTRIBUTING.md) | 繁體中文
 
-首先，非常感謝您願意花時間為 Near Chat 做出貢獻！本專案是一門資料庫課程的專案，結構為 Monorepo，包含 React/Next.js 前端、Node.js/Express 後端 API，以及 PostgreSQL 18 資料庫，並在本地透過 Docker Compose 進行容器編排與整合。
+首先，非常感謝您願意花時間為 Near Chat 做出貢獻！本專案是一門資料庫課程的專案，結構為 Monorepo，包含 React/Next.js 前端、Bun/Hono 後端 API，以及 PostgreSQL 18 資料庫，並在本地透過 Docker Compose 進行容器編排與整合。
 
 請仔細閱讀本指南，以瞭解我們的開發、測試與貢獻工作流程。
 
@@ -113,7 +113,7 @@ docker compose exec backend pnpm run db:seed
    ```bash
    docker compose exec frontend pnpm run lint
    ```
-3. **執行 Vitest 測試**：
+3. **執行 Bun 測試**：
    - **單元測試**：
      ```bash
      docker compose exec backend pnpm run test:unit
@@ -136,7 +136,7 @@ docker compose exec backend pnpm run db:seed
 
 ## 6. API 與 WebSocket 協定驗證
 
-* 任何對 Express 控制器 (Controllers)、後端路由 (Routes) 或 Socket.IO 事件處理常式的修改，都必須精確對齊 [docs/api-documentation.md](docs/api-documentation.md) 中所定義的 Payload 與資料模型。
+* 任何對 Hono 路由 (Routes)、後端服務 (Services) 或 Socket.IO 事件處理常式的修改，都必須精確對齊 [docs/api-documentation.md](docs/api-documentation.md) 中所定義的 Payload 與資料模型。
 * 破壞協定契約將會導致前後端串接失敗，並使 CI 流程出錯。
 
 ---

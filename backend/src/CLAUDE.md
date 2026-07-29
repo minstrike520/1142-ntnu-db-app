@@ -10,10 +10,10 @@ This directory contains the TypeScript source code for the backend service built
 
 | Directory | Layer & Role | Code Standards & Guidelines |
 |-----------|--------------|----------------------------|
-| [routes/](routes/) | **Routing Layer** | Defines Hono HTTP endpoints, mounts validation middleware via `zValidator`, extracts auth context (`c.get('user')`), and delegates to the Service layer. |
+| [routes/](routes/) | **Routing Layer** | Defines Hono HTTP endpoints, mounts validation middleware via `zValidator`, extracts auth context (`c.get('user')`), and delegates to the Service layer. Also holds the Zod schemas validating each route's payloads (e.g. `userSchemas.ts`, `roomSchemas.ts`, `folderSchemas.ts`, `messageSchemas.ts`). |
 | [services/](services/) | **Business Logic Layer** | Domain orchestration and permission checking. Throws `AppError` subclasses. |
-| [repositories/](repositories/) | **Data Access Layer** | Executes raw SQL statements. Repositories must conform to corresponding interfaces (e.g., `IRoomRepository.ts`) to allow mock testing. |
-| [validators/](validators/) | **Validation Schemas** | Contains Zod validation schemas (e.g. `userSchemas.ts`, `roomSchemas.ts`, `folderSchemas.ts`) to validate HTTP payload structures. |
+| [models/](models/) | **Data Access Layer** | Executes raw SQL statements, and holds the shared `pg.Pool` in `db.ts`. Repositories must conform to corresponding interfaces (e.g., `IRoomRepository.ts`) to allow mock testing. |
+| [utils/](utils/) | **Shared Utilities** | Cross-cutting helpers: `AppError.ts` / `mapError.ts`, JWT and cookie handling, upload path resolution, and the `inactivityJob.ts` emergency-alert scheduler. |
 | [middlewares/](middlewares/) | **Middlewares** | Intercepts HTTP requests (JWT validation in `authMiddleware.ts`, security headers, global exception catching in `errorHandler.ts`). |
 | [realtime/](realtime/) | **WebSocket layer** | Handles Socket.IO connection handshakes, JWT authorization via Socket middlewares, and registers listeners for instant messages, typing indicators, and read receipts. |
 
@@ -21,7 +21,7 @@ This directory contains the TypeScript source code for the backend service built
 
 ### 1. Interface-Driven Design
 - Repositories utilize interface declarations (e.g., `IMessageRepository`) which are instantiated in the composition root [index.ts](index.ts).
-- This structure enables unit tests to inject mocked repositories via Vitest/Bun test, checking services in isolation. Always write unit tests by mocking interfaces.
+- This structure enables unit tests to inject mocked repositories via Bun test, checking services in isolation. Always write unit tests by mocking interfaces.
 
 ### 2. JWT & Socket Authorization
 - The Socket.IO server authenticates client connections via the token passed during handshake.
@@ -35,4 +35,4 @@ This directory contains the TypeScript source code for the backend service built
     // ...
   });
   ```
-- Make sure to write Zod schemas for any new request payloads under `validators/`.
+- Make sure to write Zod schemas for any new request payloads under `routes/`, in the `*Schemas.ts` file matching the route module.
