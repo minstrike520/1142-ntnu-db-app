@@ -1,13 +1,11 @@
 name: 發布完整 Near Chat Stack
 
 on:
+  # 第三階段：release.yml 使用 GitHub App token 推送版本 tag，該 push 會直接
+  # 觸發本 workflow。workflow_dispatch 保留作為人工復原入口。
   push:
     tags:
       - 'v*'
-  # 自動發布時，tag 是由 ci.yml 的 release job 以預設 GITHUB_TOKEN 推送的，
-  # GitHub 不會讓這種 push 觸發新的 workflow run。release-bridge.yml 因此改以
-  # workflow_dispatch 呼叫本 workflow；這個入口同時也是人工復原的手段
-  # （gh workflow run release-stack.yml --ref vX.Y.Z）。
   workflow_dispatch:
 
 concurrency:
@@ -71,11 +69,10 @@ jobs:
             exit 1
           fi
 
-          # 要求 tag commit 在 main 的歷史上，而非等於當下的 main HEAD。移除
-          # [skip ci] 之後，版本號 commit 必須先跑完一輪完整 CI 才會經由
-          # release-bridge.yml 觸發本 workflow；這段期間若有其他 PR 合併進 main，
-          # 嚴格相等的檢查會把一個完全正常的發布擋掉。ancestor 檢查一樣能保證
-          # 被發布的 commit 真的在 main 上，且不會被 force-push 出去的分支冒充。
+          # 要求 tag commit 在 main 的歷史上，而非等於當下的 main HEAD。版本 tag
+          # push 觸發本 workflow 後，若有其他 PR 合併進 main，嚴格相等的檢查會把
+          # 一個完全正常的發布擋掉。ancestor 檢查一樣能保證被發布的 commit 真的
+          # 在 main 上，且不會被 force-push 出去的分支冒充。
           git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
           main_sha="$(git rev-parse refs/remotes/origin/main)"
           if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
@@ -85,9 +82,10 @@ jobs:
 
           # 預設只接受 tag commit 自己的成功 CI run。
           #
-          # 例外：semantic-release 產生的版本號 commit 以預設 GITHUB_TOKEN 推送，
-          # GitHub 的遞迴保護使該次 push 不會建立任何 workflow run，因此要求它自己
-          # 通過 CI 是不可能滿足的條件，必須退到父 commit 的 run。
+          # 例外：semantic-release 產生的版本號 commit 由 Release App 推送。Tag
+          # push 會立即觸發本 workflow，此時 R 的 CI 通常尚未完成；但 release.yml
+          # 是在父 commit M 的 CI 成功後才建立 R，因此允許在嚴格驗證版本號 commit
+          # 後退到父 commit 的 run。
           #
           # 但這個退路必須綁定在「這確實是一個 semantic-release 版本號 commit」的
           # 事實上，否則任何人只要把一個未經測試的 commit 連同 tag 一起推上 main，
@@ -170,8 +168,7 @@ jobs:
             "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs" \
             -f per_page=100)"
           required='["frontend-lint","frontend-typecheck","frontend-build","backend-build","unit-tests","integration-tests","e2e-tests","security-scan"]'
-          # 接受 success 或 skipped，與 ci.yml 的 release job 條件一致。驗證對象改為
-          # 合併 commit 之後，這一點是必要的：ci.yml 的 paths-filter 會在只動前端的
+          # 接受 success 或 skipped。這一點是必要的：ci.yml 的 paths-filter 會在只動前端的
           # 變更上跳過 backend 的 job（反之亦然），而 skipped 正代表該側程式碼未變更、
           # 沿用上一次已驗證的狀態。要求 8 個 job 一律 success 會擋掉大部分正常發布。
           if ! jq -e --argjson required "$required" '
@@ -186,6 +183,51 @@ jobs:
             echo "number=$version"
             echo "sha_tag=sha-${GITHUB_SHA:0:12}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: 等待 Semantic Release workflow 完成
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Semantic Release 先推 tag，再由 @semantic-release/github 建立 Release。
+          # Tag push 可能讓本 workflow 在 release.yml 尚未結束時抵達。release-main
+          # concurrency 保證同時最多只有一個上游 run 實際執行（另可有一個 queued
+          # run），因此只等待 in_progress 的 run 進入終態，避免誤選較新的 queued
+          # run，也避免兩邊競相建立同一個 Release。
+          runs="$(gh api --method GET \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs" \
+            -f event=workflow_run \
+            -f per_page=20)"
+          release_run_id="$(jq -r '
+            [.workflow_runs[] | select(.status == "in_progress")]
+            | first
+            | .id // empty
+          ' <<< "$runs")"
+
+          if [[ -z "$release_run_id" ]]; then
+            echo "沒有仍在執行的 Semantic Release workflow。"
+            exit 0
+          fi
+
+          for attempt in {1..60}; do
+            run="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${release_run_id}")"
+            status="$(jq -r .status <<< "$run")"
+            conclusion="$(jq -r '.conclusion // empty' <<< "$run")"
+            if [[ "$status" == "completed" ]]; then
+              echo "Semantic Release workflow 已完成：run=$release_run_id conclusion=$conclusion"
+              exit 0
+            fi
+            echo "等待 Semantic Release workflow：run=$release_run_id，第 ${attempt}/60 次"
+            sleep 5
+          done
+
+          echo "等待 Semantic Release workflow 逾時：run=$release_run_id" >&2
+          exit 1
 
       - name: 檢查既有 GitHub Release 與 Stack 發布狀態
         id: release
