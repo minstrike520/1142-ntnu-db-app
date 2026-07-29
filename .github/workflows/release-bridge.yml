@@ -1,0 +1,105 @@
+name: 橋接 CI 至 Stack 發布
+
+# 自動發布鏈的最後一環。
+#
+# ci.yml 的 release job 以預設 GITHUB_TOKEN 執行 semantic-release，而 GitHub 的
+# 遞迴保護會讓該 token 產生的**所有**事件都不觸發新的 workflow run（僅
+# workflow_dispatch 與 repository_dispatch 例外）。這不只適用於 push tag，也適用
+# 於 push commit —— 意思是：
+#
+#   * 版本號 commit（以下稱 R）推上 main 之後不會有屬於自己的 ci.yml run，
+#   * 版本 tag 推上去之後也不會自己觸發 release-stack.yml。
+#
+# 因此本 workflow 監聽的是**合併 commit（以下稱 M）**那一次 ci.yml run —— 也就是
+# 執行 semantic-release 的那一次本身。等它完成後，R 與 tag 都已經存在，此時再以
+# workflow_dispatch 顯式呼叫 release-stack.yml。
+#
+# 這也是為什麼 tag 不會出現在 M 上：R 才是被 tag 的 commit，而 R 是 M 在 main
+# 第一父系上的直接子 commit。下面兩個候選 SHA 就是這麼來的。
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: release-bridge-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: 檢查版本 tag 並觸發 Stack 發布
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: 取出完整 tag 歷史
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: 找出版本 tag 並觸發 release-stack.yml
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+
+          # 候選一：M 自己（人工在 main 上直接打 tag 的情況）。
+          # 候選二：M 在 main 第一父系上的直接子 commit，也就是 semantic-release
+          # 在這次 run 裡建立的版本號 commit R。--ancestry-path 限定只走 M 之後的
+          # 歷史，tail -n 1 取離 M 最近的那一個。
+          child="$(git rev-list --first-parent --ancestry-path \
+            "${HEAD_SHA}..refs/remotes/origin/main" | tail -n 1 || true)"
+
+          # --points-at 會 peel annotated tag，因此對兩種 tag 型別都適用。
+          tag=''
+          for candidate in "$HEAD_SHA" $child; do
+            tag="$(git tag --points-at "$candidate" \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | head -n 1 || true)"
+            if [[ -n "$tag" ]]; then
+              echo "找到版本 tag $tag（commit $candidate）"
+              break
+            fi
+          done
+          if [[ -z "$tag" ]]; then
+            echo "這次 CI 沒有產生版本 tag，不需要發布：$HEAD_SHA"
+            exit 0
+          fi
+
+          # 判準必須與 release-stack.yml 的 stack_published 一致：以 bundle asset
+          # 而非「Release 是否存在」判定。Release 會由 @semantic-release/github
+          # 先行建立，用它判斷會讓每次自動發布都被誤判為已完成。
+          bundle_asset="near-chat-stack-${tag}.tar.gz"
+          release_json="$RUNNER_TEMP/bridge-release.json"
+          release_error="$RUNNER_TEMP/bridge-release.error"
+
+          if gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            > "$release_json" 2> "$release_error"; then
+            if jq -e --arg name "$bundle_asset" \
+              '[.assets[].name] | index($name) != null' "$release_json" >/dev/null; then
+              echo "$tag 已附上 Stack bundle，不需要重複發布。"
+              exit 0
+            fi
+          elif ! grep -q 'HTTP 404' "$release_error"; then
+            cat "$release_error" >&2
+            exit 1
+          fi
+
+          echo "觸發 release-stack.yml：$tag"
+          gh workflow run release-stack.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$tag"
