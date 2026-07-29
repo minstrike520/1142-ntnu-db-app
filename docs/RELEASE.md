@@ -41,11 +41,13 @@ merge commit M lands on main
 - pushing commit `R` to `main` does not start a `ci.yml` run for `R`;
 - pushing the `vX.Y.Z` tag does not start `release-stack.yml`.
 
-The second is why the bridge exists. The first is why stage 3's CI gate accepts a successful run for the tag commit **or its first parent**: requiring `R` to have passed CI itself would be an unsatisfiable condition. This does not let untested code through — `R`'s contents are restricted by the `@semantic-release/git` `assets` allowlist to the three `package.json` files and `CHANGELOG.md`, so its application code is byte-identical to `M`, and stage 3 independently verifies that all three version numbers equal the tag.
+The second is why the bridge exists. The first is why stage 3's CI gate accepts a successful run for the tag commit **or its first parent**: requiring `R` to have passed CI itself would be an unsatisfiable condition.
+
+That fallback is not unconditional. Stage 3 diffs the tag commit against its first parent and only falls back when every changed path is one of the four `@semantic-release/git` `assets` — `package.json`, `frontend/package.json`, `backend/package.json`, `CHANGELOG.md`. A commit carrying anything else must have passed CI itself, so pushing an untested commit together with a tag cannot borrow its parent's green run.
 
 ### What is still enforced
 
-Semantic Release is the source of truth for tags. It creates **lightweight** tags, and `release-stack.yml` accepts both lightweight and annotated tags; the tag type is not checked. Stage 3 still refuses to publish unless: the tag name matches `vX.Y.Z` exactly, the numeric version matches all three `package.json` files, the tag commit is on `main`'s history, and the tag commit or its first parent has a main CI run whose frontend lint/typecheck/build, backend build, unit, integration, E2E, and security jobs all either succeeded or were skipped by the paths filter.
+Semantic Release is the source of truth for tags. It creates **lightweight** tags, and `release-stack.yml` accepts both lightweight and annotated tags; the tag type is not checked. Stage 3 still refuses to publish unless: the tag name matches `vX.Y.Z` exactly, the numeric version matches all three `package.json` files, the tag commit is on `main`'s history, and the tag commit — or its first parent, when the tag commit changes nothing outside the four release assets — has a main CI run whose frontend lint/typecheck/build, backend build, unit, integration, E2E, and security jobs all either succeeded or were skipped by the paths filter.
 
 ### Manual entry points
 

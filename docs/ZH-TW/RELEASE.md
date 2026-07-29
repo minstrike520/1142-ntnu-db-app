@@ -41,11 +41,13 @@ PR 一律以 squash merge 合併，因此進入 `main` 的 commit 就是 **PR �
 - 把 commit `R` 推上 `main`，不會為 `R` 產生 `ci.yml` run；
 - 把 `vX.Y.Z` tag 推上去，不會啟動 `release-stack.yml`。
 
-後者就是橋接存在的理由。前者則是為什麼階段 3 的 CI 驗證接受 tag commit **或其第一個父 commit** 的成功 run —— 要求 `R` 自己通過 CI 是一個永遠無法滿足的條件。這並不會放行未經測試的程式碼：`R` 的內容受 `@semantic-release/git` 的 `assets` 白名單限制，只有三份 `package.json` 與 `CHANGELOG.md`，應用程式碼與 `M` 完全相同；而三份 `package.json` 的版本號是否等於 tag，階段 3 本來就會獨立驗證。
+後者就是橋接存在的理由。前者則是為什麼階段 3 的 CI 驗證接受 tag commit **或其第一個父 commit** 的成功 run —— 要求 `R` 自己通過 CI 是一個永遠無法滿足的條件。
+
+這個退路不是無條件的。階段 3 會比對 tag commit 與其第一個父 commit 的 diff，只有在變更的路徑**全部**落在 `@semantic-release/git` 的四個 `assets` 之內（`package.json`、`frontend/package.json`、`backend/package.json`、`CHANGELOG.md`）時才允許退回父 commit。夾帶其他任何變更的 commit 一律必須自己通過 CI，因此把未經測試的 commit 連同 tag 一起推上來，並不能借用父 commit 的綠燈。
 
 ### 仍然強制的條件
 
-Tag 以 Semantic Release 為準。它建立的是 **lightweight tag**，`release-stack.yml` 對 lightweight 與 annotated 一律接受，不檢查 tag 型別。階段 3 仍然會在下列任一條件不成立時拒絕發布：tag 名稱必須完全符合 `vX.Y.Z`、數字版本必須同時等於三份 `package.json`、tag 指向的 commit 必須在 `main` 的歷史上，且 tag commit 或其第一個父 commit 必須有一次 main CI run，其 frontend lint／typecheck／build、backend build、unit、integration、E2E 與 security job 全部成功或被 paths filter 略過。
+Tag 以 Semantic Release 為準。它建立的是 **lightweight tag**，`release-stack.yml` 對 lightweight 與 annotated 一律接受，不檢查 tag 型別。階段 3 仍然會在下列任一條件不成立時拒絕發布：tag 名稱必須完全符合 `vX.Y.Z`、數字版本必須同時等於三份 `package.json`、tag 指向的 commit 必須在 `main` 的歷史上，且 tag commit —— 或在 tag commit 未變更四個 release asset 以外任何檔案時，其第一個父 commit —— 必須有一次 main CI run，其 frontend lint／typecheck／build、backend build、unit、integration、E2E 與 security job 全部成功或被 paths filter 略過。
 
 ### 手動入口
 

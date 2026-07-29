@@ -83,18 +83,40 @@ jobs:
             exit 1
           fi
 
-          # 接受 tag commit 自己或其第一個父 commit 的成功 CI run。
+          # 預設只接受 tag commit 自己的成功 CI run。
           #
-          # 版本號 commit 是 semantic-release 產生的，而它以預設 GITHUB_TOKEN
-          # 推送，GitHub 的遞迴保護使該次 push 不會建立任何 workflow run ——
-          # 所以要求版本號 commit 自己通過 CI 是不可能滿足的條件。
+          # 例外：semantic-release 產生的版本號 commit 以預設 GITHUB_TOKEN 推送，
+          # GitHub 的遞迴保護使該次 push 不會建立任何 workflow run，因此要求它自己
+          # 通過 CI 是不可能滿足的條件，必須退到父 commit 的 run。
           #
-          # 退到父 commit 並沒有放行未經測試的程式碼：版本號 commit 的內容受
-          # .releaserc.json 的 @semantic-release/git assets 白名單限制，只有三份
-          # package.json 與 CHANGELOG.md，應用程式碼與父 commit 完全相同；而三份
-          # package.json 的版本號是否等於 tag，上面已經獨立驗證過了。
+          # 但這個退路必須綁定在「這確實是一個 semantic-release 版本號 commit」的
+          # 事實上，也就是它相對父 commit 的變更完全落在 .releaserc.json 的
+          # @semantic-release/git assets 白名單內。否則任何人只要把一個未經測試的
+          # commit 連同 tag 一起推上 main，就能靠父 commit 的舊 run 通過這道驗證。
+          candidate_shas=("$GITHUB_SHA")
+          parent_sha="$(git rev-parse --verify --quiet "${GITHUB_SHA}^" || true)"
+          if [[ -n "$parent_sha" ]]; then
+            release_assets_only=true
+            while IFS= read -r changed_file; do
+              [[ -z "$changed_file" ]] && continue
+              case "$changed_file" in
+                package.json | frontend/package.json | backend/package.json | CHANGELOG.md) ;;
+                *)
+                  release_assets_only=false
+                  echo "Tag commit 含 semantic-release assets 白名單以外的變更：$changed_file"
+                  ;;
+              esac
+            done < <(git diff --name-only "$parent_sha" "$GITHUB_SHA")
+
+            if [[ "$release_assets_only" == "true" ]]; then
+              candidate_shas+=("$parent_sha")
+            else
+              echo "因此不接受父 commit 的 CI run，要求 tag commit 自己通過完整 CI。"
+            fi
+          fi
+
           ci_verified_sha=''
-          for candidate_sha in "$GITHUB_SHA" "$(git rev-parse "${GITHUB_SHA}^")"; do
+          for candidate_sha in "${candidate_shas[@]}"; do
             runs="$(gh api --method GET \
               -H 'Accept: application/vnd.github+json' \
               -H 'X-GitHub-Api-Version: 2022-11-28' \
@@ -115,7 +137,7 @@ jobs:
             fi
           done
           if [[ -z "$ci_verified_sha" ]]; then
-            echo "找不到此 tag commit 或其父 commit 已完成且成功的 ci.yml push run：$GITHUB_SHA" >&2
+            echo "找不到已完成且成功的 ci.yml push run（已檢查：${candidate_shas[*]}）" >&2
             exit 1
           fi
           echo "CI 驗證來源 commit：$ci_verified_sha"
