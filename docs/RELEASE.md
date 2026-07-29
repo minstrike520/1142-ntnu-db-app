@@ -25,24 +25,24 @@ If a batch of merges contains nothing but no-release types, Semantic Release log
 
 ```
 merge commit M lands on main
-  1. ci.yml              gate jobs → release job → Semantic Release creates commit R + tag
-  2. release-bridge.yml  fires when that same ci.yml run completes → dispatches stage 3
-  3. release-stack.yml   images, attestations, bundle
+  1. ci.yml            lint, builds, tests, security gate
+  2. release.yml       successful CI → Release App → commit R + tag + GitHub Release
+  3. release-stack.yml tag push → images, attestations, bundle
 ```
 
-1. **`ci.yml` — Semantic Release.** After the eight gate jobs pass on the merge commit `M`, the `release` job creates a short-lived installation token for the dedicated Release GitHub App. Semantic Release computes the next version, runs `scripts/update-versions.js` to sync `version` across the root, `backend/package.json`, and `frontend/package.json`, updates `CHANGELOG.md`, pushes the `chore(release): X.Y.Z` commit `R` and the `vX.Y.Z` tag, and — via `@semantic-release/github` — creates the GitHub Release with the generated notes. Semantic Release owns the tag and the Release.
-2. **`release-bridge.yml` — the hand-off.** Listens for that same `ci.yml` run completing on `main`. By then `R` and the tag already exist, so the bridge looks for a `vX.Y.Z` tag on `M` or on `M`'s direct child on `main` (which is `R`), checks the tag's Release does not already carry a bundle, and dispatches stage 3. When the run produced no version tag it exits quietly. The App push also starts a second `CI` run for `R`; the bridge recognizes the exact `chore(release): X.Y.Z` subject and ignores that run.
-3. **`release-stack.yml` — the stack.** Builds and pushes the four GHCR image references, signs both provenance attestations, appends its stack section to the existing release notes, and uploads `near-chat-stack-vX.Y.Z.tar.gz`.
+1. **`ci.yml` — the gate.** The merge commit `M` must finish the frontend lint/typecheck/test/build, backend build/unit/integration/E2E, and dependency security jobs successfully. CI has no release credentials and does not publish anything.
+2. **`release.yml` — Semantic Release.** A successful `CI` `workflow_run` on `main` starts this workflow. It creates a short-lived installation token for the dedicated Release GitHub App, computes the next version, runs `scripts/update-versions.js` to sync `version` across the root, `backend/package.json`, and `frontend/package.json`, updates `CHANGELOG.md`, pushes the `chore(release): X.Y.Z` commit `R` and the `vX.Y.Z` tag, and — via `@semantic-release/github` — creates the GitHub Release with generated notes. Semantic Release owns the tag and the Release.
+3. **`release-stack.yml` — the stack.** The App's tag push directly starts this workflow. It builds and pushes the four GHCR image references, signs both provenance attestations, appends its stack section to the existing release notes, and uploads `near-chat-stack-vX.Y.Z.tar.gz`.
 
-### Release App identity and the bridge
+### Release App identity and the event chain
 
-The default `secrets.GITHUB_TOKEN` cannot bypass the repository ruleset that restricts creation of `v*` tags. The release job therefore exchanges `RELEASE_APP_CLIENT_ID` and `RELEASE_APP_PRIVATE_KEY` for a short-lived GitHub App installation token. The App is installed only on this repository, has write permission for Contents, Issues, and Pull Requests, and is the actor granted bypass for the release-tag creation ruleset.
+The default `secrets.GITHUB_TOKEN` cannot bypass the repository ruleset that restricts creation of `v*` tags. `release.yml` therefore exchanges `RELEASE_APP_CLIENT_ID` and `RELEASE_APP_PRIVATE_KEY` for a short-lived GitHub App installation token. The App is installed only on this repository, has write permission for Contents, Issues, and Pull Requests, and is the actor granted bypass for the release-tag creation ruleset.
 
-Events created with an App installation token do start workflows. A push of `R` therefore starts its own `CI` run. Direct tag-triggered Stack publication is intentionally disabled, however: `release-stack.yml` only accepts `workflow_dispatch`, and the bridge is the sole automatic caller. This ensures Stack publication starts only after the CI run that produced the release has finished, and prevents the App's tag push and the bridge from racing or publishing the same version twice.
+Events created with an App installation token start workflows, which makes the direct three-stage chain possible. The release workflow itself does not start until `M` has a successful, completed CI run. Its tag push then starts Stack publication without a bridge or an Actions API dispatch.
 
-The bridge triggered by `M` may dispatch stage 3 before the second CI run for `R` finishes. Stage 3 therefore accepts a successful run for the tag commit **or its first parent**, but only after proving that the tag commit is the tightly scoped version-assets commit Semantic Release is expected to create.
+The App also pushes `R`, so `R` gets its own `CI` run. When that run completes, it would ordinarily trigger `release.yml` again; the release guard recognizes the exact `chore(release): X.Y.Z` subject and exits before requesting an App token. The guard also skips an older CI result when `main` has already advanced, leaving the newest successful CI run to release the accumulated commits.
 
-That fallback is not unconditional. Stage 3 diffs the tag commit against its first parent and only falls back when **both** hold:
+The tag push can start stage 3 before `R`'s CI finishes. Stage 3 therefore accepts the already-successful CI for `R`'s first parent `M`, but only after proving that `R` is the tightly scoped version-assets commit Semantic Release is expected to create. It diffs the tag commit against its first parent and only falls back when **both** hold:
 
 - every changed path is one of the four `@semantic-release/git` `assets` — `package.json`, `frontend/package.json`, `backend/package.json`, `CHANGELOG.md`; and
 - the three `package.json` files are identical to the parent's apart from `version` (compared as parsed JSON, so formatting does not matter).
@@ -51,26 +51,27 @@ The second condition is not redundant. `backend/package.json` is copied into the
 
 Anything failing either condition must have passed CI as itself.
 
+Semantic Release pushes the tag immediately before `@semantic-release/github` creates the GitHub Release. When stage 3 starts from that tag, it waits for the active `release.yml` run to reach a terminal state so the two workflows cannot race to create the same Release. If the upstream publish failed after pushing the tag, stage 3 continues through the existing recovery path and creates the Release itself. A bounded timeout fails closed and can be retried through the manual entry point.
+
 ### What is still enforced
 
 Semantic Release is the source of truth for tags. It creates **lightweight** tags, and `release-stack.yml` accepts both lightweight and annotated tags; the tag type is not checked. Stage 3 still refuses to publish unless: the tag name matches `vX.Y.Z` exactly, the numeric version matches all three `package.json` files, the tag commit is on `main`'s history, and the tag commit — or its first parent, when the tag commit changes nothing outside the four release assets — has a main CI run whose frontend lint/typecheck/build, backend build, unit, integration, E2E, and security jobs all either succeeded or were skipped by the paths filter.
 
 ### Manual entry points
 
-Stage 3 can be dispatched by hand at any time — this is the normal way to finish a release whose bridge did not fire:
+Stage 3 can be dispatched by hand at any time — this is the normal way to retry a tag whose Stack workflow did not finish:
 
 ```bash
 gh workflow run release-stack.yml --ref v1.0.1
 ```
 
-If the tag itself is missing, push one manually, then explicitly dispatch stage 3:
+If the tag itself is missing, push one manually. The tag push directly starts stage 3:
 
 ```bash
 git switch main
 git pull --ff-only origin main
 git tag v1.0.1
 git push origin v1.0.1
-gh workflow run release-stack.yml --ref v1.0.1
 ```
 
 If no GitHub Release exists for the tag, `release-stack.yml` creates one itself. Never hand-create a tag for a version Semantic Release has already released; see "Immutability and failure handling" below.
@@ -105,23 +106,23 @@ The database runtime is fixed to PostgreSQL 18 Alpine by digest. The schema is v
 
 ## Immutability and failure handling
 
-The four application image references and the stack artifacts attached to the GitHub Release are treated as one immutable publication. Because Semantic Release creates the Release before `release-stack.yml` runs, the existence of a Release is *not* the idempotency key — the presence of the `near-chat-stack-vX.Y.Z.tar.gz` bundle asset is. A clean first publication requires all four image references and that bundle asset to be absent; `release-stack.yml` then appends its stack section to the existing release notes and uploads the bundle. A rerun only verifies that all four references resolve to their recorded digests, both provenance attestations exist, and the Release contains the matching manifest and bundle. Partial publications, mismatched digests, missing attestations, or a bundle asset present without its images fail closed; the workflow never overwrites an existing version.
+The four application image references and the stack artifacts attached to the GitHub Release are treated as one immutable publication. Semantic Release normally creates the Release immediately after pushing the tag, and `release-stack.yml` waits for the active upstream workflow to finish; nevertheless, the existence of a Release is *not* the idempotency key — the presence of the `near-chat-stack-vX.Y.Z.tar.gz` bundle asset is. A clean first publication requires all four image references and that bundle asset to be absent; `release-stack.yml` then appends its stack section to the existing release notes and uploads the bundle. A rerun only verifies that all four references resolve to their recorded digests, both provenance attestations exist, and the Release contains the matching manifest and bundle. Partial publications, mismatched digests, missing attestations, or a bundle asset present without its images fail closed; the workflow never overwrites an existing version.
 
 Recovering from a half-published version therefore means deleting the bundle asset and the four image references (or the whole Release and tag) by hand before rerunning.
 
 ### Where to look when a release stalls
 
-A releasing merge produces three workflow runs. Find the last one that appeared and read the row below it:
+A releasing merge has three publication stages, plus an expected validation `CI` and guarded `release.yml` run for version commit `R`. Find the last stage that appeared and read the row below it:
 
 | Runs you see | What happened | What to do |
 | --- | --- | --- |
-| `CI` only, `release` job green, no tag | Semantic Release found no release-worthy commits (`no release` in the job log) | Nothing. Not a failure. |
-| `CI` green but the `release` job failed | Semantic Release could not compute or push the release | Read the job log. Common causes: shallow clone (`fetch-depth: 0` missing from the `release` job checkout), invalid `RELEASE_APP_CLIENT_ID` / `RELEASE_APP_PRIVATE_KEY`, missing App permissions or installation, or the App not being listed in the tag ruleset bypass actors. |
-| `CI` + tag + Release, no `橋接 CI 至 Stack 發布` run | The bridge did not fire | Check the bridge's `workflow_run` filter still names the `CI` workflow. Dispatch stage 3 by hand meanwhile. |
-| Bridge ran and exited quietly | No `vX.Y.Z` tag was found on the merge commit or its child, or the Release already has its bundle | Read the bridge's log line — it says which. Usually correct behaviour. |
+| `CI` failed | A quality or security gate rejected the merge commit | Read the failing CI job. `release.yml` correctly does not run. |
+| `CI` green, `release.yml` green, no tag | Semantic Release found no release-worthy commits (`no release` in the job log), skipped a version commit, or skipped an outdated CI result | Read the guard and Semantic Release log. These are normally expected outcomes. |
+| `release.yml` failed | Semantic Release could not compute or push the release | Common causes are shallow history, invalid `RELEASE_APP_CLIENT_ID` / `RELEASE_APP_PRIVATE_KEY`, missing App permissions or installation, or the App not being listed in the tag ruleset bypass actors. |
+| Tag exists but no `發布完整 Near Chat Stack` run | The App-generated tag event did not start stage 3 | Check that `release-stack.yml` still listens for `push.tags: v*`; dispatch stage 3 by hand meanwhile. |
 | `發布完整 Near Chat Stack` failed | A stage 3 gate rejected the publication | The failing step names the reason: tag format, `package.json` version mismatch, tag not on `main`, no successful CI run for the tag commit or its parent, or a partial publication. |
 
-A releasing merge normally creates a second `CI` run for the `chore(release): X.Y.Z` commit. It is expected and performs validation only: the `ci:` release job finds no new release-worthy commit, and the bridge ignores this run to avoid a duplicate Stack dispatch.
+A releasing merge normally creates a second `CI` run for the `chore(release): X.Y.Z` commit. It is expected and performs validation only; its downstream `release.yml` run exits at the release-commit guard, preventing a loop.
 
 Once the cause is fixed, re-run stage 3 with `gh workflow run release-stack.yml --ref vX.Y.Z`. It is safe to run repeatedly: a version whose bundle is already attached takes the verify-only path and changes nothing.
 

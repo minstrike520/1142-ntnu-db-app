@@ -354,8 +354,8 @@ describe('userRepository', () => {
    - `BREAKING CHANGE:` $\rightarrow$ 遞增 **Major (`a`)**（如 `v1.0.1` $\rightarrow$ `v2.0.0`）
    - `docs:`, `chore:`, `refactor:` $\rightarrow$ 不遞增版本號
 2. **三方版本號同步**：自動執行 `scripts/update-versions.js` 同步更新根目錄 `package.json`、`frontend/package.json` 與 `backend/package.json` 的版本。
-3. **Tag 與 Release 頁面**：推送版本號 commit 與 **lightweight** `vX.Y.Z` tag、更新 `CHANGELOG.md`，並由 `@semantic-release/github` **建立 GitHub Release** 與格式化後的 Release Notes。Tag 與 Release 皆由 Semantic Release 擁有；此路徑下 `release-stack.yml` 不會自行建立，也不再要求 annotated tag。
-4. **CI 至 Stack 的交棒**：release job 會為專用 Release GitHub App 建立短效 token；該 App 的 repository 安裝與 tag ruleset bypass 讓 Semantic Release 能推送受保護的 `vX.Y.Z` tag。App 的推送會啟動 workflow，所以版本號 commit 會有第二次 `CI`。為避免重複發布或競速，`release-stack.yml` 不監聽 tag push；`.github/workflows/release-bridge.yml` 會等產生發布的 `ci.yml` run 完成、找出 tag，再精確 dispatch 一次 Stack 發布，同時略過版本號 commit 的 bridge run。
+3. **Tag 與 Release 頁面**：`main` 上的 `ci.yml` 成功完成後，`.github/workflows/release.yml` 會為專用 Release GitHub App 建立短效 token。Semantic Release 接著推送版本號 commit 與 **lightweight** `vX.Y.Z` tag、更新 `CHANGELOG.md`，並由 `@semantic-release/github` **建立 GitHub Release** 與格式化後的 Release Notes。Release guard 會略過版本號 commit 與已過期的 CI 結果。
+4. **Tag 至 Stack 的交棒**：App 的推送會啟動 workflow，所以 `vX.Y.Z` tag 會直接觸發 `release-stack.yml`，不經 bridge 或 Actions API dispatch。Stack workflow 會等仍在執行的 `release.yml` run 完成，再讀取或建立 GitHub Release 並附加 Stack artifacts。版本號 commit 也會有第二次驗證 `CI`，其下游 release run 會在 guard 結束。
 5. **Stack 映像檔與部署包發布**：`.github/workflows/release-stack.yml` 建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，把 Stack 區段（image digest、PostgreSQL runtime、bundle SHA-256）附加到既有的 Release Notes 之後，並上傳 `near-chat-stack-vX.Y.Z.tar.gz` 部署包。判斷某版本是否已發布的冪等性依據是這個 bundle asset，而非 Release 本身。
 
 完整流程、手動入口（`gh workflow run release-stack.yml --ref vX.Y.Z`），以及發布卡住時的排查對照表，見 [docs/ZH-TW/RELEASE.md](RELEASE.md)。
