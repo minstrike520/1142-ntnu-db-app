@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  # 自動發布時，tag 是由 ci.yml 的 release job 以預設 GITHUB_TOKEN 推送的，
+  # GitHub 不會讓這種 push 觸發新的 workflow run。release-bridge.yml 因此改以
+  # workflow_dispatch 呼叫本 workflow；這個入口同時也是人工復原的手段
+  # （gh workflow run release-stack.yml --ref vX.Y.Z）。
+  workflow_dispatch:
 
 concurrency:
   group: release-stack-${{ github.ref }}
@@ -66,31 +71,54 @@ jobs:
             exit 1
           fi
 
+          # 要求 tag commit 在 main 的歷史上，而非等於當下的 main HEAD。移除
+          # [skip ci] 之後，版本號 commit 必須先跑完一輪完整 CI 才會經由
+          # release-bridge.yml 觸發本 workflow；這段期間若有其他 PR 合併進 main，
+          # 嚴格相等的檢查會把一個完全正常的發布擋掉。ancestor 檢查一樣能保證
+          # 被發布的 commit 真的在 main 上，且不會被 force-push 出去的分支冒充。
           git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
           main_sha="$(git rev-parse refs/remotes/origin/main)"
-          if [[ "$main_sha" != "$GITHUB_SHA" ]]; then
-            echo "版本 tag 必須指向目前 main HEAD：main=$main_sha tag=$GITHUB_SHA" >&2
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "版本 tag 必須指向 main 歷史上的 commit：main=$main_sha tag=$GITHUB_SHA" >&2
             exit 1
           fi
 
-          runs="$(gh api --method GET \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
-            -f head_sha="$GITHUB_SHA" \
-            -f branch=main \
-            -f event=push \
-            -f status=completed \
-            -f per_page=100)"
-          run_id="$(jq -r '
-            [.workflow_runs[] | select(.conclusion == "success")]
-            | first
-            | .id // empty
-          ' <<< "$runs")"
-          if [[ -z "$run_id" ]]; then
-            echo "找不到此 main commit 已完成且成功的 ci.yml push run：$GITHUB_SHA" >&2
+          # 接受 tag commit 自己或其第一個父 commit 的成功 CI run。
+          #
+          # 版本號 commit 是 semantic-release 產生的，而它以預設 GITHUB_TOKEN
+          # 推送，GitHub 的遞迴保護使該次 push 不會建立任何 workflow run ——
+          # 所以要求版本號 commit 自己通過 CI 是不可能滿足的條件。
+          #
+          # 退到父 commit 並沒有放行未經測試的程式碼：版本號 commit 的內容受
+          # .releaserc.json 的 @semantic-release/git assets 白名單限制，只有三份
+          # package.json 與 CHANGELOG.md，應用程式碼與父 commit 完全相同；而三份
+          # package.json 的版本號是否等於 tag，上面已經獨立驗證過了。
+          ci_verified_sha=''
+          for candidate_sha in "$GITHUB_SHA" "$(git rev-parse "${GITHUB_SHA}^")"; do
+            runs="$(gh api --method GET \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="$candidate_sha" \
+              -f branch=main \
+              -f event=push \
+              -f status=completed \
+              -f per_page=100)"
+            run_id="$(jq -r '
+              [.workflow_runs[] | select(.conclusion == "success")]
+              | first
+              | .id // empty
+            ' <<< "$runs")"
+            if [[ -n "$run_id" ]]; then
+              ci_verified_sha="$candidate_sha"
+              break
+            fi
+          done
+          if [[ -z "$ci_verified_sha" ]]; then
+            echo "找不到此 tag commit 或其父 commit 已完成且成功的 ci.yml push run：$GITHUB_SHA" >&2
             exit 1
           fi
+          echo "CI 驗證來源 commit：$ci_verified_sha"
 
           jobs="$(gh api --method GET \
             -H 'Accept: application/vnd.github+json' \
@@ -98,11 +126,15 @@ jobs:
             "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs" \
             -f per_page=100)"
           required='["frontend-lint","frontend-typecheck","frontend-build","backend-build","unit-tests","integration-tests","e2e-tests","security-scan"]'
+          # 接受 success 或 skipped，與 ci.yml 的 release job 條件一致。驗證對象改為
+          # 合併 commit 之後，這一點是必要的：ci.yml 的 paths-filter 會在只動前端的
+          # 變更上跳過 backend 的 job（反之亦然），而 skipped 正代表該側程式碼未變更、
+          # 沿用上一次已驗證的狀態。要求 8 個 job 一律 success 會擋掉大部分正常發布。
           if ! jq -e --argjson required "$required" '
-            [.jobs[] | select(.conclusion == "success") | .name] as $successful
-            | ($required - $successful | length == 0)
+            [.jobs[] | select(.conclusion == "success" or .conclusion == "skipped") | .name] as $accepted
+            | ($required - $accepted | length == 0)
           ' <<< "$jobs" >/dev/null; then
-            echo "Main CI run 未包含全部成功的 frontend／backend 必要工作：run_id=$run_id" >&2
+            echo "Main CI run 未包含全部成功或略過的 frontend／backend 必要工作：run_id=$run_id" >&2
             exit 1
           fi
 
