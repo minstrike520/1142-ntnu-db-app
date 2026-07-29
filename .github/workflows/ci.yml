@@ -349,6 +349,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # Semantic Release 需要完整的 commit 與 tag 歷史才能判斷「上次發布後有
+          # 哪些變更」與應該的版本號；shallow clone 會讓它算錯或整個略過發布。
+          fetch-depth: 0
           persist-credentials: false
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
