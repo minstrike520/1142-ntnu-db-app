@@ -194,8 +194,9 @@ jobs:
 
           # Semantic Release 先推 tag，再由 @semantic-release/github 建立 Release。
           # Tag push 可能讓本 workflow 在 release.yml 尚未結束時抵達。release-main
-          # concurrency 保證同時最多只有一個上游 run，因此等待該 run 進入終態，
-          # 避免兩邊競相建立同一個 Release。
+          # concurrency 保證同時最多只有一個上游 run 實際執行（另可有一個 queued
+          # run），因此只等待 in_progress 的 run 進入終態，避免誤選較新的 queued
+          # run，也避免兩邊競相建立同一個 Release。
           runs="$(gh api --method GET \
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
@@ -203,7 +204,7 @@ jobs:
             -f event=workflow_run \
             -f per_page=20)"
           release_run_id="$(jq -r '
-            [.workflow_runs[] | select(.status != "completed")]
+            [.workflow_runs[] | select(.status == "in_progress")]
             | first
             | .id // empty
           ' <<< "$runs")"
