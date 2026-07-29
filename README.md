@@ -2,7 +2,7 @@
 
 English | [繁體中文](README.zh-TW.md)
 
-A real-time group chat application built as an NTNU Database Theories course project. This monorepo features a Next.js frontend, a Node.js/Express backend API using raw SQL query pools, and a PostgreSQL database orchestrating custom permissions, chat folders, message lifecycle triggers, and emergency contact alerts.
+A real-time group chat application built as an NTNU Database Theories course project. This monorepo features a Next.js frontend, a Bun/Hono backend API using raw SQL query pools, and a PostgreSQL database orchestrating custom permissions, chat folders, message lifecycle triggers, and emergency contact alerts.
 
 ---
 
@@ -35,7 +35,7 @@ A real-time group chat application built as an NTNU Database Theories course pro
 ## Tech Stack
 
 - **Frontend**: Next.js 16.2 (App Router), React 19, Tailwind CSS v4, Socket.IO Client.
-- **Backend**: Node.js, Express v5, Socket.IO, `pg` (PostgreSQL raw client).
+- **Backend**: Bun, Hono v4, Socket.IO, `pg` (PostgreSQL raw client).
 - **Database**: PostgreSQL 18.
 - **Orchestration**: Docker & Docker Compose.
 - **Package Manager**: pnpm.
@@ -44,8 +44,8 @@ A real-time group chat application built as an NTNU Database Theories course pro
 
 ```text
 .
-├── backend/                # Express API backend
-│   ├── src/                # Backend TypeScript source code (routes, controllers, services, repositories)
+├── backend/                # Hono API backend
+│   ├── src/                # Backend TypeScript source code (routes, services, models, middlewares, realtime, utils)
 │   ├── migrations/         # PostgreSQL node-pg-migrate schema migrations
 │   └── Dockerfile          # Backend container configurations
 ├── frontend/               # Next.js frontend web app
@@ -75,6 +75,7 @@ Here are the key environment parameters you can configure in `.env`:
 | `DATABASE_URL` | PostgreSQL connection URL | `postgresql://chatuser:chatpassword@db:5432/chatdb` |
 | `JWT_SECRET` | Secret key for signing JWT tokens | `dev_secret_key` |
 | `RATE_LIMIT_DISABLED` | Disables request rate limiting for testing | `true` (Set `false` or omit in production) |
+| `TRUST_PROXY` | Take the client IP for rate limiting from the first `X-Forwarded-For` entry. Only enable when the backend really sits behind a trusted reverse proxy | `false` |
 | `NEXT_PUBLIC_API_URL` | Browser-facing backend API URL | `http://localhost:4005` |
 | `ALLOWED_DEV_ORIGINS` | Allowed remote origins for dev (e.g., Tailscale IPs) | *(Empty)* |
 | `UPLOADS_MOUNT_SOURCE` | Storage path or Docker volume name for attachments | `app_uploads` |
@@ -104,7 +105,7 @@ docker compose exec backend pnpm run db:seed
 | Service | Address | Description |
 | :--- | :--- | :--- |
 | **Frontend App** | [http://localhost:3005](http://localhost:3005) | Main Next.js web application |
-| **Backend API** | [http://localhost:4005](http://localhost:4005) | Express API & Socket.IO server |
+| **Backend API** | [http://localhost:4005](http://localhost:4005) | Bun + Hono API & Socket.IO server |
 | **PostgreSQL Database** | `localhost:5435` | PostgreSQL 18 instance (Mapped from internal port `5432`) |
 
 ---

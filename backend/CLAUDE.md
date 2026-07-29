@@ -11,15 +11,15 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 | File | Description |
 |------|-------------|
 | [src/index.ts](src/index.ts) | Composition Root: Instantiates database pool, repositories, services, Hono routes, Socket.IO handlers, and launches the HTTP server |
-| [src/db.ts](src/db.ts) | Exports the shared `pg.Pool` instance initialized from the `DATABASE_URL` environment variable |
+| [src/models/db.ts](src/models/db.ts) | Exports the shared `pg.Pool` instance initialized from the `DATABASE_URL` environment variable |
 | [migrations/](migrations/) | PostgreSQL migration files written in raw SQL managed by `node-pg-migrate` |
-| [package.json](package.json) | NPM scripts (`pnpm dev` for tsx/bun, `pnpm run test`) and dependencies |
+| [package.json](package.json) | NPM scripts (`pnpm run dev` for `bun --watch`, `pnpm run test`) and dependencies |
 
 ## Subdirectories
 
 | Directory | Purpose | Detail Orientation |
 |-----------|---------|--------------------|
-| [src/](src/) | TypeScript source code (routes, services, repositories) | See [backend/src/CLAUDE.md](src/CLAUDE.md) |
+| [src/](src/) | TypeScript source code (routes, services, models, middlewares, realtime, utils) | See [backend/src/CLAUDE.md](src/CLAUDE.md) |
 | [tests/](tests/) | Unit, integration, and E2E test suites | Written using Bun test |
 
 ## For AI Agents
@@ -33,7 +33,7 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 The server strictly implements a 3-tier Hono architecture:
 1. **Routes**: Mount Hono route endpoints, validate inputs via `zValidator`, extract JWT context (`c.get('user')`), and call services. (Located in `src/routes/`).
 2. **Services**: Contain all business logic, authorization checks, state invariants. (Located in `src/services/`).
-3. **Repositories**: Execute raw SQL queries to persist and retrieve data. (Located in `src/repositories/`).
+3. **Repositories**: Execute raw SQL queries to persist and retrieve data. (Located in `src/models/`).
 
 Do not bypass these layers (e.g., calling repositories directly from route handlers).
 

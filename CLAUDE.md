@@ -3,13 +3,13 @@
 <!-- Generated: 2026-06-14 | Updated: 2026-06-14 -->
 
 ## Purpose
-This is a real-time group chat application built as a database course project. It is structured as a monorepo containing a Next.js/React frontend, a Node.js/Express backend API utilizing raw PostgreSQL queries, and a PostgreSQL 18 database, orchestrated locally via Docker Compose.
+This is a real-time group chat application built as a database course project. It is structured as a monorepo containing a Next.js/React frontend, a Bun/Hono backend API utilizing raw PostgreSQL queries, and a PostgreSQL 18 database, orchestrated locally via Docker Compose.
 
 ## Key Files for Project Orientation
 
 | File | Description |
 |------|-------------|
-| [docker-compose.yml](docker-compose.yml) | Defines the local three-service development stack: `db` (PostgreSQL 18), `backend` (Express), and `frontend` (Next.js) |
+| [docker-compose.yml](docker-compose.yml) | Defines the local three-service development stack: `db` (PostgreSQL 18), `backend` (Bun + Hono), and `frontend` (Next.js) |
 | [docker-compose.prod.yml](docker-compose.prod.yml) | Defines the local three-service production stack with optimized builds and Cloudflare Tunnel |
 | [.env.example](.env.example) | Template for environment variables. Must be copied to `.env` in the root folder before local runs |
 | [issues.json](issues.json) | **CRITICAL TASK LIST**: Contains the active catalog of outstanding issues, bugs, refactorings, and features to implement with detailed tasks and acceptance criteria |
@@ -28,7 +28,7 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 
 | Directory | Purpose | Detail Orientation |
 |-----------|---------|--------------------|
-| [backend/](backend/) | Express + Socket.IO API server | See [backend/CLAUDE.md](backend/CLAUDE.md) |
+| [backend/](backend/) | Hono + Socket.IO API server | See [backend/CLAUDE.md](backend/CLAUDE.md) |
 | [frontend/](frontend/) | Next.js 16 + React 19 Client Web App | See [frontend/CLAUDE.md](frontend/CLAUDE.md) |
 | [shared/](shared/) | Shared TypeScript models and interfaces | Mounts read-only into both services |
 | [docs/](docs/) | Design specifications and guidelines | See [docs/CLAUDE.md](docs/CLAUDE.md) |

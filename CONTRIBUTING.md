@@ -2,7 +2,7 @@
 
 English | [繁體中文](CONTRIBUTING.zh-TW.md)
 
-First off, thank you for taking the time to contribute to Near Chat! This project is a database course project, structured as a monorepo containing a React/Next.js frontend, a Node.js/Express backend API, and a PostgreSQL 18 database, orchestrated locally via Docker Compose.
+First off, thank you for taking the time to contribute to Near Chat! This project is a database course project, structured as a monorepo containing a React/Next.js frontend, a Bun/Hono backend API, and a PostgreSQL 18 database, orchestrated locally via Docker Compose.
 
 Please read through this guide to understand our development, testing, and contribution workflows.
 
@@ -113,7 +113,7 @@ docker compose exec backend pnpm run db:seed
    ```bash
    docker compose exec frontend pnpm run lint
    ```
-3. **Running Vitest Tests**:
+3. **Running Bun Tests**:
    - **Unit Tests**:
      ```bash
      docker compose exec backend pnpm run test:unit
@@ -136,7 +136,7 @@ For details, refer to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## 6. API & WebSocket Contract Verification
 
-* Any changes to Express controllers, backend routes, or Socket.IO events must strictly align with the payloads and models defined in [docs/api-documentation.md](docs/api-documentation.md).
+* Any changes to Hono routes, backend services, or Socket.IO events must strictly align with the payloads and models defined in [docs/api-documentation.md](docs/api-documentation.md).
 * Breaking contracts will cause frontend-backend integration failures and fail CI builds.
 
 ---

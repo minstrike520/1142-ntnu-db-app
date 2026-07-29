@@ -4,7 +4,7 @@
 # tests
 
 ## Purpose
-Vitest integration tests for the backend service layer. Tests call the actual service functions against a real PostgreSQL database — no mocking. Each suite manages its own test data via `beforeAll`/`afterAll` setup and teardown.
+Bun test integration tests for the backend service layer. Tests call the actual service functions against a real PostgreSQL database — no mocking. Each suite manages its own test data via `beforeAll`/`afterAll` setup and teardown.
 
 ## Current State
 
@@ -19,7 +19,7 @@ Vitest integration tests for the backend service layer. Tests call the actual se
 
 ### Working In This Directory
 - Tests require a live PostgreSQL database; start the test DB with `docker compose -f docker-compose.test.yml up -d` before running.
-- Run all tests from `backend/`: `npx vitest run` for a single pass.
+- Run all tests from `backend/`: `bun run test` for a single pass. It runs the unit, integration and e2e tiers as three separate processes on purpose — a bare `bun test` loads all three into one runner, where the unit tier's process-global `mock.module()` calls leak into the tiers that need a real database.
 - Test isolation: each suite creates a unique named record in `beforeAll` and deletes it in `afterAll`. Avoid using names like "TestRoomForAPI" or "TestUserAPI" in manual DB operations to prevent conflicts.
 
 ### Testing Requirements
@@ -37,6 +37,6 @@ Vitest integration tests for the backend service layer. Tests call the actual se
 - `../src/services/` — tested modules (reimplemented in #6–#8)
 
 ### External
-- `vitest` — test runner (imported as `describe`, `it`, `expect`, `beforeAll`, `afterAll`)
+- `bun:test` — test runner (imported as `describe`, `it`, `expect`, `beforeAll`, `afterAll`)
 
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
