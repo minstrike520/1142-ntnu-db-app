@@ -32,6 +32,7 @@
     "hono-rate-limiter": "^0.5.3",
     "node-pg-migrate": "^9.0.0",
     "pg": "^8.22.0",
+    "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
     "zod": "^4.4.3"
   },
