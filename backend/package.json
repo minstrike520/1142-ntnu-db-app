@@ -1,7 +1,7 @@
 {
   "name": "near-chat-backend",
   "version": "1.1.0",
-  "description": "",
+  "description": "Bun + Hono backend API for Near Chat",
   "main": "src/index.ts",
   "scripts": {
     "dev": "bun --watch src/index.ts",
