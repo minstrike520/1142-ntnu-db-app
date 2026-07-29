@@ -355,5 +355,8 @@ describe('userRepository', () => {
    - `docs:`, `chore:`, `refactor:` $\rightarrow$ 不遞增版本號
 2. **三方版本號同步**：自動執行 `scripts/update-versions.js` 同步更新根目錄 `package.json`、`frontend/package.json` 與 `backend/package.json` 的版本。
 3. **Tag 與 Release 頁面**：推送版本號 commit 與 **lightweight** `vX.Y.Z` tag、更新 `CHANGELOG.md`，並由 `@semantic-release/github` **建立 GitHub Release** 與格式化後的 Release Notes。Tag 與 Release 皆由 Semantic Release 擁有；此路徑下 `release-stack.yml` 不會自行建立，也不再要求 annotated tag。
-4. **Stack 映像檔與部署包發布**：`.github/workflows/release-stack.yml` 建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，把 Stack 區段（image digest、PostgreSQL runtime、bundle SHA-256）附加到既有的 Release Notes 之後，並上傳 `near-chat-stack-vX.Y.Z.tar.gz` 部署包。判斷某版本是否已發布的冪等性依據是這個 bundle asset，而非 Release 本身。
+4. **CI 至 Stack 的交棒**：`.github/workflows/release-bridge.yml` 監聽**同一次** `ci.yml` run 的完成事件，找出 `vX.Y.Z` tag（可能在合併 commit 上，也可能在該次 run 建立的版本號 commit 上），並觸發 `release-stack.yml`。這個橋接之所以必要，是因為以預設 `GITHUB_TOKEN` 推送的東西 —— 無論 tag 或 commit —— 都不會觸發任何 workflow run。這同時也是版本號 commit 不會有自己的 CI run 的原因，以及 `release-stack.yml` 為何接受 tag commit **或其第一個父 commit** 的成功 CI run。
+5. **Stack 映像檔與部署包發布**：`.github/workflows/release-stack.yml` 建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，把 Stack 區段（image digest、PostgreSQL runtime、bundle SHA-256）附加到既有的 Release Notes 之後，並上傳 `near-chat-stack-vX.Y.Z.tar.gz` 部署包。判斷某版本是否已發布的冪等性依據是這個 bundle asset，而非 Release 本身。
+
+完整流程、手動入口（`gh workflow run release-stack.yml --ref vX.Y.Z`），以及發布卡住時的排查對照表，見 [docs/ZH-TW/RELEASE.md](RELEASE.md)。
 
