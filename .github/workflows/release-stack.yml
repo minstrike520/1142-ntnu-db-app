@@ -56,12 +56,10 @@ jobs:
 
           tag_ref="refs/tags/${GITHUB_REF_NAME}"
           git fetch --force origin "${tag_ref}:${tag_ref}"
-          object_type="$(git cat-file -t "$tag_ref")"
-          if [[ "$object_type" != "tag" ]]; then
-            echo "正式版本必須使用 annotated tag；實際 object type：$object_type" >&2
-            exit 1
-          fi
 
+          # Tag 型別不設限：Semantic Release 建立的是 lightweight tag，手動備援
+          # 流程建立的是 annotated tag。`^{}` 對兩種型別都會 peel 到同一個 commit，
+          # 所以下面這段檢查對兩者等效，不需要再多一道 object type 判斷。
           peeled_sha="$(git rev-parse "${tag_ref}^{}")"
           if [[ "$(git cat-file -t "$peeled_sha")" != "commit" || "$peeled_sha" != "$GITHUB_SHA" ]]; then
             echo "Tag peeled commit 必須等於 workflow commit：tag=$peeled_sha workflow=$GITHUB_SHA" >&2
