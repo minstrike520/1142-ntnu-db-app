@@ -2,8 +2,10 @@ import type { UploadedFile } from '../utils/fileUpload';
 import { ValidationError } from '../utils/AppError';
 import { AttachmentRepository } from '../models/attachmentRepository';
 import {
+  COMPRESSIBLE_ATTACHMENT_FORMATS,
   COMPRESSIBLE_ATTACHMENT_MIME_TYPES,
   compressAttachmentBuffer,
+  detectImageFormat,
   isAnimatedPng,
 } from '../utils/imageCompression';
 
@@ -58,10 +60,25 @@ const compressAttachmentIfEligible = async (
     return unchanged;
   }
 
+  let detectedFormat: string | undefined;
+  try {
+    detectedFormat = await detectImageFormat(file.buffer);
+  } catch {
+    return unchanged;
+  }
+
+  // The multipart MIME and extension are controlled by the client. Only let
+  // bytes that are actually a still-image-capable JPEG/PNG enter this
+  // single-frame conversion path; animated GIF/WebP data disguised as PNG
+  // must remain byte-for-byte untouched.
+  if (!detectedFormat || !COMPRESSIBLE_ATTACHMENT_FORMATS.has(detectedFormat)) {
+    return unchanged;
+  }
+
   // `image/png` also covers APNG. Re-encoding one here would keep only the
   // first frame and permanently drop the animation, which is exactly what
   // excluding GIF above is meant to avoid — so skip those too.
-  if (file.mimetype === 'image/png' && (await isAnimatedPng(file.buffer))) {
+  if (detectedFormat === 'png' && (await isAnimatedPng(file.buffer))) {
     return unchanged;
   }
 

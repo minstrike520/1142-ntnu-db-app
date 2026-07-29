@@ -223,6 +223,23 @@ describe('AttachmentService image compression', () => {
       .png()
       .toBuffer();
 
+  const animatedImage = (format: 'gif' | 'webp') => {
+    const frameSize = 8 * 8 * 3;
+    const first = Buffer.alloc(frameSize);
+    const second = Buffer.alloc(frameSize);
+
+    for (let offset = 0; offset < frameSize; offset += 3) {
+      first.set([220, 20, 20], offset);
+      second.set([20, 20, 220], offset);
+    }
+
+    return sharp(Buffer.concat([first, second]), {
+      raw: { width: 8, height: 16, pageHeight: 8, channels: 3 },
+    })
+      [format]({ loop: 0, delay: [100, 100] })
+      .toBuffer();
+  };
+
   it('compresses a PNG attachment to WebP and stores image/webp at the .webp path', async () => {
     const file = await stageUpload(await solidPng(20, 10, 20, 30), '.png', 'image/png', 'photo.png');
 
@@ -367,6 +384,26 @@ describe('AttachmentService image compression', () => {
 
     expect(createdArg().fileType).toBe('image/gif');
   });
+
+  for (const actualFormat of ['gif', 'webp'] as const) {
+    it(`does not flatten an animated ${actualFormat.toUpperCase()} disguised as PNG`, async () => {
+      const animation = await animatedImage(actualFormat);
+      expect((await sharp(animation).metadata()).pages).toBe(2);
+      const file = await stageUpload(animation, '.png', 'image/png', 'animation.png');
+
+      await service.uploadAttachment('user-1', file);
+
+      const { filePath, fileType, originalName } = createdArg();
+      expect(filePath).toBe(file.path!);
+      expect(fileType).toBe('image/png');
+      expect(originalName).toBe('animation.png');
+      expect(await Bun.file(`${file.path!}.webp`).exists()).toBe(false);
+
+      const stored = Buffer.from(await Bun.file(filePath).arrayBuffer());
+      expect(stored.equals(animation)).toBe(true);
+      expect((await sharp(stored).metadata()).pages).toBe(2);
+    });
+  }
 
   it('falls back to the original mimetype and leaves the file untouched when compression fails', async () => {
     const originalBytes = Buffer.from('not a real png');

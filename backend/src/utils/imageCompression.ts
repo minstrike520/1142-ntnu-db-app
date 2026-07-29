@@ -19,6 +19,7 @@ export const MAX_INPUT_PIXELS = 64_000_000;
 // safe, lossless-in-intent operation. GIF is excluded because it may be
 // animated and sharp would silently collapse it to its first frame.
 export const COMPRESSIBLE_ATTACHMENT_MIME_TYPES = new Set(['image/jpeg', 'image/png']);
+export const COMPRESSIBLE_ATTACHMENT_FORMATS = new Set(['jpeg', 'png']);
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -72,6 +73,16 @@ export const isAnimatedPng = async (buffer: Buffer): Promise<boolean> => {
   }
 
   return false;
+};
+
+/**
+ * Detects the image format from its bytes rather than trusting multipart
+ * metadata. This prevents an animated GIF/WebP renamed to `.png` from entering
+ * the single-frame attachment compression pipeline.
+ */
+export const detectImageFormat = async (buffer: Buffer): Promise<string | undefined> => {
+  const metadata = await sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+  return metadata.format;
 };
 
 export const compressAvatarBuffer = (buffer: Buffer): Promise<Buffer> =>
