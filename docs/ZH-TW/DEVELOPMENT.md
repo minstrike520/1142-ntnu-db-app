@@ -354,6 +354,6 @@ describe('userRepository', () => {
    - `BREAKING CHANGE:` $\rightarrow$ 遞增 **Major (`a`)**（如 `v1.0.1` $\rightarrow$ `v2.0.0`）
    - `docs:`, `chore:`, `refactor:` $\rightarrow$ 不遞增版本號
 2. **三方版本號同步**：自動執行 `scripts/update-versions.js` 同步更新根目錄 `package.json`、`frontend/package.json` 與 `backend/package.json` 的版本。
-3. **Changelog 與 Release 頁面**：自動更新 `CHANGELOG.md`，並**將格式化後的 Release Notes 直接發布於 GitHub Release 頁面**。
-4. **Stack 映像檔與部署包發布**：建立 `vX.Y.Z` 標籤並觸發 `.github/workflows/release-stack.yml`，自動建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，並附加 `near-chat-stack-vX.Y.Z.tar.gz` 部署包至 GitHub Release。
+3. **Tag 與 Release 頁面**：推送版本號 commit 與 **lightweight** `vX.Y.Z` tag、更新 `CHANGELOG.md`，並由 `@semantic-release/github` **建立 GitHub Release** 與格式化後的 Release Notes。Tag 與 Release 皆由 Semantic Release 擁有；此路徑下 `release-stack.yml` 不會自行建立，也不再要求 annotated tag。
+4. **Stack 映像檔與部署包發布**：`.github/workflows/release-stack.yml` 建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，把 Stack 區段（image digest、PostgreSQL runtime、bundle SHA-256）附加到既有的 Release Notes 之後，並上傳 `near-chat-stack-vX.Y.Z.tar.gz` 部署包。判斷某版本是否已發布的冪等性依據是這個 bundle asset，而非 Release 本身。
 
