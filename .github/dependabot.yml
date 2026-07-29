@@ -1,33 +1,22 @@
 version: 2
 updates:
-  # 1. 根目錄 npm/pnpm 套件
+  # 1. npm/pnpm 套件 —— 整個 pnpm workspace
+  #
+  # 只需要這一個項目。本 repo 是單一 root lockfile 的 pnpm workspace，
+  # frontend/ 與 backend/ 底下已經沒有各自的 pnpm-lock.yaml，Dependabot 會
+  # 從根目錄一併解析所有 workspace 套件的 package.json 並更新根 lockfile。
+  #
+  # 先前另外宣告 /frontend 與 /backend 兩個 npm 項目，在 lockfile 收斂（#420）
+  # 之後會產生「只改 package.json、不更新 lockfile」的 PR，導致
+  # `pnpm install --frozen-lockfile` 失敗而永遠無法合併。
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "root"
-    groups:
-      minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "patch"
-          - "minor"
-
-  # 2. 前端 npm/pnpm 套件 (/frontend)
-  - package-ecosystem: "npm"
-    directory: "/frontend"
-    schedule:
-      interval: "weekly"
-      day: "monday"
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-      - "frontend"
     groups:
       minor-and-patch:
         patterns:
@@ -36,25 +25,7 @@ updates:
           - "patch"
           - "minor"
 
-  # 3. 後端 npm/pnpm 套件 (/backend)
-  - package-ecosystem: "npm"
-    directory: "/backend"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "backend"
-    groups:
-      minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "patch"
-          - "minor"
-
-  # 4. GitHub Actions 工作流 (.github/workflows)
+  # 2. GitHub Actions 工作流 (.github/workflows)
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -65,7 +36,8 @@ updates:
       - "ci/cd"
       - "dependencies"
 
-  # 5. 後端 Docker Base Image (/backend)
+  # 3. 後端 Docker Base Image (/backend)
+  #    Dockerfile 仍位於各套件目錄，因此 docker 項目維持分開宣告。
   - package-ecosystem: "docker"
     directory: "/backend"
     schedule:
@@ -76,7 +48,7 @@ updates:
       - "docker"
       - "backend"
 
-  # 6. 前端 Docker Base Image (/frontend)
+  # 4. 前端 Docker Base Image (/frontend)
   - package-ecosystem: "docker"
     directory: "/frontend"
     schedule:
