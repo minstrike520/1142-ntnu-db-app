@@ -1,8 +1,19 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
 import request from 'supertest';
+import sharp from 'sharp';
 import { resetDb } from '../../helpers/resetDb';
 
 let app: any;
+
+// Avatar uploads are decoded and re-encoded to WebP server-side, so the
+// fixture has to be a genuinely decodable image — a bare PNG magic-byte
+// prefix passes the signature check but cannot be decoded.
+const makeRealPngBuffer = () =>
+  sharp({
+    create: { width: 16, height: 16, channels: 3, background: { r: 120, g: 80, b: 40 } },
+  })
+    .png()
+    .toBuffer();
 
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
@@ -222,7 +233,7 @@ describe('Room E2E', () => {
     expect(createRes.status).toBe(201);
     const roomId = createRes.body.roomId;
 
-    const buffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const buffer = await makeRealPngBuffer();
     const uploadRes = await request(app)
       .post(`/api/v1/rooms/${roomId}/avatar`)
       .set('Authorization', `Bearer ${token}`)
@@ -230,6 +241,8 @@ describe('Room E2E', () => {
 
     expect(uploadRes.status).toBe(200);
     expect(uploadRes.body.avatarUrl).toContain('/uploads/avatars/');
+    // Stored avatars are always re-encoded to WebP regardless of upload format.
+    expect(uploadRes.body.avatarUrl.endsWith('.webp')).toBe(true);
 
     // Clean up uploaded file
     const fs = await import('fs/promises');
@@ -254,7 +267,9 @@ describe('Room E2E', () => {
       .set('Authorization', `Bearer ${otherToken}`)
       .send({ inviteCode: createRes.body.inviteCode });
 
-    const buffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    // Use a genuinely valid image so the 403 can only come from the
+    // permission check, never from image decoding failing first.
+    const buffer = await makeRealPngBuffer();
     const uploadRes = await request(app)
       .post(`/api/v1/rooms/${roomId}/avatar`)
       .set('Authorization', `Bearer ${otherToken}`)
