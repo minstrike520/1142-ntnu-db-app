@@ -40,7 +40,7 @@ The default `secrets.GITHUB_TOKEN` cannot bypass the repository ruleset that res
 
 Events created with an App installation token start workflows, which makes the direct three-stage chain possible. The release workflow itself does not start until `M` has a successful, completed CI run. Its tag push then starts Stack publication without a bridge or an Actions API dispatch.
 
-The App also pushes `R`, so `R` gets its own `CI` run. When that run completes, it would ordinarily trigger `release.yml` again; the release guard recognizes the exact `chore(release): X.Y.Z` subject and exits before requesting an App token. The guard also skips an older CI result when `main` has already advanced, leaving the newest successful CI run to release the accumulated commits.
+The App also pushes `R`, so `R` gets its own `CI` run. When that run completes, it would ordinarily trigger `release.yml` again; the release guard recognizes the exact `chore(release): X.Y.Z` subject from the CI source commit and exits before requesting an App token. If `main` has advanced, the guard reuses the successful result only when every intervening commit changes paths ignored by `ci.yml`; any code, workspace, Compose, or workflow change is left to its own newer CI run. This prevents a docs-only commit from silently stranding the only releasable CI result without allowing unverified code to ship.
 
 The tag push can start stage 3 before `R`'s CI finishes. Stage 3 therefore accepts the already-successful CI for `R`'s first parent `M`, but only after proving that `R` is the tightly scoped version-assets commit Semantic Release is expected to create. It diffs the tag commit against its first parent and only falls back when **both** hold:
 
@@ -117,7 +117,7 @@ A releasing merge has three publication stages, plus an expected validation `CI`
 | Runs you see | What happened | What to do |
 | --- | --- | --- |
 | `CI` failed | A quality or security gate rejected the merge commit | Read the failing CI job. `release.yml` correctly does not run. |
-| `CI` green, `release.yml` green, no tag | Semantic Release found no release-worthy commits (`no release` in the job log), skipped a version commit, or skipped an outdated CI result | Read the guard and Semantic Release log. These are normally expected outcomes. |
+| `CI` green, `release.yml` green, no tag | Semantic Release found no release-worthy commits (`no release` in the job log), skipped a version commit, or deferred to a newer CI because `main` gained CI-relevant paths | Read the guard and Semantic Release log. These are normally expected outcomes. |
 | `release.yml` failed | Semantic Release could not compute or push the release | Common causes are shallow history, invalid `RELEASE_APP_CLIENT_ID` / `RELEASE_APP_PRIVATE_KEY`, missing App permissions or installation, or the App not being listed in the tag ruleset bypass actors. |
 | Tag exists but no `發布完整 Near Chat Stack` run | The App-generated tag event did not start stage 3 | Check that `release-stack.yml` still listens for `push.tags: v*`; dispatch stage 3 by hand meanwhile. |
 | `發布完整 Near Chat Stack` failed | A stage 3 gate rejected the publication | The failing step names the reason: tag format, `package.json` version mismatch, tag not on `main`, no successful CI run for the tag commit or its parent, or a partial publication. |

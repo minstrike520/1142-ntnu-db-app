@@ -8,8 +8,8 @@ name: 建立版本與 GitHub Release
 #   CI(M) 完成 → 本 workflow 建立版本 commit R 與 tag → release-stack.yml
 #
 # R 也會啟動一次 CI；該 CI 完成後，本 workflow 會再次被喚起，因此 guard 會精確
-# 略過 chore(release): X.Y.Z。若 main 已前進到另一個 commit，也交給較新的 CI run
-# 發布，避免從已過期的 commit 計算或推送版本。
+# 略過 chore(release): X.Y.Z。若 main 已前進，只有後續 commits 全部僅修改 CI 的
+# ignored paths 時才沿用這次綠燈；其餘情況交給較新的 CI run 發布。
 
 on:
   workflow_run:
@@ -51,18 +51,40 @@ jobs:
         run: |
           set -euo pipefail
 
-          checked_sha="$(git rev-parse HEAD)"
-          if [[ "$checked_sha" != "$CI_HEAD_SHA" ]]; then
-            echo "main 已從本次 CI commit 前進，交由較新的 CI run 發布：ci=$CI_HEAD_SHA main=$checked_sha"
+          ci_subject="$(git show -s --format=%s "$CI_HEAD_SHA")"
+          if [[ "$ci_subject" =~ ^chore\(release\):[[:space:]][0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "略過 Semantic Release 版本號 commit 的第二次 CI：$CI_HEAD_SHA"
             echo 'should_release=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          subject="$(git show -s --format=%s HEAD)"
-          if [[ "$subject" =~ ^chore\(release\):[[:space:]][0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "略過 Semantic Release 版本號 commit 的第二次 CI：$CI_HEAD_SHA"
-            echo 'should_release=false' >> "$GITHUB_OUTPUT"
-            exit 0
+          checked_sha="$(git rev-parse HEAD)"
+          if [[ "$checked_sha" != "$CI_HEAD_SHA" ]]; then
+            if ! git merge-base --is-ancestor "$CI_HEAD_SHA" "$checked_sha"; then
+              echo "本次 CI commit 不在目前 main 的歷史上：ci=$CI_HEAD_SHA main=$checked_sha" >&2
+              exit 1
+            fi
+
+            ci_relevant_paths=()
+            # 必須與 ci.yml 的 push.paths-ignore 保持一致。
+            while IFS= read -r commit; do
+              while IFS= read -r changed_path; do
+                [[ -z "$changed_path" ]] && continue
+                case "$changed_path" in
+                  docs/* | README.md | README.zh-TW.md | .github/ISSUE_TEMPLATE/* | LICENSE | AGENTS.md) ;;
+                  *) ci_relevant_paths+=("$changed_path") ;;
+                esac
+              done < <(git diff-tree --no-commit-id --name-only -r -m "$commit")
+            done < <(git rev-list --ancestry-path "${CI_HEAD_SHA}..${checked_sha}")
+
+            if (( ${#ci_relevant_paths[@]} > 0 )); then
+              echo "main 已包含需要另一次 CI 的後續變更，交由較新的 run 發布："
+              printf '  %s\n' "${ci_relevant_paths[@]}" | sort -u
+              echo 'should_release=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "main 僅新增 CI ignored paths，沿用本次成功結果：ci=$CI_HEAD_SHA main=$checked_sha"
           fi
 
           echo 'should_release=true' >> "$GITHUB_OUTPUT"

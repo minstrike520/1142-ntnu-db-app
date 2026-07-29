@@ -40,7 +40,7 @@ PR 一律以 squash merge 合併，因此進入 `main` 的 commit 就是 **PR �
 
 App installation token 產生的事件會啟動 workflow，因此可以直接串成三階段事件鏈。Release workflow 一定等 `M` 的 CI 成功且完整結束後才執行；它推送 tag 之後，不需要 bridge 或 Actions API dispatch 就能啟動 Stack 發布。
 
-App 也會推送 `R`，所以 `R` 會有自己的 `CI` run。該次 run 完成後原本又會啟動 `release.yml`；release guard 會辨識完全符合 `chore(release): X.Y.Z` 的 subject，在要求 App token 前直接結束。若 `main` 已前進，guard 也會略過較舊的 CI 結果，讓最新且成功的 CI run 發布累積的 commits。
+App 也會推送 `R`，所以 `R` 會有自己的 `CI` run。該次 run 完成後原本又會啟動 `release.yml`；release guard 會從 CI 來源 commit 辨識完全符合 `chore(release): X.Y.Z` 的 subject，在要求 App token 前直接結束。若 `main` 已前進，只有中間每個 commit 都只修改 `ci.yml` ignored paths 時才沿用這次成功結果；只要包含程式碼、workspace、Compose 或 workflow 變更，就交給其自身較新的 CI run。這能避免純文件 commit 讓唯一可發布的 CI 永久漏發，同時不會發布未經驗證的程式碼。
 
 Tag push 可能在 `R` 的 CI 完成前啟動階段 3。因此，階段 3 仍接受 `R` 第一個父 commit `M` 已經成功的 CI，但必須先證明 `R` 確實是 Semantic Release 預期產生、範圍受到嚴格限制的版本資產 commit。它會比對 tag commit 與其第一個父 commit 的 diff，**兩個條件同時成立**才允許退回父 commit：
 
@@ -117,7 +117,7 @@ Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行
 | 你看到的 run | 發生了什麼 | 該怎麼做 |
 | --- | --- | --- |
 | `CI` 失敗 | 品質或安全 gate 擋下合併 commit | 讀失敗的 CI job；`release.yml` 正確地不會執行。 |
-| `CI` 綠燈、`release.yml` 綠燈但沒有 tag | Semantic Release 判定沒有需要發布的 commit（log 中會有 `no release`）、略過版本號 commit，或略過已過期的 CI 結果 | 讀 guard 與 Semantic Release log；這些通常是預期結果。 |
+| `CI` 綠燈、`release.yml` 綠燈但沒有 tag | Semantic Release 判定沒有需要發布的 commit（log 中會有 `no release`）、略過版本號 commit，或因 `main` 新增 CI-relevant paths 而交給較新的 CI | 讀 guard 與 Semantic Release log；這些通常是預期結果。 |
 | `release.yml` 失敗 | Semantic Release 算不出版本號或推不上去 | 常見原因是 shallow history、`RELEASE_APP_CLIENT_ID`／`RELEASE_APP_PRIVATE_KEY` 無效、App 權限或安裝遺漏，或 tag ruleset 的 bypass actor 沒有列出該 App。 |
 | Tag 已存在但沒有 `發布完整 Near Chat Stack` run | App 產生的 tag event 沒有啟動階段 3 | 確認 `release-stack.yml` 仍監聽 `push.tags: v*`；同時先以手動入口補完階段 3。 |
 | `發布完整 Near Chat Stack` 失敗 | 階段 3 的某道驗證擋下了發布 | 失敗的步驟會直接寫出原因：tag 格式、`package.json` 版本不一致、tag 不在 `main` 上、tag commit 與其父 commit 都沒有成功的 CI run，或發布不完整。 |
