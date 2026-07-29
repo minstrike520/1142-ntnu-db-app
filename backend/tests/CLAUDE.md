@@ -19,7 +19,7 @@ Bun test integration tests for the backend service layer. Tests call the actual 
 
 ### Working In This Directory
 - Tests require a live PostgreSQL database; start the test DB with `docker compose -f docker-compose.test.yml up -d` before running.
-- Run all tests from `backend/`: `bun test` for a single pass.
+- Run all tests from `backend/`: `bun run test` for a single pass. It runs the unit, integration and e2e tiers as three separate processes on purpose — a bare `bun test` loads all three into one runner, where the unit tier's process-global `mock.module()` calls leak into the tiers that need a real database.
 - Test isolation: each suite creates a unique named record in `beforeAll` and deletes it in `afterAll`. Avoid using names like "TestRoomForAPI" or "TestUserAPI" in manual DB operations to prevent conflicts.
 
 ### Testing Requirements

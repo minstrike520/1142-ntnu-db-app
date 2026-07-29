@@ -35,4 +35,4 @@ This directory contains the TypeScript source code for the backend service built
     // ...
   });
   ```
-- Make sure to write Zod schemas for any new request payloads under `routes/`, in the `*Schemas.ts` file matching the route module.
+- Make sure to write Zod schemas for any new request payloads under `routes/`, in the existing `*Schemas.ts` module that owns that domain rather than one file per route module — `authRoutes.ts` and `friendRoutes.ts` both draw from `userSchemas.ts`.
