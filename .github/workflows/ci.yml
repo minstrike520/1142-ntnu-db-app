@@ -323,6 +323,7 @@ jobs:
     needs:
       - frontend-lint
       - frontend-typecheck
+      - frontend-test
       - frontend-build
       - backend-build
       - unit-tests
@@ -335,6 +336,7 @@ jobs:
       github.event_name == 'push' &&
       (needs.frontend-lint.result == 'success' || needs.frontend-lint.result == 'skipped') &&
       (needs.frontend-typecheck.result == 'success' || needs.frontend-typecheck.result == 'skipped') &&
+      (needs.frontend-test.result == 'success' || needs.frontend-test.result == 'skipped') &&
       (needs.frontend-build.result == 'success' || needs.frontend-build.result == 'skipped') &&
       (needs.backend-build.result == 'success' || needs.backend-build.result == 'skipped') &&
       (needs.unit-tests.result == 'success' || needs.unit-tests.result == 'skipped') &&
