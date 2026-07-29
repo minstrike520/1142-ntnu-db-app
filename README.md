@@ -114,7 +114,7 @@ docker compose exec backend pnpm run db:seed
 
 The project provides a production-ready configuration using `docker-compose.prod.yml`, which runs optimized production builds (`Dockerfile.prod`) and sets up a Cloudflare Tunnel for secure remote access.
 
-For a versioned deployment using published artifacts, download the `near-chat-stack-vX.Y.Z.tar.gz` asset from the GitHub Release and use its `docker-compose.release.yml`. That bundle pins the frontend and backend image digests, PostgreSQL 18 runtime digest, and migration step together. See the [Stack Version Release Guide](docs/backend-release.md).
+For a versioned deployment using published artifacts, download the `near-chat-stack-vX.Y.Z.tar.gz` asset from the GitHub Release and use its `docker-compose.release.yml`. That bundle pins the frontend and backend image digests, PostgreSQL 18 runtime digest, and migration step together. See the [Stack Version Release Guide](docs/RELEASE.md).
 
 ### 1. Configure Production Environment
 Ensure all production environment variables (e.g., `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DATABASE_URL`, `JWT_SECRET`, `NEXT_PUBLIC_API_URL`, `TUNNEL_TOKEN`) are configured in your `.env` file.
@@ -145,4 +145,4 @@ For detailed instructions on running unit, integration, and E2E tests, please re
 
 ## Stack Releases
 
-Annotated `vX.Y.Z` tags automatically publish immutable frontend and backend GHCR images, a pinned PostgreSQL 18 runtime, migrations, a Docker Compose bundle, and a digest-recorded GitHub Release. See the [Stack Version Release Guide](docs/backend-release.md).
+Merging a Conventional Commit into `main` lets Semantic Release compute the next version and push a `vX.Y.Z` tag, which automatically publishes immutable frontend and backend GHCR images, a pinned PostgreSQL 18 runtime, migrations, a Docker Compose bundle, and a digest-recorded GitHub Release. See the [Stack Version Release Guide](docs/RELEASE.md).

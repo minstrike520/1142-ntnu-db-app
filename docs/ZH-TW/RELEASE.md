@@ -6,14 +6,20 @@ Near Chat 的版本 tag 代表一份可部署的完整 Stack，不只是 Express
 
 ## 發布版本
 
-只有推送完全符合 `vX.Y.Z` 的 annotated tag 才會啟動發布。數字版本必須同時等於 root、`backend/package.json` 與 `frontend/package.json`。Tag 必須指向目前 `main` HEAD，且該 commit 必須通過 main CI 的 frontend lint／typecheck／build、backend build、unit、integration、E2E 與 security jobs。
+發布是自動的。Conventional Commit 合併進 `main` 後會觸發 `.github/workflows/ci.yml` 的 `release` job 執行 Semantic Release：計算下一個版本號、同步 root 與 `backend/package.json`、`frontend/package.json` 的 `version`、更新 `CHANGELOG.md`、推送版本號 commit 與 `vX.Y.Z` tag，並建立帶有 release notes 的 GitHub Release。接著由 `.github/workflows/release-stack.yml` 在**同一個** Release 上補齊 Stack artifact —— 映像、provenance attestation 與部署 bundle。
+
+Tag 以 Semantic Release 為準。它建立的是 **lightweight tag**，`release-stack.yml` 對 lightweight 與 annotated 一律接受，不檢查 tag 型別。仍然強制的條件是：tag 名稱必須完全符合 `vX.Y.Z`、數字版本必須同時等於三份 `package.json`、tag 必須指向目前 `main` HEAD，且該 commit 必須通過 main CI 的 frontend lint／typecheck／build、backend build、unit、integration、E2E 與 security jobs。
+
+作為備援 —— 自動流程失敗、需要人工發布某個版本時 —— 手動推 tag 仍然可行：
 
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v1.0.1 -m "Near Chat Stack v1.0.1"
+git tag v1.0.1
 git push origin v1.0.1
 ```
+
+若該 tag 尚無對應的 GitHub Release，`release-stack.yml` 會自行建立。切勿為 Semantic Release 已經發布過的版本手動建立 tag，理由見下方「不可變性與失敗處理」。
 
 Workflow 會發布兩個不可變的應用程式映像，各自包含版本 tag 與 commit tag：
 
@@ -45,6 +51,8 @@ Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行
 
 ## 不可變與失敗處理
 
-四個應用程式 image 參照與 GitHub Release 視為同一個不可變發布。乾淨的首次發布要求四個 image 參照與 Release 都不存在；重新執行時，只驗證四個參照的 digest、兩個 provenance attestation、Release manifest 與 bundle 是否完全一致。Partial publication、digest 不一致、attestation 缺失或 bundle asset 缺失都會 fail closed；workflow 不會覆寫既有版本。
+四個應用程式 image 參照與掛在 GitHub Release 上的 Stack artifact 視為同一個不可變發布。由於 Release 是 Semantic Release 在 `release-stack.yml` 執行前就先建立的，「Release 是否存在」**不是**冪等性判準 —— 判準是 `near-chat-stack-vX.Y.Z.tar.gz` 這個 bundle asset 是否存在。乾淨的首次發布要求四個 image 參照與該 bundle asset 都不存在，`release-stack.yml` 會把 Stack 區段附加到既有 release notes 之後並上傳 bundle。重新執行時，只驗證四個參照的 digest、兩個 provenance attestation、Release manifest 與 bundle 是否完全一致。Partial publication、digest 不一致、attestation 缺失，或 bundle asset 存在但 image 遺失，都會 fail closed；workflow 不會覆寫既有版本。
+
+因此，要從發布到一半的版本復原，必須先人工刪除 bundle asset 與四個 image 參照（或整個 Release 與 tag）再重跑。
 
 發布成果不得包含 `.env`、credential、包含真實資料的 database volume／dump，或使用者 uploads。

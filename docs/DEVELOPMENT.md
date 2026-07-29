@@ -371,6 +371,6 @@ When changes are merged into `main`, GitHub Actions (`.github/workflows/ci.yml`)
    - `BREAKING CHANGE:` → Increments **Major (`a`)** (e.g. `v1.0.1` → `v2.0.0`)
    - `docs:`, `chore:`, `refactor:` → No version increment
 2. **Multi-Package Version Sync**: Runs `scripts/update-versions.js` to synchronize `"version"` in root `package.json`, `frontend/package.json`, and `backend/package.json`.
-3. **Changelog & GitHub Release**: Automatically generates `CHANGELOG.md` and publishes formatted **Release Notes directly on the GitHub Release page**.
-4. **Stack Image & Bundle Publication**: Creating tag `vX.Y.Z` triggers `.github/workflows/release-stack.yml`, building & pushing Docker images to GHCR, signing provenance attestations, and attaching `near-chat-stack-vX.Y.Z.tar.gz` deployment bundle to the GitHub Release.
+3. **Tag & GitHub Release**: Pushes the version commit and a **lightweight** `vX.Y.Z` tag, generates `CHANGELOG.md`, and — via `@semantic-release/github` — **creates the GitHub Release** with formatted release notes. Semantic Release owns the tag and the Release; `release-stack.yml` does not create either on this path and no longer requires an annotated tag.
+4. **Stack Image & Bundle Publication**: `.github/workflows/release-stack.yml` builds & pushes Docker images to GHCR, signs provenance attestations, appends its stack section (image digests, PostgreSQL runtime, bundle SHA-256) to the existing release notes, and uploads the `near-chat-stack-vX.Y.Z.tar.gz` deployment bundle. The bundle asset — not the Release itself — is the idempotency key that marks a version as published.
 
