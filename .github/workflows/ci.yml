@@ -343,9 +343,7 @@ jobs:
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      issues: write
-      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -353,6 +351,15 @@ jobs:
           # 哪些變更」與應該的版本號；shallow clone 會讓它算錯或整個略過發布。
           fetch-depth: 0
           persist-credentials: false
+      - name: 建立 Release App token
+        id: release-app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -362,5 +369,5 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Run Semantic Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.release-app.outputs.token }}
         run: npx semantic-release

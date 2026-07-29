@@ -30,18 +30,17 @@ PR 一律以 squash merge 合併，因此進入 `main` 的 commit 就是 **PR �
   3. release-stack.yml   映像、attestation、bundle
 ```
 
-1. **`ci.yml` — Semantic Release。** 合併 commit `M` 的八個 gate job 通過後，`release` job 計算下一個版本號、執行 `scripts/update-versions.js` 同步 root 與 `backend/package.json`、`frontend/package.json` 的 `version`、更新 `CHANGELOG.md`、推送 `chore(release): X.Y.Z` commit `R` 與 `vX.Y.Z` tag，並由 `@semantic-release/github` 建立帶有 release notes 的 GitHub Release。Tag 與 Release 都由 Semantic Release 擁有。
-2. **`release-bridge.yml` — 交棒。** 監聽的正是**同一次** `ci.yml` run 的完成事件。此時 `R` 與 tag 都已經存在，因此橋接會在 `M` 以及 `M` 在 `main` 上的直接子 commit（也就是 `R`）尋找 `vX.Y.Z` tag，確認該 tag 的 Release 尚未附上 bundle，才觸發階段 3。這次 run 沒有產生版本 tag 時安靜結束 —— 絕大多數的 `ci.yml` run 都會落在這裡。
+1. **`ci.yml` — Semantic Release。** 合併 commit `M` 的八個 gate job 通過後，`release` job 先為專用 Release GitHub App 建立短效 installation token。Semantic Release 接著計算下一個版本號、執行 `scripts/update-versions.js` 同步 root 與 `backend/package.json`、`frontend/package.json` 的 `version`、更新 `CHANGELOG.md`、推送 `chore(release): X.Y.Z` commit `R` 與 `vX.Y.Z` tag，並由 `@semantic-release/github` 建立帶有 release notes 的 GitHub Release。Tag 與 Release 都由 Semantic Release 擁有。
+2. **`release-bridge.yml` — 交棒。** 監聽的正是**同一次** `ci.yml` run 的完成事件。此時 `R` 與 tag 都已經存在，因此橋接會在 `M` 以及 `M` 在 `main` 上的直接子 commit（也就是 `R`）尋找 `vX.Y.Z` tag，確認該 tag 的 Release 尚未附上 bundle，才觸發階段 3。這次 run 沒有產生版本 tag 時安靜結束。App 推送也會為 `R` 啟動第二次 `CI`；橋接會辨識完全符合 `chore(release): X.Y.Z` 的 subject 並略過該次 run。
 3. **`release-stack.yml` — Stack。** 建置並推送四個 GHCR 映像參照、簽署兩份 provenance attestation、把 Stack 區段附加到既有的 release notes 之後，並上傳 `near-chat-stack-vX.Y.Z.tar.gz`。
 
-### 為什麼版本號 commit 不會有自己的 CI run
+### Release App 身分與橋接
 
-`ci.yml` 交給 Semantic Release 的是預設的 `secrets.GITHUB_TOKEN`，而 [GitHub 會抑制該 token 所產生事件的 workflow run](https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#using-the-github_token-in-a-workflow)，只有 `workflow_dispatch` 與 `repository_dispatch` 例外。這個限制對 Semantic Release 的**兩次推送都成立**：
+預設的 `secrets.GITHUB_TOKEN` 無法 bypass 限制建立 `v*` tag 的 repository ruleset。因此 release job 會以 `RELEASE_APP_CLIENT_ID` 與 `RELEASE_APP_PRIVATE_KEY` 換取短效 GitHub App installation token。該 App 只安裝在此 repository，具有 Contents、Issues、Pull Requests 寫入權限，也是版本 tag 建立規則中獲准 bypass 的 actor。
 
-- 把 commit `R` 推上 `main`，不會為 `R` 產生 `ci.yml` run；
-- 把 `vX.Y.Z` tag 推上去，不會啟動 `release-stack.yml`。
+App installation token 產生的事件會啟動 workflow，所以推送 `R` 會產生自己的 `CI` run。不過 tag 直接觸發 Stack 發布的入口刻意停用：`release-stack.yml` 只接受 `workflow_dispatch`，bridge 是唯一的自動呼叫者。這能確保產生發布的 CI 完成後才開始 Stack 發布，也避免 App 的 tag push 與 bridge 競速或重複發布同一版本。
 
-後者就是橋接存在的理由。前者則是為什麼階段 3 的 CI 驗證接受 tag commit **或其第一個父 commit** 的成功 run —— 要求 `R` 自己通過 CI 是一個永遠無法滿足的條件。
+`M` 所觸發的 bridge 可能在 `R` 的第二次 CI 完成前先 dispatch 階段 3。因此，階段 3 仍接受 tag commit **或其第一個父 commit** 的成功 run，但必須先證明 tag commit 確實是 Semantic Release 預期產生、範圍受到嚴格限制的版本資產 commit。
 
 這個退路不是無條件的。階段 3 會比對 tag commit 與其第一個父 commit 的 diff，**兩個條件同時成立**才允許退回父 commit：
 
@@ -64,13 +63,14 @@ Tag 以 Semantic Release 為準。它建立的是 **lightweight tag**，`release
 gh workflow run release-stack.yml --ref v1.0.1
 ```
 
-若連 tag 都不存在，就手動推一個。以個人憑證推的 tag **會**直接觸發 `release-stack.yml`，因此橋接壞掉時這個方式一樣有效：
+若連 tag 都不存在，就手動推一個，接著明確 dispatch 階段 3：
 
 ```bash
 git switch main
 git pull --ff-only origin main
 git tag v1.0.1
 git push origin v1.0.1
+gh workflow run release-stack.yml --ref v1.0.1
 ```
 
 若該 tag 尚無對應的 GitHub Release，`release-stack.yml` 會自行建立。切勿為 Semantic Release 已經發布過的版本手動建立 tag，理由見下方「不可變性與失敗處理」。
@@ -116,12 +116,12 @@ Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行
 | 你看到的 run | 發生了什麼 | 該怎麼做 |
 | --- | --- | --- |
 | 只有 `CI`，`release` job 綠燈但沒有 tag | Semantic Release 判定沒有需要發布的 commit（job log 中會有 `no release`） | 不用處理，這不是失敗。 |
-| `CI` 綠燈但 `release` job 失敗 | Semantic Release 算不出版本號或推不上去 | 讀 job log。常見原因：shallow clone（`release` job 的 checkout 少了 `fetch-depth: 0`），或推送被分支保護規則拒絕 —— 預設的 `GITHUB_TOKEN` 無法推送受保護的分支。 |
+| `CI` 綠燈但 `release` job 失敗 | Semantic Release 算不出版本號或推不上去 | 讀 job log。常見原因：shallow clone（`release` job 的 checkout 少了 `fetch-depth: 0`）、`RELEASE_APP_CLIENT_ID`／`RELEASE_APP_PRIVATE_KEY` 無效、App 權限或安裝遺漏，或 tag ruleset 的 bypass actor 沒有列出該 App。 |
 | `CI` + tag + Release，但沒有 `橋接 CI 至 Stack 發布` | 橋接沒有啟動 | 確認橋接的 `workflow_run` 過濾條件仍指向 `CI` 這個 workflow。同時先以手動入口補完階段 3。 |
 | 橋接跑了但安靜結束 | 合併 commit 與其子 commit 上都找不到 `vX.Y.Z` tag，或該 Release 已經有 bundle | 讀橋接的 log，它會明說是哪一種。多半是正確行為。 |
 | `發布完整 Near Chat Stack` 失敗 | 階段 3 的某道驗證擋下了發布 | 失敗的步驟會直接寫出原因：tag 格式、`package.json` 版本不一致、tag 不在 `main` 上、tag commit 與其父 commit 都沒有成功的 CI run，或發布不完整。 |
 
-這裡刻意沒有「第二次 `CI` run」可以找 —— 理由見上方「為什麼版本號 commit 不會有自己的 CI run」。
+會發布的合併通常會為 `chore(release): X.Y.Z` commit 產生第二次 `CI`。這是預期行為，而且只做驗證：其中的 `release` job 找不到新的可發布 commit，bridge 也會略過該次 run，避免重複 dispatch Stack。
 
 原因排除後，以 `gh workflow run release-stack.yml --ref vX.Y.Z` 重跑階段 3。重複執行是安全的：bundle 已附上的版本會走純驗證路徑，不會改動任何東西。
 

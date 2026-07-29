@@ -1,13 +1,9 @@
 name: 發布完整 Near Chat Stack
 
 on:
-  push:
-    tags:
-      - 'v*'
-  # 自動發布時，tag 是由 ci.yml 的 release job 以預設 GITHUB_TOKEN 推送的，
-  # GitHub 不會讓這種 push 觸發新的 workflow run。release-bridge.yml 因此改以
-  # workflow_dispatch 呼叫本 workflow；這個入口同時也是人工復原的手段
-  # （gh workflow run release-stack.yml --ref vX.Y.Z）。
+  # Release App 推送 tag 時會產生 workflow 事件，但本 workflow 刻意只保留
+  # workflow_dispatch，統一由 release-bridge.yml 在 CI 完成後觸發。這個入口
+  # 同時也是人工復原的手段（gh workflow run release-stack.yml --ref vX.Y.Z）。
   workflow_dispatch:
 
 concurrency:
@@ -85,9 +81,9 @@ jobs:
 
           # 預設只接受 tag commit 自己的成功 CI run。
           #
-          # 例外：semantic-release 產生的版本號 commit 以預設 GITHUB_TOKEN 推送，
-          # GitHub 的遞迴保護使該次 push 不會建立任何 workflow run，因此要求它自己
-          # 通過 CI 是不可能滿足的條件，必須退到父 commit 的 run。
+          # 例外：semantic-release 產生的版本號 commit 由 Release App 推送，雖然會
+          # 建立自己的 CI run，但 M 的 bridge 可能在 R 的 CI 完成前先 dispatch 本
+          # workflow，因此允許在嚴格驗證版本號 commit 後退到父 commit 的 run。
           #
           # 但這個退路必須綁定在「這確實是一個 semantic-release 版本號 commit」的
           # 事實上，否則任何人只要把一個未經測試的 commit 連同 tag 一起推上 main，

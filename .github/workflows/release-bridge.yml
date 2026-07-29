@@ -2,17 +2,14 @@ name: 橋接 CI 至 Stack 發布
 
 # 自動發布鏈的最後一環。
 #
-# ci.yml 的 release job 以預設 GITHUB_TOKEN 執行 semantic-release，而 GitHub 的
-# 遞迴保護會讓該 token 產生的**所有**事件都不觸發新的 workflow run（僅
-# workflow_dispatch 與 repository_dispatch 例外）。這不只適用於 push tag，也適用
-# 於 push commit —— 意思是：
+# ci.yml 的 release job 以專用 Release GitHub App 執行 semantic-release，讓 App
+# 可以透過 ruleset bypass 建立受保護的版本 tag。App 推送的版本號 commit（以下稱
+# R）會再產生一輪 ci.yml；為避免同一版本被重複 dispatch，本 workflow 只處理由
+# 一般合併 commit（以下稱 M）啟動的 CI，直接略過 R 的 CI。
 #
-#   * 版本號 commit（以下稱 R）推上 main 之後不會有屬於自己的 ci.yml run，
-#   * 版本 tag 推上去之後也不會自己觸發 release-stack.yml。
-#
-# 因此本 workflow 監聽的是**合併 commit（以下稱 M）**那一次 ci.yml run —— 也就是
-# 執行 semantic-release 的那一次本身。等它完成後，R 與 tag 都已經存在，此時再以
-# workflow_dispatch 顯式呼叫 release-stack.yml。
+# release-stack.yml 刻意不監聽 tag push，讓本 workflow 成為自動 Stack 發布的唯一
+# 入口。等 M 的 ci.yml 完成後，R 與 tag 都已經存在，此時再以 workflow_dispatch
+# 顯式呼叫 release-stack.yml，避免 tag push 與 bridge 互相競速或重複執行。
 #
 # 這也是為什麼 tag 不會出現在 M 上：R 才是被 tag 的 commit，而 R 是 M 在 main
 # 第一父系上的直接子 commit。下面兩個候選 SHA 就是這麼來的。
@@ -56,6 +53,12 @@ jobs:
           set -euo pipefail
 
           git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+
+          head_subject="$(git show -s --format=%s "$HEAD_SHA")"
+          if [[ "$head_subject" =~ ^chore\(release\):[[:space:]][0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "略過 Semantic Release 版本號 commit 的第二次 CI：$HEAD_SHA"
+            exit 0
+          fi
 
           # 候選一：M 自己（人工在 main 上直接打 tag 的情況）。
           # 候選二：M 在 main 第一父系上的直接子 commit，也就是 semantic-release
