@@ -1,9 +1,9 @@
-name: Close Issues on Dev Merge
+name: Close Issues on Merge
 
 on:
   pull_request:
     types: [closed]
-    branches: [dev]
+    branches: [main]
 
 permissions:
   issues: write

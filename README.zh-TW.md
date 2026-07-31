@@ -2,7 +2,7 @@
 
 [English](README.md) | 繁體中文
 
-國立臺灣師範大學資料庫系統概論期末專案——即時文字通訊與群組聊天系統。本專案採 Monorepo 架構，結合 Next.js 前端、Node.js/Express 後端，以 Raw SQL 直接操作 PostgreSQL 進行高效查詢，並實現自訂群組權限、聊天分類資料夾、訊息生命週期，以及離線警報（遺言模式）等具體資料庫應用。
+國立臺灣師範大學資料庫系統概論期末專案——即時文字通訊與群組聊天系統。本專案採 Monorepo 架構，結合 Next.js 前端、Bun/Hono 後端，以 Raw SQL 直接操作 PostgreSQL 進行高效查詢，並實現自訂群組權限、聊天分類資料夾、訊息生命週期，以及離線警報（遺言模式）等具體資料庫應用。
 
 ---
 
@@ -15,6 +15,7 @@
 - [快速開始](#快速開始)
 - [生產環境部署](#生產環境部署)
 - [測試指令](#測試指令)
+- [完整 Stack 版本發布](#完整-stack-版本發布)
 
 ---
 
@@ -34,7 +35,7 @@
 ## 技術棧
 
 - **前端**: Next.js 16.2 (App Router), React 19, Tailwind CSS v4, Socket.IO Client。
-- **後端**: Node.js, Express v5, Socket.IO, `pg` (PostgreSQL 原始驅動)。
+- **後端**: Bun, Hono v4, Socket.IO, `pg` (PostgreSQL 原始驅動)。
 - **資料庫**: PostgreSQL 18。
 - **環境編排**: Docker 與 Docker Compose。
 - **套件管理**: pnpm。
@@ -43,8 +44,8 @@
 
 ```text
 .
-├── backend/                # Express API 後端服務
-│   ├── src/                # 後端 TypeScript 源碼 (routes, controllers, services, repositories)
+├── backend/                # Hono API 後端服務
+│   ├── src/                # 後端 TypeScript 源碼 (routes, services, models, middlewares, realtime, utils)
 │   ├── migrations/         # PostgreSQL node-pg-migrate 遷移腳本
 │   └── Dockerfile          # 後端映像檔配置
 ├── frontend/               # Next.js 前端網頁應用
@@ -74,6 +75,7 @@ cp .env.example .env
 | `DATABASE_URL` | PostgreSQL 連線 URL | `postgresql://chatuser:chatpassword@db:5432/chatdb` |
 | `JWT_SECRET` | 用於簽署 JWT 的密鑰鍵值 | `dev_secret_key` |
 | `RATE_LIMIT_DISABLED` | 關閉 API 請求速率限制（供測試使用） | `true`（生產環境請設為 `false` 或移除） |
+| `TRUST_PROXY` | 速率限制改以 `X-Forwarded-For` 的第一段作為來源 IP。僅在後端確實位於可信任的反向代理之後才可開啟 | `false` |
 | `NEXT_PUBLIC_API_URL` | 瀏覽器端存取後端 API 的外部 URL | `http://localhost:4005` |
 | `ALLOWED_DEV_ORIGINS` | 允許進行開發連線的外部來源網域或 IP (如 Tailscale) | *(空)* |
 | `UPLOADS_MOUNT_SOURCE` | 附件上傳的儲存掛載路徑或 Docker Volume 名稱 | `app_uploads` |
@@ -102,7 +104,7 @@ docker compose exec backend pnpm run db:seed
 | 服務名稱 | 訪問網址 | 描述 |
 | :--- | :--- | :--- |
 | **前端應用 (Frontend)** | [http://localhost:3005](http://localhost:3005) | 主 Next.js 網頁應用介面 |
-| **後端服務 (Backend API)** | [http://localhost:4005](http://localhost:4005) | Express API 及 Socket.IO 伺服器 |
+| **後端服務 (Backend API)** | [http://localhost:4005](http://localhost:4005) | Bun + Hono API 及 Socket.IO 伺服器 |
 | **PostgreSQL 資料庫** | `localhost:5435` | PostgreSQL 18 資料庫 (容器內部對應 `5432` 連接埠) |
 
 ---
@@ -110,6 +112,8 @@ docker compose exec backend pnpm run db:seed
 ## 生產環境部署
 
 本專案提供專為生產環境設計的配置檔 `docker-compose.prod.yml`。此配置會建置最佳化後的生產映像檔 (`Dockerfile.prod`)，並啟動 Cloudflare Tunnel 以實現安全的外網連線。
+
+若要使用已發布的版本 artifact，請從 GitHub Release 下載 `near-chat-stack-vX.Y.Z.tar.gz`，再使用其中的 `docker-compose.release.yml`。該 bundle 會把前端、後端 image digest、PostgreSQL 18 runtime digest 與 migration 步驟固定在同一份部署描述中。詳見[完整 Stack 版本發布指南](docs/ZH-TW/RELEASE.md)。
 
 ### 1. 配置生產環境變數
 請確保 `.env` 檔案中已填寫所有生產環境所需的變數（例如 `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB`、`DATABASE_URL`、`JWT_SECRET`、`NEXT_PUBLIC_API_URL` 以及 Cloudflare Tunnel 的 `TUNNEL_TOKEN`）。
@@ -138,3 +142,6 @@ docker compose -f docker-compose.prod.yml down
 
 關於如何執行單元測試、整合測試與 E2E 測試的詳細說明，請直接參閱 [開發者與測試指南](docs/ZH-TW/DEVELOPMENT.md#5-測試指南)。
 
+## 完整 Stack 版本發布
+
+Conventional Commit 合併進 `main` 後，Semantic Release 會算出下一個版本號並推送 `vX.Y.Z` tag，系統隨即自動發布不可變的 GHCR 前後端映像、固定版本的 PostgreSQL 18 runtime、migration、Docker Compose bundle，以及記錄 digest 的 GitHub Release。詳見[完整 Stack 版本發布指南](docs/ZH-TW/RELEASE.md)。

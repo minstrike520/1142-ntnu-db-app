@@ -4,6 +4,9 @@ node_modules
 .pnp.js
 .pnpm-store/
 package-lock.json
+# pnpm is the package manager (see "packageManager" in package.json). bun is
+# the backend runtime and test runner only, and must not produce a lockfile.
+bun.lock
 
 # testing
 coverage
@@ -16,6 +19,7 @@ frontend/next-env.d.ts
 # production
 build/
 dist/
+*/dist/
 
 # misc
 .DS_Store

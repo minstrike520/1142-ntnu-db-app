@@ -1,6 +1,8 @@
 # Contributing to Near Chat
 
-First off, thank you for taking the time to contribute to Near Chat! This project is a database course project, structured as a monorepo containing a React/Next.js frontend, a Node.js/Express backend API, and a PostgreSQL 18 database, orchestrated locally via Docker Compose.
+English | [繁體中文](CONTRIBUTING.zh-TW.md)
+
+First off, thank you for taking the time to contribute to Near Chat! This project is a database course project, structured as a monorepo containing a React/Next.js frontend, a Bun/Hono backend API, and a PostgreSQL 18 database, orchestrated locally via Docker Compose.
 
 Please read through this guide to understand our development, testing, and contribution workflows.
 
@@ -19,11 +21,12 @@ Please read through this guide to understand our development, testing, and contr
 
 ## 1. Git Workflow & Branching
 
-* **Active Development Branch**: The main branch for development is **`dev`**.
+* **Active Development Branch**: The main branch for development is **`main`**.
 * **Branching Strategy**: 
-  - Always branch off `dev` (e.g., `feat/my-feature` or `fix/my-bug`).
-  - Submit all Pull Requests back to the `dev` branch.
-  - Avoid pushing changes directly to `main` or `dev`.
+  - Always branch off `main` (e.g., `feat/my-feature` or `fix/my-bug`).
+  - Submit all Pull Requests back to the `main` branch.
+  - Avoid pushing changes directly to `main`.
+* **Releases**: Releases are cut by pushing a version tag (e.g., `v1.2.0`) on `main`; there is no long-lived release branch.
 
 ---
 
@@ -110,7 +113,7 @@ docker compose exec backend pnpm run db:seed
    ```bash
    docker compose exec frontend pnpm run lint
    ```
-3. **Running Vitest Tests**:
+3. **Running Bun Tests**:
    - **Unit Tests**:
      ```bash
      docker compose exec backend pnpm run test:unit
@@ -133,7 +136,7 @@ For details, refer to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## 6. API & WebSocket Contract Verification
 
-* Any changes to Express controllers, backend routes, or Socket.IO events must strictly align with the payloads and models defined in [docs/api-documentation.md](docs/api-documentation.md).
+* Any changes to Hono routes, backend services, or Socket.IO events must strictly align with the payloads and models defined in [docs/api-documentation.md](docs/api-documentation.md).
 * Breaking contracts will cause frontend-backend integration failures and fail CI builds.
 
 ---
@@ -141,7 +144,7 @@ For details, refer to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 ## 7. Submitting a Pull Request
 
 1. **Self-Review**: Run ESLint, Type checks, and the full test suite locally.
-2. **Branch base**: Ensure the base branch of your PR is set to **`dev`**.
+2. **Branch base**: Ensure the base branch of your PR is set to **`main`**.
 3. **Commit Messages**: Verify your commit messages match the Conventional Commit format.
 4. **Description**: Describe your changes in **Traditional Chinese (繁體中文)** using our Pull Request Template.
 5. **Test Plan**: Document your verification steps clearly in the PR description.

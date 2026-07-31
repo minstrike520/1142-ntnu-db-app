@@ -1,0 +1,666 @@
+name: 發布完整 Near Chat Stack
+
+on:
+  # 第三階段：release.yml 使用 GitHub App token 推送版本 tag，該 push 會直接
+  # 觸發本 workflow。workflow_dispatch 保留作為人工復原入口。
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: release-stack-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: nearcsie/near-chat-backend
+  FRONTEND_IMAGE_NAME: nearcsie/near-chat-frontend
+  POSTGRES_IMAGE: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+
+jobs:
+  publish:
+    name: 驗證版本、發布完整 Stack 與建立 Release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: 取出完整版本歷史
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 驗證版本標籤、main HEAD 與完整 CI
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "版本標籤必須完全符合 vX.Y.Z：$GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+          version="${GITHUB_REF_NAME#v}"
+          root_version="$(jq -r '.version // empty' package.json)"
+          backend_version="$(jq -r '.version // empty' backend/package.json)"
+          frontend_version="$(jq -r '.version // empty' frontend/package.json)"
+          if [[ "$root_version" != "$version" || "$backend_version" != "$version" || "$frontend_version" != "$version" ]]; then
+            echo "Tag 版本必須同時等於 root、backend、frontend package.json：tag=$version root=$root_version backend=$backend_version frontend=$frontend_version" >&2
+            exit 1
+          fi
+
+          tag_ref="refs/tags/${GITHUB_REF_NAME}"
+          git fetch --force origin "${tag_ref}:${tag_ref}"
+
+          # Tag 型別不設限：Semantic Release 建立的是 lightweight tag，手動備援
+          # 流程建立的是 annotated tag。`^{}` 對兩種型別都會 peel 到同一個 commit，
+          # 所以下面這段檢查對兩者等效，不需要再多一道 object type 判斷。
+          peeled_sha="$(git rev-parse "${tag_ref}^{}")"
+          if [[ "$(git cat-file -t "$peeled_sha")" != "commit" || "$peeled_sha" != "$GITHUB_SHA" ]]; then
+            echo "Tag peeled commit 必須等於 workflow commit：tag=$peeled_sha workflow=$GITHUB_SHA" >&2
+            exit 1
+          fi
+
+          # 要求 tag commit 在 main 的歷史上，而非等於當下的 main HEAD。版本 tag
+          # push 觸發本 workflow 後，若有其他 PR 合併進 main，嚴格相等的檢查會把
+          # 一個完全正常的發布擋掉。ancestor 檢查一樣能保證被發布的 commit 真的
+          # 在 main 上，且不會被 force-push 出去的分支冒充。
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "版本 tag 必須指向 main 歷史上的 commit：main=$main_sha tag=$GITHUB_SHA" >&2
+            exit 1
+          fi
+
+          # 預設只接受 tag commit 自己的成功 CI run。
+          #
+          # 例外：semantic-release 產生的版本號 commit 由 Release App 推送。Tag
+          # push 會立即觸發本 workflow，此時 R 的 CI 通常尚未完成；但 release.yml
+          # 是在父 commit M 的 CI 成功後才建立 R，因此允許在嚴格驗證版本號 commit
+          # 後退到父 commit 的 run。
+          #
+          # 但這個退路必須綁定在「這確實是一個 semantic-release 版本號 commit」的
+          # 事實上，否則任何人只要把一個未經測試的 commit 連同 tag 一起推上 main，
+          # 就能靠父 commit 的舊 run 通過這道驗證。判定分兩層：
+          #
+          #   (a) 變更的路徑必須全部落在 @semantic-release/git 的 assets 白名單內。
+          #   (b) 三份 package.json 相對父 commit 必須「除了 version 之外完全相同」。
+          #
+          # (b) 不能省略：只比對路徑的話，一個同時改了三份版本號、又在
+          # backend/package.json 的 scripts 動手腳的 commit 也會通過。該檔會被
+          # backend/Dockerfile.prod 複製進 runtime 映像，其 migrate:up 由映像的 CMD
+          # 與部署 bundle 的 migrate service 實際執行 —— 未經 CI 驗證的行為會直接
+          # 進入正式環境。
+          #
+          # CHANGELOG.md 只比對路徑：它不會被任何 Dockerfile 複製進映像，也不會被
+          # 執行，最壞情況只是 release notes 內容不實。
+          candidate_shas=("$GITHUB_SHA")
+          parent_sha="$(git rev-parse --verify --quiet "${GITHUB_SHA}^" || true)"
+          if [[ -n "$parent_sha" ]]; then
+            release_assets_only=true
+
+            while IFS= read -r changed_file; do
+              [[ -z "$changed_file" ]] && continue
+              case "$changed_file" in
+                package.json | frontend/package.json | backend/package.json | CHANGELOG.md) ;;
+                *)
+                  release_assets_only=false
+                  echo "Tag commit 含 semantic-release assets 白名單以外的變更：$changed_file"
+                  ;;
+              esac
+            done < <(git diff --name-only "$parent_sha" "$GITHUB_SHA")
+
+            for pkg_file in package.json frontend/package.json backend/package.json; do
+              if ! diff -q \
+                <(git show "${parent_sha}:${pkg_file}" | jq -S 'del(.version)') \
+                <(git show "${GITHUB_SHA}:${pkg_file}" | jq -S 'del(.version)') \
+                >/dev/null 2>&1; then
+                release_assets_only=false
+                echo "Tag commit 對 $pkg_file 的變更不只有 version 欄位。"
+              fi
+            done
+
+            if [[ "$release_assets_only" == "true" ]]; then
+              candidate_shas+=("$parent_sha")
+            else
+              echo "因此不接受父 commit 的 CI run，要求 tag commit 自己通過完整 CI。"
+            fi
+          fi
+
+          ci_verified_sha=''
+          for candidate_sha in "${candidate_shas[@]}"; do
+            runs="$(gh api --method GET \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="$candidate_sha" \
+              -f branch=main \
+              -f event=push \
+              -f status=completed \
+              -f per_page=100)"
+            run_id="$(jq -r '
+              [.workflow_runs[] | select(.conclusion == "success")]
+              | first
+              | .id // empty
+            ' <<< "$runs")"
+            if [[ -n "$run_id" ]]; then
+              ci_verified_sha="$candidate_sha"
+              break
+            fi
+          done
+          if [[ -z "$ci_verified_sha" ]]; then
+            echo "找不到已完成且成功的 ci.yml push run（已檢查：${candidate_shas[*]}）" >&2
+            exit 1
+          fi
+          echo "CI 驗證來源 commit：$ci_verified_sha"
+
+          jobs="$(gh api --method GET \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs" \
+            -f per_page=100)"
+          required='["frontend-lint","frontend-typecheck","frontend-build","backend-build","unit-tests","integration-tests","e2e-tests","security-scan"]'
+          # 接受 success 或 skipped。這一點是必要的：ci.yml 的 paths-filter 會在只動前端的
+          # 變更上跳過 backend 的 job（反之亦然），而 skipped 正代表該側程式碼未變更、
+          # 沿用上一次已驗證的狀態。要求 8 個 job 一律 success 會擋掉大部分正常發布。
+          if ! jq -e --argjson required "$required" '
+            [.jobs[] | select(.conclusion == "success" or .conclusion == "skipped") | .name] as $accepted
+            | ($required - $accepted | length == 0)
+          ' <<< "$jobs" >/dev/null; then
+            echo "Main CI run 未包含全部成功或略過的 frontend／backend 必要工作：run_id=$run_id" >&2
+            exit 1
+          fi
+
+          {
+            echo "number=$version"
+            echo "sha_tag=sha-${GITHUB_SHA:0:12}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 等待 Semantic Release workflow 完成
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Semantic Release 先推 tag，再由 @semantic-release/github 建立 Release。
+          # Tag push 可能讓本 workflow 在 release.yml 尚未結束時抵達。release-main
+          # concurrency 保證同時最多只有一個上游 run 實際執行（另可有一個 queued
+          # run），因此只等待 in_progress 的 run 進入終態，避免誤選較新的 queued
+          # run，也避免兩邊競相建立同一個 Release。
+          runs="$(gh api --method GET \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs" \
+            -f event=workflow_run \
+            -f per_page=20)"
+          release_run_id="$(jq -r '
+            [.workflow_runs[] | select(.status == "in_progress")]
+            | first
+            | .id // empty
+          ' <<< "$runs")"
+
+          if [[ -z "$release_run_id" ]]; then
+            echo "沒有仍在執行的 Semantic Release workflow。"
+            exit 0
+          fi
+
+          for attempt in {1..60}; do
+            run="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${release_run_id}")"
+            status="$(jq -r .status <<< "$run")"
+            conclusion="$(jq -r '.conclusion // empty' <<< "$run")"
+            if [[ "$status" == "completed" ]]; then
+              echo "Semantic Release workflow 已完成：run=$release_run_id conclusion=$conclusion"
+              exit 0
+            fi
+            echo "等待 Semantic Release workflow：run=$release_run_id，第 ${attempt}/60 次"
+            sleep 5
+          done
+
+          echo "等待 Semantic Release workflow 逾時：run=$release_run_id" >&2
+          exit 1
+
+      - name: 檢查既有 GitHub Release 與 Stack 發布狀態
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_ASSET_NAME: near-chat-stack-${{ github.ref_name }}.tar.gz
+        run: |
+          set -euo pipefail
+          release_json="$RUNNER_TEMP/existing-stack-release.json"
+          release_error="$RUNNER_TEMP/existing-stack-release.error"
+
+          # Release 本身由 @semantic-release/github 建立（見 .releaserc.json），本
+          # workflow 只負責補上映像、provenance 與部署 bundle。因此「Release 是否
+          # 存在」已不等於「Stack 是否已發布」，冪等性判準改用 bundle asset。
+          if gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+            > "$release_json" 2> "$release_error"; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            if jq -e --arg name "$BUNDLE_ASSET_NAME" \
+              '[.assets[].name] | index($name) != null' "$release_json" >/dev/null; then
+              echo 'stack_published=true' >> "$GITHUB_OUTPUT"
+              echo "Release 已附上 Stack bundle；後續只驗證，不會覆寫。"
+            else
+              echo 'stack_published=false' >> "$GITHUB_OUTPUT"
+              echo "Release 已存在但尚未附上 Stack bundle；本次補上映像與 bundle。"
+            fi
+          elif grep -q 'HTTP 404' "$release_error"; then
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+            echo 'stack_published=false' >> "$GITHUB_OUTPUT"
+            echo "Release 尚未建立；本次由本 workflow 建立（手動 tag／復原路徑）。"
+          else
+            cat "$release_error" >&2
+            exit 1
+          fi
+
+      - name: 登入 GitHub Container Registry
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 設定 Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: 檢查四個不可變映像參照
+        id: registry
+        shell: bash
+        env:
+          BACKEND_VERSION_REF: ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ steps.version.outputs.number }}
+          BACKEND_SHA_REF: ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ steps.version.outputs.sha_tag }}
+          FRONTEND_VERSION_REF: ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ steps.version.outputs.number }}
+          FRONTEND_SHA_REF: ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ steps.version.outputs.sha_tag }}
+          STACK_PUBLISHED: ${{ steps.release.outputs.stack_published }}
+        run: |
+          set -euo pipefail
+
+          inspect_digest() {
+            local ref="$1"
+            local output digest
+            local error_file="$RUNNER_TEMP/imagetools-inspect.error"
+
+            if output="$(docker buildx imagetools inspect "$ref" 2> "$error_file")"; then
+              digest="$(awk '$1 == "Digest:" { print $2; exit }' <<< "$output")"
+              if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "無法從映像參照解析 digest：$ref" >&2
+                exit 1
+              fi
+              printf '%s' "$digest"
+              return 0
+            fi
+
+            if grep -Eiq '(manifest unknown|name unknown|not found|no such manifest)' "$error_file"; then
+              echo "映像參照不存在：$ref" >&2
+              return 0
+            fi
+
+            cat "$error_file" >&2
+            return 1
+          }
+
+          backend_version_digest="$(inspect_digest "$BACKEND_VERSION_REF")"
+          backend_sha_digest="$(inspect_digest "$BACKEND_SHA_REF")"
+          frontend_version_digest="$(inspect_digest "$FRONTEND_VERSION_REF")"
+          frontend_sha_digest="$(inspect_digest "$FRONTEND_SHA_REF")"
+
+          if [[ "$backend_version_digest" == "$backend_sha_digest" && -n "$backend_version_digest" ]] && \
+             [[ "$frontend_version_digest" == "$frontend_sha_digest" && -n "$frontend_version_digest" ]]; then
+            if [[ "$STACK_PUBLISHED" != "true" ]]; then
+              echo "兩個 image 已存在但 Release 尚未附上 Stack bundle；拒絕包裝或補簽既有 artifact。" >&2
+              exit 1
+            fi
+            echo 'build_required=false' >> "$GITHUB_OUTPUT"
+            echo "backend_digest=$backend_version_digest" >> "$GITHUB_OUTPUT"
+            echo "frontend_digest=$frontend_version_digest" >> "$GITHUB_OUTPUT"
+          elif [[ -z "$backend_version_digest" && -z "$backend_sha_digest" && -z "$frontend_version_digest" && -z "$frontend_sha_digest" ]]; then
+            if [[ "$STACK_PUBLISHED" == "true" ]]; then
+              echo "Release 已附上 Stack bundle 但四個 image 參照皆遺失；拒絕以新建置取代既有 artifact。" >&2
+              exit 1
+            fi
+            echo 'build_required=true' >> "$GITHUB_OUTPUT"
+            echo 'backend_digest=' >> "$GITHUB_OUTPUT"
+            echo 'frontend_digest=' >> "$GITHUB_OUTPUT"
+          else
+            echo "完整 Stack 發布不完整或 image digest 不一致，拒絕自動修補。" >&2
+            exit 1
+          fi
+
+      - name: 首次建置並推送 backend image
+        if: steps.registry.outputs.build_required == 'true'
+        id: push_backend
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./backend/Dockerfile.prod
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ steps.version.outputs.number }}
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ steps.version.outputs.sha_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.number }}
+
+      - name: 首次建置並推送 frontend image
+        if: steps.registry.outputs.build_required == 'true'
+        id: push_frontend
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./frontend/Dockerfile.prod
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=http://localhost:4005
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ steps.version.outputs.number }}
+            ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ steps.version.outputs.sha_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.number }}
+
+      - name: 解析兩個 image 的最終 digest
+        id: resolved
+        shell: bash
+        env:
+          BUILD_REQUIRED: ${{ steps.registry.outputs.build_required }}
+          EXISTING_BACKEND_DIGEST: ${{ steps.registry.outputs.backend_digest }}
+          EXISTING_FRONTEND_DIGEST: ${{ steps.registry.outputs.frontend_digest }}
+          BUILT_BACKEND_DIGEST: ${{ steps.push_backend.outputs.digest }}
+          BUILT_FRONTEND_DIGEST: ${{ steps.push_frontend.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$BUILD_REQUIRED" == "true" ]]; then
+            backend_digest="$BUILT_BACKEND_DIGEST"
+            frontend_digest="$BUILT_FRONTEND_DIGEST"
+          else
+            backend_digest="$EXISTING_BACKEND_DIGEST"
+            frontend_digest="$EXISTING_FRONTEND_DIGEST"
+          fi
+
+          for pair in "backend:$backend_digest" "frontend:$frontend_digest"; do
+            name="${pair%%:*}"
+            digest="${pair#*:}"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "$name image digest 無效：$digest" >&2
+              exit 1
+            fi
+            echo "${name}_digest=$digest" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: 驗證既有 Release 不可變內容
+        if: steps.release.outputs.stack_published == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKEND_DIGEST: ${{ steps.resolved.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ steps.resolved.outputs.frontend_digest }}
+          BUNDLE_ASSET_NAME: near-chat-stack-${{ github.ref_name }}.tar.gz
+        run: |
+          set -euo pipefail
+          release_state="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)"
+          if [[ "$(jq -r '.isDraft' <<< "$release_state")" != "false" || "$(jq -r '.isPrerelease' <<< "$release_state")" != "false" ]]; then
+            echo "既有 Release 尚未成為正式公開版本，拒絕自動宣告成功。" >&2
+            exit 1
+          fi
+          body="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+          if [[ "$body" != *"$GITHUB_SHA"* || "$body" != *"$BACKEND_DIGEST"* || "$body" != *"$FRONTEND_DIGEST"* || "$body" != *"$POSTGRES_IMAGE"* ]]; then
+            echo "既有 Release 與預期 source commit、兩個 image digest 或 PostgreSQL digest 不一致。" >&2
+            exit 1
+          fi
+          asset_found="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq "[.assets[].name] | index(\"$BUNDLE_ASSET_NAME\") // -1")"
+          if [[ "$asset_found" == "-1" ]]; then
+            echo "既有 Release 缺少完整 Stack bundle：$BUNDLE_ASSET_NAME" >&2
+            exit 1
+          fi
+
+      - name: 建立 backend image provenance
+        if: steps.registry.outputs.build_required == 'true'
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}
+          subject-digest: ${{ steps.resolved.outputs.backend_digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: 建立 frontend image provenance
+        if: steps.registry.outputs.build_required == 'true'
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}
+          subject-digest: ${{ steps.resolved.outputs.frontend_digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: 驗證 backend image provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.resolved.outputs.backend_digest }}
+        run: |
+          set -euo pipefail
+          gh attestation verify \
+            "oci://${REGISTRY}/${BACKEND_IMAGE_NAME}@${IMAGE_DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-stack.yml" \
+            --source-digest "$GITHUB_SHA" \
+            --bundle-from-oci
+
+      - name: 驗證 frontend image provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.resolved.outputs.frontend_digest }}
+        run: |
+          set -euo pipefail
+          gh attestation verify \
+            "oci://${REGISTRY}/${FRONTEND_IMAGE_NAME}@${IMAGE_DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-stack.yml" \
+            --source-digest "$GITHUB_SHA" \
+            --bundle-from-oci
+
+      - name: 建立可部署 Stack bundle
+        id: bundle
+        shell: bash
+        env:
+          BACKEND_DIGEST: ${{ steps.resolved.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ steps.resolved.outputs.frontend_digest }}
+          VERSION_NUMBER: ${{ steps.version.outputs.number }}
+          IMAGE_SHA_TAG: ${{ steps.version.outputs.sha_tag }}
+        run: |
+          set -euo pipefail
+          bundle_dir="$RUNNER_TEMP/near-chat-stack-${GITHUB_REF_NAME}"
+          archive="$RUNNER_TEMP/near-chat-stack-${GITHUB_REF_NAME}.tar.gz"
+          mkdir -p "$bundle_dir"
+          cp docker-compose.release.yml "$bundle_dir/docker-compose.release.yml"
+
+          cat > "$bundle_dir/near-chat.env.example" <<EOF
+          NEAR_CHAT_VERSION=$VERSION_NUMBER
+          BACKEND_IMAGE=${REGISTRY}/${BACKEND_IMAGE_NAME}@${BACKEND_DIGEST}
+          FRONTEND_IMAGE=${REGISTRY}/${FRONTEND_IMAGE_NAME}@${FRONTEND_DIGEST}
+          POSTGRES_USER=change-me
+          POSTGRES_PASSWORD=change-me
+          POSTGRES_DB=near_chat
+          DATABASE_URL=postgresql://change-me:change-me@db:5432/near_chat
+          JWT_SECRET=change-me-to-a-long-random-secret
+          JWT_EXPIRES_IN=15m
+          CORS_ORIGINS=http://localhost:3005
+          NEXT_PUBLIC_API_URL=http://localhost:4005
+          UPLOADS_MOUNT_SOURCE=app_uploads
+          EOF
+
+          jq -n \
+            --arg version "v${VERSION_NUMBER}" \
+            --arg commit "$GITHUB_SHA" \
+            --arg backend_version "${REGISTRY}/${BACKEND_IMAGE_NAME}:${VERSION_NUMBER}" \
+            --arg backend_sha "${REGISTRY}/${BACKEND_IMAGE_NAME}:${IMAGE_SHA_TAG}" \
+            --arg backend_digest "${REGISTRY}/${BACKEND_IMAGE_NAME}@${BACKEND_DIGEST}" \
+            --arg frontend_version "${REGISTRY}/${FRONTEND_IMAGE_NAME}:${VERSION_NUMBER}" \
+            --arg frontend_sha "${REGISTRY}/${FRONTEND_IMAGE_NAME}:${IMAGE_SHA_TAG}" \
+            --arg frontend_digest "${REGISTRY}/${FRONTEND_IMAGE_NAME}@${FRONTEND_DIGEST}" \
+            --arg postgres "$POSTGRES_IMAGE" \
+            '{version:$version, sourceCommit:$commit, images:{backend:{versionTag:$backend_version,shaTag:$backend_sha,digest:$backend_digest},frontend:{versionTag:$frontend_version,shaTag:$frontend_sha,digest:$frontend_digest}}, database:{runtimeImage:$postgres, migrations:{runner:"backend image", command:"pnpm run migrate:up"}}, composeFile:"docker-compose.release.yml"}' \
+            > "$bundle_dir/release-manifest.json"
+
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf - -C "$RUNNER_TEMP" "$(basename "$bundle_dir")" \
+            | gzip -n > "$archive"
+          bundle_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "asset_name=$(basename "$archive")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$bundle_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: 驗證既有 Stack bundle 完整性
+        if: steps.release.outputs.stack_published == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_ASSET_NAME: ${{ steps.bundle.outputs.asset_name }}
+          EXPECTED_BUNDLE_SHA256: ${{ steps.bundle.outputs.sha256 }}
+          BACKEND_DIGEST: ${{ steps.resolved.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ steps.resolved.outputs.frontend_digest }}
+          VERSION_NUMBER: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          body="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+          if [[ "$body" != *"$EXPECTED_BUNDLE_SHA256"* ]]; then
+            echo "既有 Release 未記錄預期的 bundle SHA-256。" >&2
+            exit 1
+          fi
+
+          download_dir="$RUNNER_TEMP/existing-stack-bundle"
+          extract_dir="$RUNNER_TEMP/extracted-stack-bundle"
+          mkdir -p "$download_dir" "$extract_dir"
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$BUNDLE_ASSET_NAME" \
+            --dir "$download_dir" \
+            --clobber
+          downloaded="$download_dir/$BUNDLE_ASSET_NAME"
+          actual_bundle_sha256="$(sha256sum "$downloaded" | awk '{print $1}')"
+          if [[ "$actual_bundle_sha256" != "$EXPECTED_BUNDLE_SHA256" ]]; then
+            echo "既有 Stack bundle SHA-256 不一致。" >&2
+            exit 1
+          fi
+
+          tar -xzf "$downloaded" -C "$extract_dir"
+          bundle_root="$extract_dir/near-chat-stack-${GITHUB_REF_NAME}"
+          test -f "$bundle_root/docker-compose.release.yml"
+          test -f "$bundle_root/near-chat.env.example"
+          test -f "$bundle_root/release-manifest.json"
+          if find "$bundle_root" -type f \( -name '.env' -o -name '.env.*' \) -print -quit | grep -q .; then
+            echo "Release bundle 包含秘密環境檔。" >&2
+            exit 1
+          fi
+
+          jq -e \
+            --arg version "v${VERSION_NUMBER}" \
+            --arg commit "$GITHUB_SHA" \
+            --arg backend_digest "${REGISTRY}/${BACKEND_IMAGE_NAME}@${BACKEND_DIGEST}" \
+            --arg frontend_digest "${REGISTRY}/${FRONTEND_IMAGE_NAME}@${FRONTEND_DIGEST}" \
+            --arg postgres "$POSTGRES_IMAGE" \
+            '.version == $version
+             and .sourceCommit == $commit
+             and .images.backend.digest == $backend_digest
+             and .images.frontend.digest == $frontend_digest
+             and .database.runtimeImage == $postgres
+             and .database.migrations.command == "pnpm run migrate:up"' \
+            "$bundle_root/release-manifest.json" >/dev/null
+          grep -F "image: $POSTGRES_IMAGE" "$bundle_root/docker-compose.release.yml" >/dev/null
+
+      - name: 產生 Stack 發布說明區段
+        if: steps.release.outputs.stack_published == 'false'
+        id: stack_notes
+        shell: bash
+        env:
+          VERSION_NUMBER: ${{ steps.version.outputs.number }}
+          IMAGE_SHA_TAG: ${{ steps.version.outputs.sha_tag }}
+          BACKEND_DIGEST: ${{ steps.resolved.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ steps.resolved.outputs.frontend_digest }}
+          BUNDLE_SHA256: ${{ steps.bundle.outputs.sha256 }}
+          BUNDLE_ASSET_NAME: ${{ steps.bundle.outputs.asset_name }}
+        run: |
+          set -euo pipefail
+          notes_file="$RUNNER_TEMP/stack-release-notes.md"
+          backend_image="${REGISTRY}/${BACKEND_IMAGE_NAME}"
+          frontend_image="${REGISTRY}/${FRONTEND_IMAGE_NAME}"
+
+          {
+            echo '## 完整 Stack'
+            echo
+            printf -- '- version：`%s`\n' "$GITHUB_REF_NAME"
+            printf -- '- Commit：`%s`\n' "$GITHUB_SHA"
+            printf -- '- Backend image：`%s:%s`\n' "$backend_image" "$VERSION_NUMBER"
+            printf -- '- Backend commit image：`%s:%s`\n' "$backend_image" "$IMAGE_SHA_TAG"
+            printf -- '- Backend digest：`%s@%s`\n' "$backend_image" "$BACKEND_DIGEST"
+            printf -- '- Frontend image：`%s:%s`\n' "$frontend_image" "$VERSION_NUMBER"
+            printf -- '- Frontend commit image：`%s:%s`\n' "$frontend_image" "$IMAGE_SHA_TAG"
+            printf -- '- Frontend digest：`%s@%s`\n' "$frontend_image" "$FRONTEND_DIGEST"
+            printf -- '- PostgreSQL runtime：`%s`\n' "$POSTGRES_IMAGE"
+            printf -- '- Deploy bundle：`%s`\n' "$BUNDLE_ASSET_NAME"
+            printf -- '- Bundle SHA-256：`%s`\n' "$BUNDLE_SHA256"
+            echo
+            printf -- '發布說明：[繁體中文](https://github.com/%s/blob/%s/docs/ZH-TW/RELEASE.md)／[English](https://github.com/%s/blob/%s/docs/RELEASE.md)\n' \
+              "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+          } > "$notes_file"
+
+          echo "file=$notes_file" >> "$GITHUB_OUTPUT"
+
+      # 正常路徑：Release 已由 Semantic Release 建立，這裡只把 Stack 區段附加到既有
+      # release notes 後面，再上傳 bundle。asset 上傳放在最後一步，因為
+      # `stack_published` 正是以 asset 是否存在判定 —— 讓它成為最終的提交點。
+      - name: 於既有 Release 補上 Stack artifact
+        if: steps.release.outputs.exists == 'true' && steps.release.outputs.stack_published == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK_NOTES_FILE: ${{ steps.stack_notes.outputs.file }}
+          BUNDLE_ARCHIVE: ${{ steps.bundle.outputs.archive }}
+        run: |
+          set -euo pipefail
+          merged_notes="$RUNNER_TEMP/merged-release-notes.md"
+          gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json body --jq .body > "$merged_notes"
+          {
+            echo
+            echo '---'
+            echo
+            cat "$STACK_NOTES_FILE"
+          } >> "$merged_notes"
+
+          gh release edit "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --notes-file "$merged_notes"
+          gh release upload "$GITHUB_REF_NAME" "$BUNDLE_ARCHIVE" \
+            --repo "$GITHUB_REPOSITORY"
+
+      # 備援路徑：Release 不存在（手動推 tag，或 Semantic Release 未建立時的復原）。
+      - name: 建立 GitHub Release
+        if: steps.release.outputs.exists == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK_NOTES_FILE: ${{ steps.stack_notes.outputs.file }}
+          BUNDLE_ARCHIVE: ${{ steps.bundle.outputs.archive }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Near Chat $GITHUB_REF_NAME" \
+            --notes-file "$STACK_NOTES_FILE" \
+            --latest=false \
+            "$BUNDLE_ARCHIVE"

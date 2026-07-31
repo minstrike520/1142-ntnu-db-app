@@ -1,0 +1,120 @@
+name: 建立版本與 GitHub Release
+
+# 第二階段：只在 main 的完整 CI 成功後執行 Semantic Release。
+#
+# 專用 Release GitHub App 的 installation token 能 bypass 版本 tag 建立規則，
+# 且它推送的 commit 與 tag 會正常產生後續 workflow 事件：
+#
+#   CI(M) 完成 → 本 workflow 建立版本 commit R 與 tag → release-stack.yml
+#
+# R 也會啟動一次 CI；該 CI 完成後，本 workflow 會再次被喚起，因此 guard 會精確
+# 略過 chore(release): X.Y.Z。若 main 已前進，只有後續 commits 全部僅修改 CI 的
+# ignored paths 時才沿用這次綠燈；其餘情況交給較新的 CI run 發布。
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 執行 Semantic Release
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    permissions:
+      contents: read
+    steps:
+      - name: 取出已通過 CI 的 main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          # Semantic Release 需要完整的 commit 與 tag 歷史才能判斷「上次發布後有
+          # 哪些變更」與應該的版本號；shallow clone 會讓它算錯或整個略過發布。
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: 確認發布來源
+        id: guard
+        shell: bash
+        env:
+          CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          ci_subject="$(git show -s --format=%s "$CI_HEAD_SHA")"
+          if [[ "$ci_subject" =~ ^chore\(release\):[[:space:]][0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "略過 Semantic Release 版本號 commit 的第二次 CI：$CI_HEAD_SHA"
+            echo 'should_release=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          checked_sha="$(git rev-parse HEAD)"
+          if [[ "$checked_sha" != "$CI_HEAD_SHA" ]]; then
+            if ! git merge-base --is-ancestor "$CI_HEAD_SHA" "$checked_sha"; then
+              echo "本次 CI commit 不在目前 main 的歷史上：ci=$CI_HEAD_SHA main=$checked_sha" >&2
+              exit 1
+            fi
+
+            ci_relevant_paths=()
+            # 必須與 ci.yml 的 push.paths-ignore 保持一致。
+            while IFS= read -r commit; do
+              while IFS= read -r changed_path; do
+                [[ -z "$changed_path" ]] && continue
+                case "$changed_path" in
+                  docs/* | README.md | README.zh-TW.md | .github/ISSUE_TEMPLATE/* | LICENSE | AGENTS.md) ;;
+                  *) ci_relevant_paths+=("$changed_path") ;;
+                esac
+              done < <(git diff-tree --no-commit-id --name-only -r -m "$commit")
+            done < <(git rev-list --ancestry-path "${CI_HEAD_SHA}..${checked_sha}")
+
+            if (( ${#ci_relevant_paths[@]} > 0 )); then
+              echo "main 已包含需要另一次 CI 的後續變更，交由較新的 run 發布："
+              printf '  %s\n' "${ci_relevant_paths[@]}" | sort -u
+              echo 'should_release=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "main 僅新增 CI ignored paths，沿用本次成功結果：ci=$CI_HEAD_SHA main=$checked_sha"
+          fi
+
+          echo 'should_release=true' >> "$GITHUB_OUTPUT"
+
+      - name: 建立 Release App token
+        if: steps.guard.outputs.should_release == 'true'
+        id: release-app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - if: steps.guard.outputs.should_release == 'true'
+        uses: pnpm/action-setup@v6
+
+      - if: steps.guard.outputs.should_release == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: 安裝依賴
+        if: steps.guard.outputs.should_release == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: 執行 Semantic Release
+        if: steps.guard.outputs.should_release == 'true'
+        env:
+          GITHUB_TOKEN: ${{ steps.release-app.outputs.token }}
+        run: npx semantic-release
