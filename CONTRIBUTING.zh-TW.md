@@ -1,6 +1,8 @@
 # 貢獻指南 (Contributing to Near Chat)
 
-首先，非常感謝您願意花時間為 Near Chat 做出貢獻！本專案是一門資料庫課程的專案，結構為 Monorepo，包含 React/Next.js 前端、Node.js/Express 後端 API，以及 PostgreSQL 18 資料庫，並在本地透過 Docker Compose 進行容器編排與整合。
+[English](CONTRIBUTING.md) | 繁體中文
+
+首先，非常感謝您願意花時間為 Near Chat 做出貢獻！本專案是一門資料庫課程的專案，結構為 Monorepo，包含 React/Next.js 前端、Bun/Hono 後端 API，以及 PostgreSQL 18 資料庫，並在本地透過 Docker Compose 進行容器編排與整合。
 
 請仔細閱讀本指南，以瞭解我們的開發、測試與貢獻工作流程。
 
@@ -19,11 +21,12 @@
 
 ## 1. Git 工作流程與分支規範
 
-* **主要開發分支**：本專案的主要開發分支為 **`dev`**。
+* **主要開發分支**：本專案的主要開發分支為 **`main`**。
 * **分支策略**：
-  - 所有的開發都應從 `dev` 分支切出（例如：`feat/my-feature` 或 `fix/my-bug`）。
-  - 所有的 Pull Request 都必須提交回 `dev` 分支。
-  - 請避免將變更直接 Push 至 `main` 或 `dev` 分支。
+  - 所有的開發都應從 `main` 分支切出（例如：`feat/my-feature` 或 `fix/my-bug`）。
+  - 所有的 Pull Request 都必須提交回 `main` 分支。
+  - 請避免將變更直接 Push 至 `main` 分支。
+* **版本發布**：發布是在 `main` 上推送版本 tag（例如 `v1.2.0`）觸發，不再維護長期的發布分支。
 
 ---
 
@@ -110,7 +113,7 @@ docker compose exec backend pnpm run db:seed
    ```bash
    docker compose exec frontend pnpm run lint
    ```
-3. **執行 Vitest 測試**：
+3. **執行 Bun 測試**：
    - **單元測試**：
      ```bash
      docker compose exec backend pnpm run test:unit
@@ -133,7 +136,7 @@ docker compose exec backend pnpm run db:seed
 
 ## 6. API 與 WebSocket 協定驗證
 
-* 任何對 Express 控制器 (Controllers)、後端路由 (Routes) 或 Socket.IO 事件處理常式的修改，都必須精確對齊 [docs/api-documentation.md](docs/api-documentation.md) 中所定義的 Payload 與資料模型。
+* 任何對 Hono 路由 (Routes)、後端服務 (Services) 或 Socket.IO 事件處理常式的修改，都必須精確對齊 [docs/api-documentation.md](docs/api-documentation.md) 中所定義的 Payload 與資料模型。
 * 破壞協定契約將會導致前後端串接失敗，並使 CI 流程出錯。
 
 ---
@@ -141,7 +144,7 @@ docker compose exec backend pnpm run db:seed
 ## 7. 提交 Pull Request
 
 1. **自我檢查**：請先在本地執行 ESLint、型別檢查與所有測試。
-2. **分支對象**：確保 PR 的 Base Branch 設定為 **`dev`**。
+2. **分支對象**：確保 PR 的 Base Branch 設定為 **`main`**。
 3. **Commit 訊息**：檢查 Commit 訊息是否符合 Conventional Commit 格式。
 4. **內容描述**：請套用我們的 Pull Request 範本，並以 **繁體中文 (Traditional Chinese)** 描述您的變更。
 5. **測試計畫**：在 PR 說明中清楚記錄您的驗證步驟。

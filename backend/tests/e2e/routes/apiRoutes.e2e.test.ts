@@ -1,10 +1,9 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'bun:test';
+import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
 import request from 'supertest';
 import { resetDb } from '../../helpers/resetDb';
 import { testPool } from '../../helpers/testPool';
 
 let app: any;
-let appPool: typeof import('../../../src/models/db').default;
 
 const registerUser = async (name = 'E2E User') => {
   const email = `e2e-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`;
@@ -25,18 +24,17 @@ describe('API routes E2E', () => {
     process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
     process.env.CORS_ORIGINS = 'http://allowed.example,http://localhost:3005';
     const indexModule = await import('../../../src/index');
-    const dbModule = await import('../../../src/models/db');
     app = indexModule.app;
-    appPool = dbModule.default;
   });
 
   beforeEach(async () => {
     await resetDb();
   });
 
-  afterAll(async () => {
-    await appPool.end();
-  });
+  // Deliberately does NOT close the app's connection pool. `src/models/db`
+  // exports a process-wide singleton, so ending it here would break every
+  // later test file once the whole suite shares one `bun test` process.
+  // The pool is released when the process exits.
 
   it('covers auth routes', async () => {
     const email = `auth-${Date.now()}@example.com`;
