@@ -1,3 +1,10 @@
+# [2.1.0](https://github.com/nearcsie/near-chat/compare/v2.0.0...v2.1.0) (2026-07-31)
+
+
+### Features
+
+* 群組邀請連結與接受邀請頁面 ([#271](https://github.com/nearcsie/near-chat/issues/271)) ([#401](https://github.com/nearcsie/near-chat/issues/401)) ([bbd7cf8](https://github.com/nearcsie/near-chat/commit/bbd7cf86d37131dcb55ac5181c6b4c6ffad9ef39))
+
 # [2.0.0](https://github.com/nearcsie/near-chat/compare/v1.1.0...v2.0.0) (2026-07-29)
 
 
