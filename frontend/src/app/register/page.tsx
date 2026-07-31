@@ -1,12 +1,18 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { register } from "@/lib/api";
+import {
+  getServerRedirect,
+  readRedirectParam,
+  subscribeToRedirect,
+  withRedirectParam,
+} from "@/lib/redirect";
 
 const getFriendlyRegisterError = (error: unknown) => {
   const message = error instanceof Error ? error.message : "";
@@ -26,6 +32,11 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const redirectTo = useSyncExternalStore(
+    subscribeToRedirect,
+    readRedirectParam,
+    getServerRedirect,
+  );
 
   useEffect(() => {
     document.title = "Near | Register";
@@ -60,7 +71,7 @@ export default function RegisterPage() {
         }),
       );
       localStorage.setItem("just_registered", "true");
-      router.push("/");
+      router.push(redirectTo);
     } catch (err) {
       setError(getFriendlyRegisterError(err));
     } finally {
@@ -157,7 +168,7 @@ export default function RegisterPage() {
           <p className="text-xs text-text-muted font-sans select-none">
             Already have an account?{" "}
             <Link
-              href="/login"
+              href={withRedirectParam("/login", redirectTo)}
               className="text-primary font-semibold hover:underline"
             >
               Sign in

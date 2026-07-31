@@ -140,6 +140,81 @@ describe('Room E2E', () => {
     expect(joinRes.body.roomId).toBe(createRes.body.roomId);
   });
 
+  it('should preview a room by invite code without joining, then reflect membership after joining', async () => {
+    const createRes = await request(app)
+      .post('/api/v1/rooms')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        type: 'group',
+        name: 'Preview Room',
+        avatarUrl: 'https://example.com/group.png',
+      });
+    const inviteCode = createRes.body.inviteCode;
+
+    const previewRes = await request(app)
+      .get(`/api/v1/rooms/invite/${inviteCode}`)
+      .set('Authorization', `Bearer ${otherToken}`);
+
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body).toEqual({
+      roomId: createRes.body.roomId,
+      name: 'Preview Room',
+      avatarUrl: 'https://example.com/group.png',
+      requireApproval: false,
+      isMember: false,
+      isPending: false,
+    });
+
+    await request(app)
+      .post(`/api/v1/rooms/${createRes.body.roomId}/members`)
+      .set('Authorization', `Bearer ${otherToken}`)
+      .send({ inviteCode });
+
+    const previewAfterJoinRes = await request(app)
+      .get(`/api/v1/rooms/invite/${inviteCode}`)
+      .set('Authorization', `Bearer ${otherToken}`);
+
+    expect(previewAfterJoinRes.status).toBe(200);
+    expect(previewAfterJoinRes.body.isMember).toBe(true);
+  });
+
+  it('should report isPending when previewing an approval-required group already requested', async () => {
+    const createRes = await request(app)
+      .post('/api/v1/rooms')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        type: 'group',
+        name: 'Approval Room',
+        requireApproval: true,
+      });
+    const inviteCode = createRes.body.inviteCode;
+
+    await request(app)
+      .post(`/api/v1/rooms/${createRes.body.roomId}/members`)
+      .set('Authorization', `Bearer ${otherToken}`)
+      .send({ inviteCode });
+
+    const previewRes = await request(app)
+      .get(`/api/v1/rooms/invite/${inviteCode}`)
+      .set('Authorization', `Bearer ${otherToken}`);
+
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.requireApproval).toBe(true);
+    expect(previewRes.body.isMember).toBe(true);
+    expect(previewRes.body.isPending).toBe(true);
+    // This group was created without an avatar, so the optional field is omitted
+    // from the payload rather than serialized as null (see api-documentation.md).
+    expect(previewRes.body).not.toHaveProperty('avatarUrl');
+  });
+
+  it('should 404 when previewing an unknown invite code', async () => {
+    const res = await request(app)
+      .get('/api/v1/rooms/invite/DOESNOTEXIST')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(404);
+  });
+
   it('should create an idempotent private room for accepted friends', async () => {
     await makeFriends();
 

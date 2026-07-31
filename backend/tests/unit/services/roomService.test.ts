@@ -219,6 +219,55 @@ describe('roomService', () => {
 
     expect(mockRepo.update).not.toHaveBeenCalled();
   });
+  describe('previewByCode', () => {
+    it('returns a preview without joining', async () => {
+      mockRepo.findByInviteCode.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue(null);
+
+      const preview = await roomService.previewByCode('user-2', 'ABCDEF');
+
+      expect(preview).toEqual({
+        roomId: 'room-1',
+        name: 'Study Room',
+        avatarUrl: undefined,
+        requireApproval: false,
+        isMember: false,
+        isPending: false,
+      });
+      expect(mockMemberRepo.add).not.toHaveBeenCalled();
+    });
+
+    it('flags isMember when the caller already belongs to the room', async () => {
+      mockRepo.findByInviteCode.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue(ownerMember);
+
+      const preview = await roomService.previewByCode('user-1', 'ABCDEF');
+
+      expect(preview.isMember).toBe(true);
+      expect(preview.isPending).toBe(false);
+    });
+
+    it('flags isPending when the caller is still awaiting approval', async () => {
+      mockRepo.findByInviteCode.mockResolvedValue({ ...room, requireApproval: true });
+      mockMemberRepo.findMember.mockResolvedValue({ ...ownerMember, userId: 'user-2', role: 'pending' });
+
+      const preview = await roomService.previewByCode('user-2', 'ABCDEF');
+
+      expect(preview.isMember).toBe(true);
+      expect(preview.isPending).toBe(true);
+    });
+
+    it('throws NotFoundError for an unknown invite code', async () => {
+      mockRepo.findByInviteCode.mockResolvedValue(null);
+      await expect(roomService.previewByCode('user-2', 'BOGUS')).rejects.toThrow(NotFoundError);
+    });
+
+    it('throws NotFoundError if the invite code somehow resolves to a non-group room', async () => {
+      mockRepo.findByInviteCode.mockResolvedValue({ ...room, type: 'private' });
+      await expect(roomService.previewByCode('user-2', 'ABCDEF')).rejects.toThrow(NotFoundError);
+    });
+  });
+
   describe('joinByCode', () => {
     it('joins room using invite code', async () => {
       mockRepo.findByInviteCode.mockResolvedValue(room);
@@ -230,6 +279,22 @@ describe('roomService', () => {
       mockRepo.findByInviteCode.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue({} as RoomMember);
       await expect(roomService.joinByCode('user-2', 'ABCDEF')).rejects.toThrow(ConflictError);
+    });
+
+    it('converts a concurrent-insert unique violation into ConflictError', async () => {
+      mockRepo.findByInviteCode.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue(null);
+      mockMemberRepo.add.mockRejectedValue(Object.assign(new Error('duplicate key'), { code: '23505' }));
+
+      await expect(roomService.joinByCode('user-2', 'ABCDEF')).rejects.toThrow(ConflictError);
+    });
+
+    it('rethrows non-unique-violation database errors', async () => {
+      mockRepo.findByInviteCode.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue(null);
+      mockMemberRepo.add.mockRejectedValue(Object.assign(new Error('connection lost'), { code: '08006' }));
+
+      await expect(roomService.joinByCode('user-2', 'ABCDEF')).rejects.toThrow('connection lost');
     });
   });
 

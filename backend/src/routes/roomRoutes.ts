@@ -20,6 +20,7 @@ export interface RoomService {
   createPrivate(userId: string, targetUserId: string, bypassFriendCheck?: boolean): Promise<{ room: Room | RoomSummary | unknown; isExisting?: boolean; created?: boolean }>;
   update(roomId: string, callerId: string, data: unknown): Promise<unknown>;
   joinByCode(userId: string, inviteCode: string): Promise<unknown>;
+  previewByCode(userId: string, inviteCode: string): Promise<unknown>;
   leave(userId: string, roomId: string): Promise<void>;
   deleteGroup(roomId: string, callerId: string): Promise<void>;
   uploadAvatar(roomId: string, callerId: string, file: UploadedFile): Promise<unknown>;
@@ -61,6 +62,14 @@ export const makeRoomRoutes = (service: RoomService) => {
     const body = c.req.valid('json') as { inviteCode: string };
     const room = await service.joinByCode(userId, body.inviteCode);
     return c.json(room, 200);
+  });
+
+  // Read-only lookup backing the accept-invite page. Registered ahead of the
+  // `/:id` routes so the literal `invite` segment is never taken for a room id.
+  app.get('/invite/:code', async (c) => {
+    const userId = c.get('user').userId;
+    const preview = await service.previewByCode(userId, c.req.param('code'));
+    return c.json(preview, 200);
   });
 
   app.get('/:id/members', async (c) => {

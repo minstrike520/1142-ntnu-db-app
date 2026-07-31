@@ -4,6 +4,7 @@ import { makeRoomRoutes } from '../../../src/routes/roomRoutes';
 import { authMiddleware } from '../../../src/middlewares/authMiddleware';
 import { errorHandler } from '../../../src/middlewares/errorHandler';
 import { signToken } from '../../../src/utils/jwt';
+import { NotFoundError } from '../../../src/utils/AppError';
 
 // authMiddleware looks the caller up through the shared SQL client; a non-empty
 // row is all it needs to accept the signed token.
@@ -156,5 +157,74 @@ describe('PATCH /rooms/:id/members/:targetUserId', () => {
     expect(res.status).toBe(200);
     expect(service.transferOwnership).not.toHaveBeenCalled();
     expect(service.updateMember).toHaveBeenCalledWith(ROOM_ID, CALLER_ID, NEW_OWNER_ID, { role: 'admin' });
+  });
+});
+
+describe('GET /rooms/invite/:code', () => {
+  let service: any;
+  let token: string;
+
+  const makeApp = () => {
+    const app = new Hono();
+    app.onError(errorHandler);
+    app.use('/rooms/*', authMiddleware);
+    app.route('/rooms', makeRoomRoutes(service));
+    return app;
+  };
+
+  const previewInvite = (code: string) =>
+    makeApp().request(`/rooms/invite/${code}`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+  beforeEach(async () => {
+    token = await signToken({ userId: CALLER_ID, email: 'caller@test.com' } as any);
+    service = {
+      previewByCode: mock().mockResolvedValue({
+        roomId: ROOM_ID,
+        name: 'Study Room',
+        requireApproval: false,
+        isMember: false,
+        isPending: false,
+      }),
+      joinByCode: mock(),
+    };
+  });
+
+  afterAll(() => {
+    mock.restore();
+  });
+
+  it('returns the preview for the caller without joining', async () => {
+    const res = await previewInvite('ABC123');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      roomId: ROOM_ID,
+      name: 'Study Room',
+      requireApproval: false,
+      isMember: false,
+      isPending: false,
+    });
+    expect(service.previewByCode).toHaveBeenCalledWith(CALLER_ID, 'ABC123');
+    expect(service.joinByCode).not.toHaveBeenCalled();
+  });
+
+  it('does not shadow the room-by-id route', async () => {
+    // `invite` is a literal segment, so `/rooms/:id` must not swallow it.
+    await previewInvite('ABC123');
+
+    expect(service.previewByCode).toHaveBeenCalled();
+  });
+
+  it('surfaces an unknown invite code as 404 through the error handler', async () => {
+    service.previewByCode = mock(async () => {
+      throw new NotFoundError('room', 'BOGUS');
+    });
+
+    const res = await previewInvite('BOGUS');
+
+    expect(res.status).toBe(404);
   });
 });

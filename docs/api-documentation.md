@@ -284,6 +284,39 @@ All errors return the following JSON structure:
   }
   ```
 
+#### RoomInvitePreview
+- **Description**: Read-only preview of a group room resolved from an invite code, shown before the caller confirms joining. Returned by `GET /rooms/invite/:code`.
+- **Field Details**:
+  | Field | Type | Description |
+  | :--- | :--- | :--- |
+  | `roomId` | UUID | Unique chat room identifier |
+  | `name` | String (optional) | Group name. Omitted from the response when unset |
+  | `avatarUrl` | String (optional) | Group avatar URL. Omitted from the response when the group has no avatar |
+  | `requireApproval` | Boolean | Whether joining requires owner/admin approval |
+  | `isMember` | Boolean | Whether the caller already has a membership row, including a pending one |
+  | `isPending` | Boolean | Whether the caller has already requested to join and is awaiting approval |
+- **Example**:
+  ```json
+  {
+    "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
+    "name": "Project Discussion Group",
+    "avatarUrl": "https://example.com/room-avatar.png",
+    "requireApproval": false,
+    "isMember": false,
+    "isPending": false
+  }
+  ```
+- **Example (group without an avatar)**: optional fields are absent rather than `null`.
+  ```json
+  {
+    "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
+    "name": "Project Discussion Group",
+    "requireApproval": false,
+    "isMember": false,
+    "isPending": false
+  }
+  ```
+
 #### RoomMember
 - **Field Details**:
   | Field | Type | Description |
@@ -1005,6 +1038,29 @@ All errors return the following JSON structure:
     "viewHistory": true,
     "isArchived": false,
     "createdAt": "2026-06-14T22:18:13Z"
+  }
+  ```
+
+---
+
+#### `GET /rooms/invite/:code`
+- **Description**: Preview the group a share-able invite link points at, without joining it. Used by the accept-invite page to show the group name and avatar before the user confirms.
+- **Authentication & Authorization**: Authentication required. Any authenticated user may preview a valid invite code; no membership is required.
+- **Path Parameters**:
+  | Parameter | Type | Description |
+  | :--- | :--- | :--- |
+  | `code` | String | Invite code taken from the invite link |
+- **Response**:
+  - `200 OK`: Returns a [`RoomInvitePreview`](#roominvitepreview). This call is read-only and never adds the caller to the room.
+  - `404 Not Found`: No group matches this invite code.
+- **Response Example** (this group has no avatar, so `avatarUrl` is absent):
+  ```json
+  {
+    "roomId": "8f8b8c8d-8e8f-8a8b-8c8d-8e8f8a8b8c8d",
+    "name": "New Project Chat",
+    "requireApproval": true,
+    "isMember": false,
+    "isPending": false
   }
   ```
 
