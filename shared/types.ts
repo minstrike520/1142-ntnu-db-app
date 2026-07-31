@@ -100,6 +100,18 @@ export interface RoomSummary extends Room {
   role?: RoomMemberRole;
 }
 
+/** Read-only preview of a group room resolved from an invite code, shown before the caller confirms joining. */
+export interface RoomInvitePreview {
+  roomId: string;
+  name?: string;
+  avatarUrl?: string;
+  requireApproval: boolean;
+  /** True if the caller already has a membership row for this room, including a pending one. */
+  isMember: boolean;
+  /** True if the caller has already requested to join and is still awaiting approval. */
+  isPending: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------

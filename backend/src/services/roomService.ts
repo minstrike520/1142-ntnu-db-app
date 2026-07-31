@@ -1,5 +1,5 @@
 import type { UploadedFile } from '../utils/fileUpload';
-import type { Room, RoomSummary } from '@shared/types';
+import type { Room, RoomInvitePreview, RoomSummary } from '@shared/types';
 import { randomBytes } from 'crypto';
 import { isUserOnline } from '../realtime/presence';
 import { removeManagedAvatar, saveAvatarUpload } from '../utils/avatarUpload';
@@ -169,13 +169,37 @@ export const makeRoomService = (
       return updated;
     },
 
+    async previewByCode(userId: string, inviteCode: string): Promise<RoomInvitePreview> {
+      const room = await repo.findByInviteCode(inviteCode);
+      if (!room || room.type !== 'group') throw new NotFoundError('room', inviteCode);
+      const existing = await roomMemberRepo.findMember(room.roomId, userId);
+      return {
+        roomId: room.roomId,
+        name: room.name,
+        avatarUrl: room.avatarUrl,
+        requireApproval: room.requireApproval,
+        isMember: !!existing,
+        isPending: existing?.role === 'pending',
+      };
+    },
+
     async joinByCode(userId: string, inviteCode: string): Promise<Room> {
       const room = await repo.findByInviteCode(inviteCode);
       if (!room) throw new NotFoundError('room', inviteCode);
       const existing = await roomMemberRepo.findMember(room.roomId, userId);
       if (existing) throw new ConflictError('User is already a member of this room');
       const role = room.requireApproval ? 'pending' : 'member';
-      await roomMemberRepo.add({ roomId: room.roomId, userId, role });
+      try {
+        await roomMemberRepo.add({ roomId: room.roomId, userId, role });
+      } catch (err) {
+        // Two simultaneous joins can both pass the findMember check above; the
+        // losing insert then violates the (room_id, user_id) primary key. Report
+        // it as the same conflict the pre-check would have raised rather than a 500.
+        if ((err as { code?: string }).code === '23505') {
+          throw new ConflictError('User is already a member of this room');
+        }
+        throw err;
+      }
 
       if (role === 'member') {
         // Notify existing room members that someone new joined.

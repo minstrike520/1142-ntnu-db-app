@@ -1,12 +1,18 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { login } from "@/lib/api";
+import {
+  getServerRedirect,
+  readRedirectParam,
+  subscribeToRedirect,
+  withRedirectParam,
+} from "@/lib/redirect";
 
 const getFriendlyLoginError = (error: unknown) => {
   const message = error instanceof Error ? error.message : "";
@@ -24,6 +30,11 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const redirectTo = useSyncExternalStore(
+    subscribeToRedirect,
+    readRedirectParam,
+    getServerRedirect,
+  );
 
   useEffect(() => {
     document.title = "Near | Sign In";
@@ -53,7 +64,7 @@ export default function LoginPage() {
           avatar: result.user.avatarUrl ?? "",
         }),
       );
-      router.push("/");
+      router.push(redirectTo);
     } catch (err) {
       setError(getFriendlyLoginError(err));
     } finally {
@@ -126,7 +137,7 @@ export default function LoginPage() {
           <p className="text-xs text-text-muted font-sans select-none">
             No account yet?{" "}
             <Link
-              href="/register"
+              href={withRedirectParam("/register", redirectTo)}
               className="text-primary font-semibold hover:underline"
             >
               Create one

@@ -250,6 +250,9 @@
     "copyInviteCode": "複製邀請碼",
     "inviteCodeCopied": "邀請碼已複製到剪貼簿！",
     "inviteCodeManualCopy": "請手動複製以下邀請碼：",
+    "copyInviteLink": "複製邀請連結",
+    "inviteLinkCopied": "邀請連結已複製到剪貼簿！",
+    "inviteLinkManualCopy": "請手動複製以下邀請連結：",
     "saving": "儲存中...",
     "saveSettings": "儲存設定",
     "settingsSaved": "群組設定已儲存。",
@@ -333,6 +336,21 @@
     "renameFailed": "修改資料夾名稱失敗",
     "deleteFailed": "刪除資料夾失敗",
     "confirmAction": "確定"
+  },
+  "inviteAccept": {
+    "pageTitle": "Near | 群組邀請",
+    "loading": "正在載入邀請…",
+    "invalidInvite": "此邀請連結無效或已失效。",
+    "backToNear": "返回 Near",
+    "group": "群組",
+    "invited": "你被邀請加入這個群組。",
+    "alreadyMember": "你已經是這個群組的成員了。",
+    "openChat": "前往聊天室",
+    "cancel": "取消",
+    "accept": "同意加入",
+    "joining": "加入中…",
+    "joinFailed": "加入此群組失敗。",
+    "pendingApproval": "已送出加入 {name} 的申請，待管理員審核通過後即可開啟。"
   },
   "chatFilter": {
     "filterAll": "全部",

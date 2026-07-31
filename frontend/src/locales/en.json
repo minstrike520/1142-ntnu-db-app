@@ -258,6 +258,9 @@
     "copyInviteCode": "Copy Invite Code",
     "inviteCodeCopied": "Invite code copied to clipboard!",
     "inviteCodeManualCopy": "Please copy the invite code manually:",
+    "copyInviteLink": "Copy Invite Link",
+    "inviteLinkCopied": "Invite link copied to clipboard!",
+    "inviteLinkManualCopy": "Please copy the invite link manually:",
     "saving": "Saving...",
     "saveSettings": "Save Settings",
     "settingsSaved": "Group settings saved.",
@@ -333,6 +336,21 @@
     "renameFailed": "Failed to rename folder",
     "deleteFailed": "Failed to delete folder",
     "confirmAction": "Confirm"
+  },
+  "inviteAccept": {
+    "pageTitle": "Near | Group Invite",
+    "loading": "Loading invite...",
+    "invalidInvite": "This invite link is invalid or has expired.",
+    "backToNear": "Back to Near",
+    "group": "Group",
+    "invited": "You've been invited to join this group.",
+    "alreadyMember": "You're already a member of this group.",
+    "openChat": "Open Chat",
+    "cancel": "Cancel",
+    "accept": "Accept",
+    "joining": "Joining...",
+    "joinFailed": "Failed to join this group.",
+    "pendingApproval": "Your request to join {name} has been sent. You'll be able to open it once an admin approves it."
   },
   "chatFilter": {
     "filterAll": "All",
