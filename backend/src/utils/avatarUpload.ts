@@ -3,7 +3,6 @@ import crypto from 'crypto';
 import path from 'path';
 import { ValidationError } from '../utils/AppError';
 import { AVATARS_UPLOAD_DIR } from './uploads';
-import { compressAvatarBuffer } from './imageCompression';
 
 export const AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -27,10 +26,9 @@ const AVATAR_EXTENSION_MIME_TYPES: Record<string, string> = {
 /**
  * Content-Type for a stored avatar, derived from its extension.
  *
- * Newly stored avatars are always `.webp`, but avatars saved before that
- * conversion are still on disk as PNG, GIF or JPEG. Serving those as
+ * Avatar uploads accept PNG, GIF, WebP and JPEG, so serving everything as
  * `image/jpeg` mislabels most of them — a mismatch that clients enforcing
- * `nosniff` may reject or cache wrongly — so keep deriving the type per file.
+ * `nosniff` may reject or cache wrongly.
  */
 export const avatarContentType = (fileName: string): string => {
   const extension = fileName.toLowerCase().match(/\.[^.]+$/)?.[0];
@@ -87,28 +85,11 @@ export const saveAvatarUpload = async (
   userId: string,
   file: UploadedFile,
 ): Promise<string> => {
-  assertValidAvatarUpload(file);
-
-  // Re-encode every avatar to a fixed-size WebP regardless of the uploaded
-  // format, so stored avatars have a predictable size and format on disk.
-  // Note: an animated upload (GIF, or an animated WebP — both are accepted by
-  // `ALLOWED_AVATAR_MIME_TYPES`) loses its animation here, collapsing to a
-  // single still frame — an accepted tradeoff for a small profile picture.
-  //
-  // `assertValidAvatarUpload` only checks the magic-byte prefix, so a
-  // truncated or otherwise corrupt image still reaches this point. Surface
-  // that as a client validation error rather than letting the raw sharp
-  // failure bubble up to the global handler as a 500.
-  let compressed: Buffer;
-  try {
-    compressed = await compressAvatarBuffer(file.buffer);
-  } catch {
-    throw new ValidationError('Avatar file content could not be processed as an image');
-  }
-  const storedName = `${userId}-${crypto.randomUUID()}.webp`;
+  const extension = assertValidAvatarUpload(file);
+  const storedName = `${userId}-${crypto.randomUUID()}${extension}`;
   const targetPath = path.join(AVATARS_UPLOAD_DIR, storedName);
 
-  await Bun.write(targetPath, compressed);
+  await Bun.write(targetPath, file.buffer);
 
   return `/uploads/avatars/${storedName}`;
 };

@@ -1,5 +1,4 @@
 import type { NextConfig } from "next";
-import path from "path";
 import packageInfo from "../package.json";
 import { execSync } from "child_process";
 
@@ -19,13 +18,6 @@ const nextConfig: NextConfig = {
   /* config options here */
   allowedDevOrigins,
   output: "standalone",
-  // Pinned explicitly rather than inferred. This is a pnpm workspace with a
-  // single root lockfile, so the dependency store lives at ../node_modules and
-  // Next must trace into it. Leaving this to inference makes the emitted
-  // standalone layout depend on where node_modules happens to sit, which
-  // silently changes the paths the production Dockerfile copies from.
-  // `next build` always runs with the package directory as cwd.
-  outputFileTracingRoot: path.resolve(process.cwd(), ".."),
   reactCompiler: true,
   env: {
     NEXT_PUBLIC_APP_VERSION: buildVersion,

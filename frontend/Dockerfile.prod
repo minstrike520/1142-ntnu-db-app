@@ -1,60 +1,59 @@
-# Stage 1: Install + build.
-#
-# The former separate `deps` stage is gone on purpose. In a pnpm workspace,
-# frontend/node_modules is only a farm of symlinks into the root store at
-# /workspace/node_modules/.pnpm, so `COPY --from=deps` of the package-level
-# directory alone produces dangling links and the build fails. Keeping install
-# and build in one stage avoids copying a symlinked tree across stages at all;
-# the BuildKit store cache mount below preserves the layer-caching benefit.
-FROM node:24-slim AS builder
+# Stage 1: Install dependencies
+FROM node:24-slim AS deps
 ENV CI=true
-ENV NEXT_TELEMETRY_DISABLED=1
-
-# Pinned to match "packageManager" in the root package.json, and prepared at
-# build time so the image does not fetch pnpm on first use at runtime.
-RUN corepack enable pnpm && corepack prepare pnpm@11.15.0 --activate
-
+RUN corepack enable && corepack prepare pnpm@11 --activate
 WORKDIR /workspace
 
-# All workspace manifests are required: `--frozen-lockfile` validates the
-# lockfile against every importer it contains.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY frontend/package.json ./frontend/
-COPY backend/package.json ./backend/
-
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install --store-dir /pnpm/store --frozen-lockfile --ignore-scripts \
-      --filter near-chat-frontend...
-
-COPY tsconfig.base.json ./
+# Copy global configs and shared files
+COPY tsconfig.base.json package.json ./
 COPY shared/ ./shared/
-COPY frontend/ ./frontend/
 
-# Inlined into the client bundle at build time, so it must be set before build.
+# Copy frontend packages
+COPY frontend/package.json frontend/pnpm-lock.yaml ./frontend/
+WORKDIR /workspace/frontend
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store,uid=1000,gid=1000 \
+    pnpm install --store-dir /pnpm/store --no-frozen-lockfile --ignore-scripts
+
+# Stage 2: Build the frontend
+FROM node:24-slim AS builder
+ENV CI=true
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+RUN corepack enable && corepack prepare pnpm@11 --activate
+WORKDIR /workspace
+
+# Copy global configs and shared files
+COPY tsconfig.base.json package.json ./
+COPY shared/ ./shared/
+
+# Copy frontend packages and node_modules
+COPY --from=deps /workspace/frontend/node_modules ./frontend/node_modules
+COPY frontend/ ./frontend/
+WORKDIR /workspace/frontend
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Pass API URL at build time for Next.js to inline into client bundles
 ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
-WORKDIR /workspace/frontend
 RUN pnpm build
 
-# Stage 2: Runner.
-#
-# next.config.ts pins outputFileTracingRoot to the workspace root, so the
-# standalone output is nested under the package name: server.js lands at
-# .next/standalone/frontend/server.js, with the traced store beside it at
-# .next/standalone/node_modules.
+# Stage 3: Runner
 FROM node:24-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN addgroup --system --gid 1001 nodejs \
- && adduser --system --uid 1001 nextjs \
- && mkdir -p /app && chown -R nextjs:nodejs /app
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
 
+# Set correct permissions
+RUN mkdir -p .next && chown -R nextjs:nodejs /app
+
+# Leverage standalone output
 COPY --from=builder --chown=nextjs:nodejs /workspace/frontend/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /workspace/frontend/.next/static ./frontend/.next/static
-COPY --from=builder --chown=nextjs:nodejs /workspace/frontend/public ./frontend/public
+COPY --from=builder --chown=nextjs:nodejs /workspace/frontend/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /workspace/frontend/public ./public
 
 USER nextjs
 
@@ -62,4 +61,4 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-CMD ["node", "frontend/server.js"]
+CMD ["node", "server.js"]

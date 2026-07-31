@@ -1,72 +1,56 @@
 name: Bug Report (錯誤提報)
-description: Report a bug or unexpected behavior
+description: 提報程式錯誤或異常行為 (Report a bug or unexpected behavior)
 title: "[Bug] "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you for reporting a bug! Please provide the following information to help us reproduce and resolve the issue.
-
-  - type: checkboxes
-    id: scope
-    attributes:
-      label: 1. Affected Components (影響範圍)
-      description: Select the components affected by this bug.
-      options:
-        - label: Frontend (Next.js)
-        - label: Backend (Express / Socket.IO)
-        - label: Database (PostgreSQL / Migrations)
-        - label: Shared (Types & Models)
-        - label: Docs / DevOps / Docker
-    validations:
-      required: true
+        感謝提報 Bug！請提供基本資訊以協助我們定位並修復問題。
 
   - type: textarea
     id: description
     attributes:
-      label: 2. Description (問題描述)
-      description: Provide a clear and concise description of the bug.
-      placeholder: e.g., Application crashes and shows a white screen when clicking the group avatar.
+      label: 1. 問題描述 (Description)
+      description: 請清楚描述你遇到了什麼問題。
+      placeholder: 例如：點擊群組頭像時應用程式崩潰，畫面變白。
     validations:
       required: true
 
   - type: textarea
     id: steps
     attributes:
-      label: 3. Steps to Reproduce (重現步驟)
-      description: Provide step-by-step instructions to reproduce the issue.
+      label: 2. 重現步驟 (Steps to Reproduce)
+      description: 請提供一步步的操作說明。
       placeholder: |
-        1. Log in and click any chat room
-        2. Click the settings icon in the top right
-        3. Click the group members list
+        1. 登入後點擊任意聊天室
+        2. 點擊右上角設定
+        3. 點擊群組成員列表
     validations:
       required: true
 
   - type: textarea
     id: behavior_diff
     attributes:
-      label: 4. Expected vs Actual Behavior (預期與實際行為)
-      description: What did you expect to happen, and what actually happened? (optional)
-      placeholder: e.g., Expected to see the member list, but the app froze and showed an undefined error in console.
+      label: 3. 預期與實際行為 (Expected vs Actual Behavior)
+      description: 正常狀況下應該發生什麼？實際卻發生了什麼？（選填）
+      placeholder: 預期應顯示成員清單，但實際卻卡死並在 Console 顯示 undefined 錯誤。
     validations:
       required: false
 
   - type: textarea
     id: environment_logs
     attributes:
-      label: 5. Environment & Logs (測試環境與錯誤日誌)
-      description: OS, browser version, or Docker container logs (optional).
-      placeholder: e.g., macOS Chrome 126, backend Docker logs: "Connection pool exhausted..."
+      label: 4. 測試環境與錯誤 Log (Environment & Logs)
+      description: 作業系統、瀏覽器版本，或前端/後端 Docker 錯誤 Log（選填）。
+      placeholder: 'macOS Chrome 126, Docker log: "Connection pool exhausted..."'
     validations:
       required: false
 
   - type: checkboxes
     id: checks
     attributes:
-      label: 6. Checks (確認事項)
+      label: 5. 確認事項 (Checks)
       options:
-        - label: I confirm this issue exists on the latest main branch.
-          required: true
-        - label: I have provided reproduction steps and sufficient log/error details.
+        - label: 我確認此問題在最新版的 `dev` 分支上依然存在。
           required: true

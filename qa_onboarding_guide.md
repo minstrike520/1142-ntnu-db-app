@@ -12,7 +12,7 @@
    - 封鎖使用者功能、檔案與圖片傳輸
 2. **架構概念**：
    - **Frontend (前端)**：使用 Next.js，負責畫面與使用者互動。
-   - **Backend (後端)**：使用 Bun (Hono) + Socket.io，處理 API 請求與即時通訊。
+   - **Backend (後端)**：使用 Node.js (Express) + Socket.io，處理 API 請求與即時通訊。
    - **Database (資料庫)**：PostgreSQL。
 3. **系統環境需求**：
    - 電腦需安裝並執行 **Docker** 以及 **Docker Compose**。

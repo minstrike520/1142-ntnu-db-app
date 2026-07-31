@@ -3,15 +3,8 @@ import { describe, it, expect, afterEach } from 'bun:test';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import sharp from 'sharp';
 import { ValidationError } from '../../../src/utils/AppError';
-import {
-  AVATAR_UPLOAD_MAX_BYTES,
-  assertValidAvatarUpload,
-  avatarContentType,
-  removeManagedAvatar,
-  saveAvatarUpload,
-} from '../../../src/utils/avatarUpload';
+import { assertValidAvatarUpload, removeManagedAvatar , avatarContentType } from '../../../src/utils/avatarUpload';
 import { AVATARS_UPLOAD_DIR, ensureUploadDirectories } from '../../../src/utils/uploads';
 
 const makeFile = (mimetype: string, bytes: number[]): UploadedFile =>
@@ -43,82 +36,6 @@ describe('avatarUpload helpers', () => {
     expect(() =>
       assertValidAvatarUpload(makeFile('image/png', [0xff, 0xd8, 0xff, 0xe0])),
     ).toThrow(ValidationError);
-  });
-});
-
-describe('saveAvatarUpload', () => {
-  const createdFiles: string[] = [];
-
-  afterEach(async () => {
-    while (createdFiles.length > 0) {
-      const file = createdFiles.pop()!;
-      await fs.rm(file, { force: true });
-    }
-  });
-
-  const makeUploadFile = (buffer: Buffer, mimetype: string): UploadedFile =>
-    ({
-      fieldname: 'file',
-      originalname: 'avatar',
-      encoding: '7bit',
-      mimetype,
-      size: buffer.length,
-      buffer,
-    }) as UploadedFile;
-
-  it('always re-encodes the stored avatar to a 256x256 WebP file', async () => {
-    ensureUploadDirectories();
-    const pngBuffer = await sharp({
-      create: { width: 800, height: 400, channels: 3, background: { r: 5, g: 100, b: 200 } },
-    })
-      .png()
-      .toBuffer();
-
-    const avatarUrl = await saveAvatarUpload('user-webp', makeUploadFile(pngBuffer, 'image/png'));
-    const fullPath = path.join(AVATARS_UPLOAD_DIR, path.basename(avatarUrl));
-    createdFiles.push(fullPath);
-
-    expect(avatarUrl.endsWith('.webp')).toBe(true);
-
-    const stored = await fs.readFile(fullPath);
-    expect(stored.subarray(0, 4).toString('ascii')).toBe('RIFF');
-    expect(stored.subarray(8, 12).toString('ascii')).toBe('WEBP');
-
-    const metadata = await sharp(stored).metadata();
-    expect(metadata.width).toBe(256);
-    expect(metadata.height).toBe(256);
-  });
-
-  it('rejects avatars that fail content validation before any compression happens', async () => {
-    await expect(
-      saveAvatarUpload('user-invalid', makeUploadFile(Buffer.from([0xff, 0xd8, 0xff]), 'image/png')),
-    ).rejects.toThrow(ValidationError);
-  });
-
-  it('rejects a pixel bomb that slips under the byte-size limit', async () => {
-    // 9000x9000 (~81 MP) solid PNG compresses to a few hundred KB, so it
-    // passes the 2 MB avatar byte limit; only the decode-time pixel cap
-    // stops it. Avatars must be decoded to be stored, so this is a 400.
-    const bomb = await sharp({
-      create: { width: 9000, height: 9000, channels: 3, background: { r: 255, g: 255, b: 255 } },
-    })
-      .png({ compressionLevel: 9 })
-      .toBuffer();
-
-    expect(bomb.length).toBeLessThan(AVATAR_UPLOAD_MAX_BYTES);
-    await expect(
-      saveAvatarUpload('user-bomb', makeUploadFile(bomb, 'image/png')),
-    ).rejects.toThrow(ValidationError);
-  });
-
-  it('surfaces a truncated-but-valid-signature image as a ValidationError, not a raw sharp failure', async () => {
-    // Passes the magic-byte check (real PNG signature) but has no image body,
-    // so sharp cannot decode it. Must map to a 400-style ValidationError.
-    const truncatedPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-
-    await expect(
-      saveAvatarUpload('user-truncated', makeUploadFile(truncatedPng, 'image/png')),
-    ).rejects.toThrow(ValidationError);
   });
 });
 

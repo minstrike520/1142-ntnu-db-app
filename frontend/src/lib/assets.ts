@@ -5,23 +5,18 @@ export const resolveAssetUrl = (value?: string): string | undefined => {
     return undefined;
   }
 
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
+  if (
+    value.startsWith("http://") ||
+    value.startsWith("https://") ||
+    value.startsWith("blob:") ||
+    value.startsWith("data:")
+  ) {
+    return value;
   }
 
-  try {
-    if (trimmed.startsWith("/")) {
-      return new URL(trimmed, getApiBaseUrl()).toString();
-    }
-
-    const parsed = new URL(trimmed);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "blob:") {
-      return parsed.toString();
-    }
-  } catch {
-    return undefined;
+  if (value.startsWith("/")) {
+    return `${getApiBaseUrl()}${value}`;
   }
 
-  return undefined;
+  return value;
 };

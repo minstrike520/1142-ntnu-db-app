@@ -219,9 +219,7 @@ describe('GET /rooms/invite/:code', () => {
   });
 
   it('surfaces an unknown invite code as 404 through the error handler', async () => {
-    service.previewByCode = mock(async () => {
-      throw new NotFoundError('room', 'BOGUS');
-    });
+    service.previewByCode = mock().mockRejectedValue(new NotFoundError('room', 'BOGUS'));
 
     const res = await previewInvite('BOGUS');
 

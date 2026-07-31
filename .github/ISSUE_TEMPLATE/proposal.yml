@@ -1,0 +1,49 @@
+name: Suggestion & Refactor (提案與技術修改)
+description: 提出新功能想法、代碼重構、技術優化或維護提案 (Propose a feature, refactoring, or improvement)
+title: "[Proposal] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        有什麼新點子或技術改進方案嗎？請填寫以下資訊協助評估！
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 1. 提案分類 (Category)
+      options:
+        - 新功能 (New Feature)
+        - 技術修改 / 重構 (Technical Modification / Refactoring)
+        - 效能與安全性優化 (Performance / Security Optimization)
+        - 其他 (Other)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 2. 提案內容與動機 (Description & Motivation)
+      description: 描述你的點子，以及為什麼需要這個改進。
+      placeholder: 例如：為了防範 SQL injection，提議將所有殘留的拼接 SQL 改為參數化查詢，並建立專用的 DB helper...
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: 3. 建議實作方式 (Proposed Implementation)
+      description: 概略說明具體要修改哪些部分或模組（選填）。
+      placeholder: 例如：在 backend/src/db/ 建立封裝函數，並逐步替換 roomRepository 裡的 raw query...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 4. 確認事項 (Checks)
+      options:
+        - label: 我已確認這是一個優化提案，而不是程式錯誤 (Bug)。
+          required: true
+        - label: 我已搜尋過現有的 Issues，確認沒有重複的類似提案。
+          required: true

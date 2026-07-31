@@ -1,40 +1,27 @@
 name: Documentation (文件編修)
-description: Report documentation issues or suggest improvements
+description: 提報文件錯誤、遺漏或需要新增/修改的內容 (Report documentation issues or suggest improvements)
 title: "[Docs] "
 labels: ["documentation"]
 body:
   - type: markdown
     attributes:
       value: |
-        Help us improve our documentation by filling out the details below.
-
-  - type: dropdown
-    id: doc_type
-    attributes:
-      label: 1. Document Type (文件類別)
-      options:
-        - API Documentation
-        - Database Design / Schema
-        - Development / Setup Guide
-        - README / General Docs
-        - Other
-    validations:
-      required: true
+        協助改善專案文件，請填寫以下簡單資訊。
 
   - type: textarea
     id: doc_location
     attributes:
-      label: 2. Location & Description (相關文件與問題描述)
-      description: Specify the document, section, and describe the issue or missing content.
-      placeholder: e.g., In docs/api-documentation.md, the /api/rooms routing example has a typo in field names.
+      label: 1. 相關文件與問題描述 (Location & Description)
+      description: 指明是哪份文件、哪個章節，以及需要修正的地方。
+      placeholder: 例如 docs/api-documentation.md 中的 /api/rooms 路由範例，欄位名稱寫錯了。
     validations:
       required: true
 
   - type: textarea
     id: proposed_change
     attributes:
-      label: 3. Proposed Changes (建議修改內容)
-      description: Detail how this document should be updated or provide the suggested text (optional).
-      placeholder: e.g., Update the room type description to "group" | "private".
+      label: 2. 建議修改內容 (Proposed Changes)
+      description: 具體要怎麼修改，或你建議的寫法（選填）。
+      placeholder: 將 type 欄位說明改為 "group" | "private"
     validations:
       required: false
