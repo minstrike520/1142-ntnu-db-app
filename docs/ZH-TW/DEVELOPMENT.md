@@ -95,19 +95,19 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 首次設定專案時，您必須初始化資料庫 Schema。請確認 Docker 容器已正常啟動，然後套用遷移：
 
 ```bash
-docker compose exec backend bun run migrate:up
+docker compose exec backend pnpm run migrate:up
 ```
 
 將測試用的種子資料寫入資料庫：
 ```bash
-docker compose exec backend bun run db:seed
+docker compose exec backend pnpm run db:seed
 ```
 
 ### 常見指令
-- **建立新的遷移檔**：`docker compose exec backend bun run migrate:create <name>`
-- **執行資料庫遷移**：`docker compose exec backend bun run migrate:up`
-- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`
-- **寫入種子資料**：`docker compose exec backend bun run db:seed`
+- **建立新的遷移檔**：`docker compose exec backend pnpm run migrate:create <name>`
+- **執行資料庫遷移**：`docker compose exec backend pnpm run migrate:up`
+- **回滾資料庫遷移**：`docker compose exec backend pnpm run migrate:down`
+- **寫入種子資料**：`docker compose exec backend pnpm run db:seed`
 
 ### 修復損壞的開發資料庫
 如果遷移過程中遇到 `relation ... already exists` 錯誤，或者遷移狀態發生混亂：
@@ -120,7 +120,7 @@ docker compose down -v
 docker compose up -d
 
 # 3. 等待資料庫就緒後，再次執行遷移
-docker compose exec backend bun run migrate:up
+docker compose exec backend pnpm run migrate:up
 ```
 
 ---
@@ -220,7 +220,7 @@ docker compose exec frontend pnpm run lint
 ### 執行單元測試
 單元測試不需要資料庫連線。
 ```bash
-docker compose exec backend bun run test:unit
+docker compose exec backend pnpm run test:unit
 ```
 
 ### 執行整合測試
@@ -231,7 +231,7 @@ docker compose exec backend bun run test:unit
 pnpm --filter near-chat-backend test:db:up
 
 # 2. 執行整合測試套件
-docker compose exec backend bun run test:integration
+docker compose exec backend pnpm run test:integration
 
 # 3. 關閉測試資料庫
 pnpm --filter near-chat-backend test:db:down
@@ -240,7 +240,7 @@ pnpm --filter near-chat-backend test:db:down
 ### 執行所有測試
 ```bash
 pnpm --filter near-chat-backend test:db:up
-docker compose exec backend bun run test
+docker compose exec backend pnpm run test
 pnpm --filter near-chat-backend test:db:down
 ```
 
@@ -322,7 +322,7 @@ describe('userRepository', () => {
 * **`db-test` 連線掛起或逾時**：請確認 `db-test` 正在運行，指令為：`docker compose -f docker-compose.test.yml ps`。如果沒啟動請將它啟動。
 * **`TRUNCATE` 失敗**：請確認已透過以下指令在測試資料庫中套用了遷移：
   ```bash
-  docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
+  docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
   ```
 
 ---

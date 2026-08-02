@@ -101,19 +101,19 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 When setting up the project for the first time, you must initialize the database schema. Ensure your Docker containers are running, then apply the migrations:
 
 ```bash
-docker compose exec backend bun run migrate:up
+docker compose exec backend pnpm run migrate:up
 ```
 
 To seed the database with mock data:
 ```bash
-docker compose exec backend bun run db:seed
+docker compose exec backend pnpm run db:seed
 ```
 
 ### Common Commands
-- **Create a new migration**: `docker compose exec backend bun run migrate:create <name>`
-- **Run migrations**: `docker compose exec backend bun run migrate:up`
-- **Rollback migrations**: `docker compose exec backend bun run migrate:down`
-- **Seed database**: `docker compose exec backend bun run db:seed`
+- **Create a new migration**: `docker compose exec backend pnpm run migrate:create <name>`
+- **Run migrations**: `docker compose exec backend pnpm run migrate:up`
+- **Rollback migrations**: `docker compose exec backend pnpm run migrate:down`
+- **Seed database**: `docker compose exec backend pnpm run db:seed`
 
 ### Repairing a Broken Dev Database
 If you encounter `relation ... already exists` errors during migration, or migration state goes out of sync:
@@ -126,7 +126,7 @@ docker compose down -v
 docker compose up -d
 
 # 3. Wait for the database to be ready, then run migrations again
-docker compose exec backend bun run migrate:up
+docker compose exec backend pnpm run migrate:up
 ```
 
 ---
@@ -231,7 +231,7 @@ docker compose exec frontend pnpm run lint
 ### Running Unit Tests
 Unit tests do not require a database connection.
 ```bash
-docker compose exec backend bun run test:unit
+docker compose exec backend pnpm run test:unit
 ```
 
 ### Running Integration Tests
@@ -242,7 +242,7 @@ Integration tests require starting the ephemeral test database (which automatica
 pnpm --filter near-chat-backend test:db:up
 
 # 2. Run the integration test suite
-docker compose exec backend bun run test:integration
+docker compose exec backend pnpm run test:integration
 
 # 3. Stop the test database
 pnpm --filter near-chat-backend test:db:down
@@ -251,7 +251,7 @@ pnpm --filter near-chat-backend test:db:down
 ### Running All Tests
 ```bash
 pnpm --filter near-chat-backend test:db:up
-docker compose exec backend bun run test
+docker compose exec backend pnpm run test
 pnpm --filter near-chat-backend test:db:down
 ```
 
@@ -339,7 +339,7 @@ describe('userRepository', () => {
 * **`db-test` connection hangs/timeouts**: Ensure `db-test` is running using `docker compose -f docker-compose.test.yml ps`. Spin it up if down.
 * **`TRUNCATE` failures**: Make sure migrations were applied to the test DB using:
   ```bash
-  docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
+  docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend pnpm run migrate:up
   ```
 
 ---
