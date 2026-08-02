@@ -4,7 +4,7 @@
 <!-- Generated: 2026-06-14 | Updated: 2026-06-14 -->
 
 ## Purpose
-This directory contains the Next.js 16 + React 19 client web application. It includes user authentication flows, chat rooms, settings panels, and Socket.IO real-time clients.
+This directory contains the Next.js 16 + React 19 client web application. It includes user authentication flows, chat rooms, settings panels, and a native WebSocket realtime client.
 
 ## Key Files
 
@@ -12,7 +12,7 @@ This directory contains the Next.js 16 + React 19 client web application. It inc
 |------|-------------|
 | [src/context/ChatContext.tsx](src/context/ChatContext.tsx) | Centralized React Context: Manages connection states, token storage, active chat rooms, messages feed, unread status counts, folders, and typing statuses |
 | [src/lib/api.ts](src/lib/api.ts) | HTTP REST API client wrappers. Converts responses into typed models matching `shared/types.ts` |
-| [src/lib/socket.ts](src/lib/socket.ts) | Socket.IO Client Wrapper: Sets up callbacks for incoming websocket message updates, typing indicators, and read receipts |
+| [src/lib/socket.ts](src/lib/socket.ts) | Native WebSocket client: ticket upgrade, runtime validation, reliable-command retry, delta recovery, and typed event callbacks |
 | [src/app/globals.css](src/app/globals.css) | Global stylesheet utilizing Tailwind CSS v4 design tokens and layouts |
 
 ## Subdirectories

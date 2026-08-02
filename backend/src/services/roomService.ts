@@ -1,7 +1,6 @@
 import type { UploadedFile } from '../utils/fileUpload';
 import type { Room, RoomInvitePreview, RoomSummary } from '@shared/types';
 import { randomBytes } from 'crypto';
-import { isUserOnline } from '../realtime/presence';
 import { removeManagedAvatar, saveAvatarUpload } from '../utils/avatarUpload';
 import type { IRoomRepository } from '../models/IRoomRepository';
 import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
@@ -20,17 +19,20 @@ const validationMessage = (issues: { message: string }[]) =>
 
 const generateInviteCode = () => randomBytes(6).toString('base64url').slice(0, 8).toUpperCase();
 
+export interface RoomRealtimeNotifier {
+  roomUpdated(roomId: string, change: string, data: unknown): void;
+  messageCreated(roomId: string, message: unknown): void;
+  userRoomUpdated(userId: string, roomId: string, change: string, data: unknown): void;
+}
+
 export const makeRoomService = (
   repo: IRoomRepository,
   roomMemberRepo: IRoomMemberRepository,
-  emitRoomEvent?: (roomId: string, eventName: string, payload: unknown) => void,
+  realtime?: RoomRealtimeNotifier,
   socialRepo?: { isBlocked(userA: string, userB: string): Promise<boolean>; areFriends(userA: string, userB: string): Promise<boolean> },
   userRepo?: IUserRepository,
   messageRepo?: IMessageRepository,
-  // Emits an event directly to a specific user's personal socket room (user_${userId}).
-  // Used to notify users of events they cannot receive via room broadcast (e.g., being
-  // approved into a group they haven't joined yet).
-  emitToUser?: (userId: string, eventName: string, payload: unknown) => void,
+  isOnline: (userId: string) => boolean = () => false,
 ) => {
   const ensureMember = async (roomId: string, userId: string) => {
     const existing = await roomMemberRepo.findMember(roomId, userId);
@@ -71,7 +73,7 @@ export const makeRoomService = (
         if (room.type === 'private' && room.otherMemberId) {
           return {
             ...room,
-            isOnline: isUserOnline(room.otherMemberId),
+            isOnline: isOnline(room.otherMemberId),
           };
         }
         return room;
@@ -98,10 +100,8 @@ export const makeRoomService = (
       if (existing) {
         if (existing.isReadonly) {
           const room = await repo.update(existing.roomId, { isReadonly: false });
-          if (emitToUser) {
-            emitToUser(creatorId, 'room_update', { type: 'ROOM_JOINED', roomId: existing.roomId, data: {} });
-            emitToUser(targetUserId, 'room_update', { type: 'ROOM_JOINED', roomId: existing.roomId, data: {} });
-          }
+          realtime?.userRoomUpdated(creatorId, existing.roomId, 'ROOM_JOINED', {});
+          realtime?.userRoomUpdated(targetUserId, existing.roomId, 'ROOM_JOINED', {});
           return { room, created: false };
         }
         return { room: existing, created: false };
@@ -115,10 +115,8 @@ export const makeRoomService = (
       });
       await ensureMember(room.roomId, creatorId);
       await ensureMember(room.roomId, targetUserId);
-      if (emitToUser) {
-        emitToUser(creatorId, 'room_update', { type: 'ROOM_JOINED', roomId: room.roomId, data: {} });
-        emitToUser(targetUserId, 'room_update', { type: 'ROOM_JOINED', roomId: room.roomId, data: {} });
-      }
+      realtime?.userRoomUpdated(creatorId, room.roomId, 'ROOM_JOINED', {});
+      realtime?.userRoomUpdated(targetUserId, room.roomId, 'ROOM_JOINED', {});
       return { room, created: true };
     },
 
@@ -133,10 +131,8 @@ export const makeRoomService = (
       const existing = await repo.findPrivateRoomByMembers(userA, userB);
       if (existing && existing.isReadonly) {
         await repo.update(existing.roomId, { isReadonly: false });
-        if (emitToUser) {
-          emitToUser(userA, 'room_update', { type: 'ROOM_JOINED', roomId: existing.roomId, data: {} });
-          emitToUser(userB, 'room_update', { type: 'ROOM_JOINED', roomId: existing.roomId, data: {} });
-        }
+        realtime?.userRoomUpdated(userA, existing.roomId, 'ROOM_JOINED', {});
+        realtime?.userRoomUpdated(userB, existing.roomId, 'ROOM_JOINED', {});
       }
     },
 
@@ -163,9 +159,7 @@ export const makeRoomService = (
         throw new ForbiddenError('Only owner or admin can update room settings');
       }
       const updated = await repo.update(roomId, parsed.data);
-      if (emitRoomEvent) {
-        emitRoomEvent(roomId, 'room_update', { type: 'ROOM_SETTINGS_UPDATED', data: updated });
-      }
+      realtime?.roomUpdated(roomId, 'ROOM_SETTINGS_UPDATED', updated);
       return updated;
     },
 
@@ -203,14 +197,10 @@ export const makeRoomService = (
 
       if (role === 'member') {
         // Notify existing room members that someone new joined.
-        if (emitRoomEvent) {
-          emitRoomEvent(room.roomId, 'room_update', { type: 'MEMBER_JOINED', data: { userId } });
-        }
+        realtime?.roomUpdated(room.roomId, 'MEMBER_JOINED', { userId });
         // Notify the joining user directly so their room list refreshes immediately.
         // They are not yet in the socket room, so the room broadcast above won't reach them.
-        if (emitToUser) {
-          emitToUser(userId, 'room_update', { type: 'ROOM_JOINED', roomId: room.roomId, data: {} });
-        }
+        realtime?.userRoomUpdated(userId, room.roomId, 'ROOM_JOINED', {});
         if (userRepo && messageRepo) {
           const user = await userRepo.findById(userId);
           if (user) {
@@ -219,9 +209,7 @@ export const makeRoomService = (
               senderId: null,
               content: `[System] ${user.name}已加入`,
             });
-            if (emitRoomEvent) {
-              emitRoomEvent(room.roomId, 'new_message', sysMsg);
-            }
+            realtime?.messageCreated(room.roomId, sysMsg);
           }
         }
       }
@@ -239,9 +227,7 @@ export const makeRoomService = (
       }
       await roomMemberRepo.remove(roomId, userId);
 
-      if (emitRoomEvent) {
-        emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_LEFT', data: { userId } });
-      }
+      realtime?.roomUpdated(roomId, 'MEMBER_LEFT', { userId });
 
       if (userRepo && messageRepo) {
         const user = await userRepo.findById(userId);
@@ -251,9 +237,7 @@ export const makeRoomService = (
             senderId: null,
             content: `[System] ${user.name}已離開`,
           });
-          if (emitRoomEvent) {
-            emitRoomEvent(roomId, 'new_message', sysMsg);
-          }
+          realtime?.messageCreated(roomId, sysMsg);
         }
       }
     },
@@ -277,9 +261,7 @@ export const makeRoomService = (
       await roomMemberRepo.update(roomId, callerId, { role: 'admin' });
       await roomMemberRepo.update(roomId, targetUserId, { role: 'owner' });
 
-      if (emitRoomEvent) {
-        emitRoomEvent(roomId, 'room_update', { type: 'OWNERSHIP_TRANSFERRED', data: { oldOwner: callerId, newOwner: targetUserId } });
-      }
+      realtime?.roomUpdated(roomId, 'OWNERSHIP_TRANSFERRED', { oldOwner: callerId, newOwner: targetUserId });
     },
 
     async deleteGroup(roomId: string, callerId: string): Promise<void> {
@@ -293,9 +275,7 @@ export const makeRoomService = (
       }
 
       await repo.delete(roomId);
-      if (emitRoomEvent) {
-        emitRoomEvent(roomId, 'room_update', { type: 'ROOM_DELETED', data: { roomId } });
-      }
+      realtime?.roomUpdated(roomId, 'ROOM_DELETED', { roomId });
     },
 
     async approveMember(roomId: string, callerId: string, targetUserId: string): Promise<void> {
@@ -311,14 +291,10 @@ export const makeRoomService = (
       if (target.role !== 'pending') throw new ValidationError('Member is not pending approval');
 
       await roomMemberRepo.update(roomId, targetUserId, { role: 'member' });
-      if (emitRoomEvent) {
-        emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_APPROVED', data: { userId: targetUserId } });
-      }
+      realtime?.roomUpdated(roomId, 'MEMBER_APPROVED', { userId: targetUserId });
       // Notify the approved user directly — they are not yet subscribed to the
       // room's socket channel, so the room broadcast above won't reach them.
-      if (emitToUser) {
-        emitToUser(targetUserId, 'room_update', { type: 'ROOM_JOINED', roomId, data: {} });
-      }
+      realtime?.userRoomUpdated(targetUserId, roomId, 'ROOM_JOINED', {});
 
       if (userRepo && messageRepo) {
         const user = await userRepo.findById(targetUserId);
@@ -328,9 +304,7 @@ export const makeRoomService = (
             senderId: null,
             content: `[System] ${user.name}已加入`,
           });
-          if (emitRoomEvent) {
-            emitRoomEvent(roomId, 'new_message', sysMsg);
-          }
+          realtime?.messageCreated(roomId, sysMsg);
         }
       }
     },
@@ -361,9 +335,7 @@ export const makeRoomService = (
       }
 
       await roomMemberRepo.update(roomId, targetUserId, data as Parameters<typeof roomMemberRepo.update>[2]);
-      if (emitRoomEvent) {
-        emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_UPDATED', data: { userId: targetUserId, ...data as Record<string, unknown> } });
-      }
+      realtime?.roomUpdated(roomId, 'MEMBER_UPDATED', { userId: targetUserId, ...data as Record<string, unknown> });
     },
 
     async kickMember(roomId: string, callerId: string, targetUserId: string): Promise<void> {
@@ -386,9 +358,7 @@ export const makeRoomService = (
       }
 
       await roomMemberRepo.remove(roomId, targetUserId);
-      if (emitRoomEvent) {
-        emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_KICKED', data: { userId: targetUserId } });
-      }
+      realtime?.roomUpdated(roomId, 'MEMBER_KICKED', { userId: targetUserId });
 
       if (userRepo && messageRepo) {
         const user = await userRepo.findById(targetUserId);
@@ -398,9 +368,7 @@ export const makeRoomService = (
             senderId: null,
             content: `[System] ${user.name}已被移出群組`,
           });
-          if (emitRoomEvent) {
-            emitRoomEvent(roomId, 'new_message', sysMsg);
-          }
+          realtime?.messageCreated(roomId, sysMsg);
         }
       }
     },
@@ -422,9 +390,7 @@ export const makeRoomService = (
         if (room.avatarUrl && room.avatarUrl !== avatarUrl) {
           await removeManagedAvatar(room.avatarUrl);
         }
-        if (emitRoomEvent) {
-          emitRoomEvent(roomId, 'room_update', { type: 'ROOM_AVATAR_UPDATED', data: { roomId, avatarUrl } });
-        }
+        realtime?.roomUpdated(roomId, 'ROOM_AVATAR_UPDATED', { roomId, avatarUrl });
         return updated;
       } catch (error) {
         await removeManagedAvatar(avatarUrl);

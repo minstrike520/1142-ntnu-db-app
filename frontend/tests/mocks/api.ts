@@ -50,6 +50,14 @@ export const __resetApiMock = (): void => {
 };
 
 export const getApiBaseUrl = (): string => "http://mock-api.test";
+export const issueRealtimeTicket = async () => ({
+  ticket: 'test-ticket',
+  expiresAt: new Date(Date.now() + 30_000).toISOString(),
+  leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+  protocol: 'near-chat.v1' as const,
+  version: 1 as const,
+});
+export const listDurableEmergencyNotifications = async () => [];
 
 export const getActiveAccessToken = (): string | null => activeAccessToken;
 export const setActiveAccessToken = (token: string | null): void => {

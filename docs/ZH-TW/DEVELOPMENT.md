@@ -74,7 +74,7 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 | 服務 | 主機網址 / 連接埠 | 容器內部連接埠 | 說明 |
 |---|------------------|----------------|-------------|
 | **前端** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js 前端網頁應用程式 |
-| **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API 與 Socket.IO 伺服器 |
+| **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API 與原生 WebSocket 伺服器（`/ws`） |
 | **資料庫** | `localhost:5435` | 5432 | PostgreSQL 18 實例 |
 
 對於瀏覽器端的前端請求，請將 API 環境變數設定為：

@@ -3,7 +3,7 @@
  *
  * Mounts the real (main) layout — ChatProvider, Sidebar, MobileNav — plus the
  * real chat route content, on top of the fixture-backed API mock, the fake
- * socket, and the controllable next/navigation mock. An app-level <Profiler>
+ * native WebSocket, and the controllable next/navigation mock. An app-level <Profiler>
  * counts commits and total render duration; the instrumented ChatBubble /
  * Chatroom / Sidebar wrappers count subtree renders.
  */
@@ -14,7 +14,7 @@ import ChatroomPageContent from "@/components/pages/ChatroomPageContent";
 import { getRenderStats, recordRender, resetRenderStats, type RenderStats } from "./instrumented/counters";
 import { __resetApiMock } from "./mocks/api";
 import { __resetNavigation, __setPathname, usePathname } from "./mocks/next-navigation";
-import { __getSocket, __resetSocket, type MockSocket } from "./mocks/socket-io-client";
+import { __getWebSocket, __resetWebSocket, type MockNativeWebSocket } from "./mocks/native-websocket";
 
 const onAppRender: React.ProfilerOnRenderCallback = (_id, _phase, actualDuration) => {
   recordRender("app", actualDuration);
@@ -51,7 +51,7 @@ export interface Measurement {
 
 export interface Harness {
   view: RenderResult;
-  socket: () => MockSocket;
+  socket: () => MockNativeWebSocket;
   /** Reset all counters — call right before driving a scenario. */
   startMeasure: () => void;
   /** Wait until no commit happens for `quietMs`, then return. */
@@ -68,7 +68,7 @@ export async function mountChatApp(
   options: { probe?: React.ReactNode } = {},
 ): Promise<Harness> {
   __resetApiMock();
-  __resetSocket();
+  __resetWebSocket();
   __resetNavigation(initialPath);
   resetRenderStats();
 
@@ -101,7 +101,7 @@ export async function mountChatApp(
 
   return {
     view,
-    socket: () => __getSocket(),
+    socket: () => __getWebSocket(),
     startMeasure: resetRenderStats,
     settle,
     measure: (scenario: string): Measurement => {

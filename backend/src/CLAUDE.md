@@ -15,7 +15,7 @@ This directory contains the TypeScript source code for the backend service built
 | [models/](models/) | **Data Access Layer** | Executes raw SQL statements, and holds the shared `pg.Pool` in `db.ts`. Repositories must conform to corresponding interfaces (e.g., `IRoomRepository.ts`) to allow mock testing. |
 | [utils/](utils/) | **Shared Utilities** | Cross-cutting helpers: `AppError.ts` / `mapError.ts`, JWT and cookie handling, upload path resolution, and the `inactivityJob.ts` emergency-alert scheduler. |
 | [middlewares/](middlewares/) | **Middlewares** | Intercepts HTTP requests (JWT validation in `authMiddleware.ts`, security headers, global exception catching in `errorHandler.ts`). |
-| [realtime/](realtime/) | **WebSocket layer** | Handles Socket.IO connection handshakes, JWT authorization via Socket middlewares, and registers listeners for instant messages, typing indicators, and read receipts. |
+| [realtime/](realtime/) | **WebSocket layer** | Handles ticket-authenticated Bun WebSocket upgrades, connection lifecycle, typed routing, command ACK/NACK, limits, and graceful drain. |
 
 ## AI Agent Guidelines
 
@@ -23,9 +23,9 @@ This directory contains the TypeScript source code for the backend service built
 - Repositories utilize interface declarations (e.g., `IMessageRepository`) which are instantiated in the composition root [index.ts](index.ts).
 - This structure enables unit tests to inject mocked repositories via Bun test, checking services in isolation. Always write unit tests by mocking interfaces.
 
-### 2. JWT & Socket Authorization
-- The Socket.IO server authenticates client connections via the token passed during handshake.
-- Once verified, the user data is attached to `socket.user`. Inside websocket event handlers, you must retrieve the current user's ID using `socket.user.userId`.
+### 2. JWT & WebSocket Authorization
+- REST authentication issues a short-lived, single-use WebSocket ticket; the upgrade consumes it and stores only connection metadata in the realtime manager.
+- Room subscriptions are always synchronized from authoritative database membership. Membership revocation must immediately remove the transient subscription.
 
 ### 3. Zod Request Validations
 - Every Hono route handler receiving HTTP request payloads must validate using `validate()` / `zValidator`:

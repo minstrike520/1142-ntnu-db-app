@@ -11,18 +11,19 @@ mock.module('../../../src/utils/avatarUpload', () => ({
   removeManagedAvatar: mock(),
 }));
 
-mock.module('../../../src/realtime/presence', () => ({
-  isUserOnline: mock().mockReturnValue(false),
-}));
-
 afterAll(() => {
-  mock.module('../../../src/realtime/presence', () => require('../../../src/realtime/presence?original'));
   mock.module('../../../src/utils/avatarUpload', () => require('../../../src/utils/avatarUpload?original'));
 });
 
 type Mocked<T> = {
   [P in keyof T]: T[P] extends Function ? Mock<any> : T[P];
 };
+
+const makeRealtimeNotifier = () => ({
+  roomUpdated: mock(),
+  messageCreated: mock(),
+  userRoomUpdated: mock(),
+});
 
 describe('roomService', () => {
   let mockRepo: Mocked<IRoomRepository>;
@@ -337,7 +338,7 @@ describe('roomService', () => {
   describe('system messages on join/approve', () => {
     let mockUserRepo: any;
     let mockMessageRepo: any;
-    let mockEmit: any;
+    let realtime: ReturnType<typeof makeRealtimeNotifier>;
 
     beforeEach(() => {
       mockUserRepo = {
@@ -346,14 +347,14 @@ describe('roomService', () => {
       mockMessageRepo = {
         create: mock().mockResolvedValue({ messageId: 'msg-sys', content: '[System] Bob已加入' }),
       };
-      mockEmit = mock();
+      realtime = makeRealtimeNotifier();
     });
 
     it('creates system message on direct joinByCode', async () => {
       const service = makeRoomService(
         mockRepo,
         mockMemberRepo,
-        mockEmit,
+        realtime,
         undefined,
         mockUserRepo,
         mockMessageRepo,
@@ -370,14 +371,14 @@ describe('roomService', () => {
         senderId: null,
         content: '[System] Bob已加入',
       });
-      expect(mockEmit).toHaveBeenCalledWith('room-1', 'new_message', { messageId: 'msg-sys', content: '[System] Bob已加入' });
+      expect(realtime.messageCreated).toHaveBeenCalledWith('room-1', { messageId: 'msg-sys', content: '[System] Bob已加入' });
     });
 
     it('creates system message on approveMember', async () => {
       const service = makeRoomService(
         mockRepo,
         mockMemberRepo,
-        mockEmit,
+        realtime,
         undefined,
         mockUserRepo,
         mockMessageRepo,
@@ -401,7 +402,7 @@ describe('roomService', () => {
         senderId: null,
         content: '[System] Bob已加入',
       });
-      expect(mockEmit).toHaveBeenCalledWith('room-1', 'new_message', { messageId: 'msg-sys', content: '[System] Bob已加入' });
+      expect(realtime.messageCreated).toHaveBeenCalledWith('room-1', { messageId: 'msg-sys', content: '[System] Bob已加入' });
     });
   });
 
@@ -500,6 +501,24 @@ describe('roomService', () => {
       expect(typeof (result[0] as any).isOnline).toBe('boolean');
     });
 
+    it('uses the injected realtime presence lookup for private rooms', async () => {
+      const privateRoom = { ...room, type: 'private' as const, otherMemberId: 'user-2' };
+      mockRepo.findByMember.mockResolvedValue([privateRoom]);
+      const isOnline = mock((userId: string) => userId === 'user-2');
+      const service = makeRoomService(
+        mockRepo,
+        mockMemberRepo,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        isOnline,
+      );
+
+      expect((await service.list('user-1'))[0]).toMatchObject({ isOnline: true });
+      expect(isOnline).toHaveBeenCalledWith('user-2');
+    });
+
     it('returns group rooms without isOnline property', async () => {
       mockRepo.findByMember.mockResolvedValue([room] as any);
       const result = await roomService.list('user-1');
@@ -567,10 +586,10 @@ describe('roomService', () => {
     });
   });
 
-  describe('update with emitRoomEvent', () => {
-    it('emits ROOM_SETTINGS_UPDATED when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = mock();
-      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
+  describe('update with realtime notifier', () => {
+    it('publishes ROOM_SETTINGS_UPDATED when a notifier is provided', async () => {
+      const realtime = makeRealtimeNotifier();
+      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, realtime);
       const updated = { ...room, name: 'New Name' };
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue(ownerMember);
@@ -578,34 +597,34 @@ describe('roomService', () => {
 
       await serviceWithEmit.update('room-1', 'user-1', { name: 'New Name' });
 
-      expect(emitRoomEvent).toHaveBeenCalledWith('room-1', 'room_update', { type: 'ROOM_SETTINGS_UPDATED', data: updated });
+      expect(realtime.roomUpdated).toHaveBeenCalledWith('room-1', 'ROOM_SETTINGS_UPDATED', updated);
     });
   });
 
-  describe('leave with emitRoomEvent and system message', () => {
-    it('emits MEMBER_LEFT when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = mock();
-      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
+  describe('leave with realtime notifier and system message', () => {
+    it('publishes MEMBER_LEFT when a notifier is provided', async () => {
+      const realtime = makeRealtimeNotifier();
+      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, realtime);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue({ ...ownerMember, role: 'member' } as RoomMember);
 
       await serviceWithEmit.leave('user-2', 'room-1');
 
-      expect(emitRoomEvent).toHaveBeenCalledWith('room-1', 'room_update', { type: 'MEMBER_LEFT', data: { userId: 'user-2' } });
+      expect(realtime.roomUpdated).toHaveBeenCalledWith('room-1', 'MEMBER_LEFT', { userId: 'user-2' });
     });
 
-    it('creates system message and emits new_message when userRepo and messageRepo are provided', async () => {
-      const emitRoomEvent = mock();
+    it('creates and publishes a system message when repositories are provided', async () => {
+      const realtime = makeRealtimeNotifier();
       const userRepo = { findById: mock().mockResolvedValue({ userId: 'user-2', name: 'Bob' }) };
       const messageRepo = { create: mock().mockResolvedValue({ messageId: 'msg-1' }) };
-      const serviceWithAll = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent, undefined, userRepo as any, messageRepo as any);
+      const serviceWithAll = makeRoomService(mockRepo, mockMemberRepo, realtime, undefined, userRepo as any, messageRepo as any);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue({ ...ownerMember, role: 'member' } as RoomMember);
 
       await serviceWithAll.leave('user-2', 'room-1');
 
       expect(messageRepo.create).toHaveBeenCalledWith(expect.objectContaining({ content: '[System] Bob已離開' }));
-      expect(emitRoomEvent).toHaveBeenCalledWith('room-1', 'new_message', expect.anything());
+      expect(realtime.messageCreated).toHaveBeenCalledWith('room-1', expect.anything());
     });
   });
 
@@ -661,9 +680,9 @@ describe('roomService', () => {
       await expect(roomService.transferOwnership('room-1', 'user-1', 'user-2')).rejects.toThrow(ValidationError);
     });
 
-    it('emits OWNERSHIP_TRANSFERRED event when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = mock();
-      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
+    it('publishes OWNERSHIP_TRANSFERRED when a notifier is provided', async () => {
+      const realtime = makeRealtimeNotifier();
+      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, realtime);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember
         .mockResolvedValueOnce(ownerMember)
@@ -672,23 +691,24 @@ describe('roomService', () => {
 
       await serviceWithEmit.transferOwnership('room-1', 'user-1', 'user-2');
 
-      expect(emitRoomEvent).toHaveBeenCalledWith('room-1', 'room_update', {
-        type: 'OWNERSHIP_TRANSFERRED',
-        data: { oldOwner: 'user-1', newOwner: 'user-2' },
-      });
+      expect(realtime.roomUpdated).toHaveBeenCalledWith(
+        'room-1',
+        'OWNERSHIP_TRANSFERRED',
+        { oldOwner: 'user-1', newOwner: 'user-2' },
+      );
     });
   });
 
-  describe('deleteGroup with emitRoomEvent', () => {
-    it('emits ROOM_DELETED event when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = mock();
-      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
+  describe('deleteGroup with realtime notifier', () => {
+    it('publishes ROOM_DELETED when a notifier is provided', async () => {
+      const realtime = makeRealtimeNotifier();
+      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, realtime);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue(ownerMember);
 
       await serviceWithEmit.deleteGroup('room-1', 'user-1');
 
-      expect(emitRoomEvent).toHaveBeenCalledWith('room-1', 'room_update', { type: 'ROOM_DELETED', data: { roomId: 'room-1' } });
+      expect(realtime.roomUpdated).toHaveBeenCalledWith('room-1', 'ROOM_DELETED', { roomId: 'room-1' });
     });
   });
 
@@ -759,8 +779,8 @@ describe('roomService', () => {
     });
 
     it('owner can update another member and emits MEMBER_UPDATED event', async () => {
-      const emitRoomEvent = mock();
-      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
+      const realtime = makeRealtimeNotifier();
+      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, realtime);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember
         .mockResolvedValueOnce(ownerMember)
@@ -770,17 +790,18 @@ describe('roomService', () => {
       await serviceWithEmit.updateMember('room-1', 'user-1', 'user-2', { nickname: 'Bob' });
 
       expect(mockMemberRepo.update).toHaveBeenCalledWith('room-1', 'user-2', { nickname: 'Bob' });
-      expect(emitRoomEvent).toHaveBeenCalledWith('room-1', 'room_update', {
-        type: 'MEMBER_UPDATED',
-        data: { userId: 'user-2', nickname: 'Bob' },
-      });
+      expect(realtime.roomUpdated).toHaveBeenCalledWith(
+        'room-1',
+        'MEMBER_UPDATED',
+        { userId: 'user-2', nickname: 'Bob' },
+      );
     });
   });
 
-  describe('kickMember with emitRoomEvent and system message', () => {
-    it('emits MEMBER_KICKED when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = mock();
-      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
+  describe('kickMember with realtime notifier and system message', () => {
+    it('publishes MEMBER_KICKED when a notifier is provided', async () => {
+      const realtime = makeRealtimeNotifier();
+      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, realtime);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember
         .mockResolvedValueOnce(ownerMember)
@@ -788,14 +809,14 @@ describe('roomService', () => {
 
       await serviceWithEmit.kickMember('room-1', 'user-1', 'user-2');
 
-      expect(emitRoomEvent).toHaveBeenCalledWith('room-1', 'room_update', { type: 'MEMBER_KICKED', data: { userId: 'user-2' } });
+      expect(realtime.roomUpdated).toHaveBeenCalledWith('room-1', 'MEMBER_KICKED', { userId: 'user-2' });
     });
 
     it('creates system message when userRepo and messageRepo are provided', async () => {
-      const emitRoomEvent = mock();
+      const realtime = makeRealtimeNotifier();
       const userRepo = { findById: mock().mockResolvedValue({ userId: 'user-2', name: 'Bob' }) };
       const messageRepo = { create: mock().mockResolvedValue({ messageId: 'msg-1' }) };
-      const serviceWithAll = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent, undefined, userRepo as any, messageRepo as any);
+      const serviceWithAll = makeRoomService(mockRepo, mockMemberRepo, realtime, undefined, userRepo as any, messageRepo as any);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember
         .mockResolvedValueOnce(ownerMember)
@@ -807,10 +828,10 @@ describe('roomService', () => {
     });
   });
 
-  describe('uploadAvatar with emitRoomEvent', () => {
-    it('emits ROOM_AVATAR_UPDATED event when emitRoomEvent is provided', async () => {
-      const emitRoomEvent = mock();
-      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
+  describe('uploadAvatar with realtime notifier', () => {
+    it('publishes ROOM_AVATAR_UPDATED when a notifier is provided', async () => {
+      const realtime = makeRealtimeNotifier();
+      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, realtime);
       ((saveAvatarUpload as any) as Mock<any>).mockResolvedValue('/uploads/avatars/new.png');
       const updated = { ...room, avatarUrl: '/uploads/avatars/new.png' };
       mockRepo.findById.mockResolvedValue(room);
@@ -819,10 +840,11 @@ describe('roomService', () => {
 
       await serviceWithEmit.uploadAvatar('room-1', 'user-1', {} as any);
 
-      expect(emitRoomEvent).toHaveBeenCalledWith('room-1', 'room_update', {
-        type: 'ROOM_AVATAR_UPDATED',
-        data: { roomId: 'room-1', avatarUrl: '/uploads/avatars/new.png' },
-      });
+      expect(realtime.roomUpdated).toHaveBeenCalledWith(
+        'room-1',
+        'ROOM_AVATAR_UPDATED',
+        { roomId: 'room-1', avatarUrl: '/uploads/avatars/new.png' },
+      );
     });
   });
 

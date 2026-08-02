@@ -8,6 +8,40 @@ import { describe, expect, test } from "vitest";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { mountChatApp } from "./harness";
 import { ME_ID, makeMessage, messageId } from "./fixtures";
+import { mergeMessageSnapshot, type Message } from "@/context/ChatContext";
+
+describe("reconnect snapshot convergence", () => {
+  test("a delayed REST snapshot cannot wipe pending commands or newer live revisions", () => {
+    const base: Message = {
+      id: "message-live",
+      revision: "2",
+      deliveryState: "sent",
+      roomId: "room-1",
+      senderId: ME_ID,
+      senderName: "Me",
+      content: "new live value",
+      sentAt: "2026-08-03T00:00:02.000Z",
+      timestamp: "00:00",
+    };
+    const pending: Message = {
+      ...base,
+      id: "command-pending",
+      revision: undefined,
+      commandId: "command-pending",
+      deliveryState: "pending",
+      content: "pending value",
+    };
+
+    const merged = mergeMessageSnapshot([base, pending], [{
+      ...base,
+      revision: "1",
+      content: "stale snapshot value",
+    }]);
+
+    expect(merged.find((message) => message.id === base.id)?.content).toBe("new live value");
+    expect(merged).toContainEqual(pending);
+  });
+});
 
 describe("opening and switching rooms", () => {
   test("shows the active room's messages and members panel", async () => {
@@ -42,8 +76,7 @@ describe("receiving and sending messages", () => {
     const app = await mountChatApp("/chat/room-1");
 
     act(() => {
-      app.socket().serverEmit(
-        "new_message",
+      app.socket().serverMessageCreated(
         makeMessage("room-1", 41, "m-2", { content: "Fresh incoming message" }),
       );
     });
@@ -57,8 +90,7 @@ describe("receiving and sending messages", () => {
     const app = await mountChatApp("/chat/room-1");
 
     act(() => {
-      app.socket().serverEmit(
-        "new_message",
+      app.socket().serverMessageCreated(
         makeMessage("room-3", 11, "f-1", { content: "New bg message" }),
       );
     });
@@ -77,14 +109,13 @@ describe("receiving and sending messages", () => {
     fireEvent.change(textarea, { target: { value: "Hello there" } });
     fireEvent.click(screen.getByText("Send"));
 
-    const sends = app.socket().emitted.filter((e) => e.event === "send_message");
+    const sends = app.socket().emitted.filter((e) => e.event === "message.send");
     expect(sends).toHaveLength(1);
     expect(sends[0].payload).toMatchObject({ roomId: "room-1", content: "Hello there" });
     expect(textarea.value).toBe("");
 
     act(() => {
-      app.socket().serverEmit(
-        "new_message",
+      app.socket().serverMessageCreated(
         makeMessage("room-1", 41, ME_ID, { content: "Hello there" }),
       );
     });
@@ -97,7 +128,7 @@ describe("receiving and sending messages", () => {
     const app = await mountChatApp("/chat/room-1");
 
     act(() => {
-      app.socket().serverEmit("message_recalled", { messageId: messageId("room-1", 40) });
+      app.socket().serverMessageRecalled(messageId("room-1", 40));
     });
     await app.settle();
 
@@ -112,12 +143,12 @@ describe("typing indicator", () => {
     const app = await mountChatApp("/chat/room-1");
 
     act(() => {
-      app.socket().serverEmit("user_typing", { roomId: "room-1", userId: "m-1", isTyping: true });
+      app.socket().serverTypingChanged({ roomId: "room-1", userId: "m-1", isTyping: true });
     });
     expect(await screen.findByText("Member One is typing...")).toBeTruthy();
 
     act(() => {
-      app.socket().serverEmit("user_typing", { roomId: "room-1", userId: "m-1", isTyping: false });
+      app.socket().serverTypingChanged({ roomId: "room-1", userId: "m-1", isTyping: false });
     });
     await app.settle();
     expect(screen.queryByText(/is typing/)).toBeNull();
@@ -127,7 +158,7 @@ describe("typing indicator", () => {
     const app = await mountChatApp("/chat/room-1");
 
     act(() => {
-      app.socket().serverEmit("user_typing", { roomId: "room-2", userId: "m-1", isTyping: true });
+      app.socket().serverTypingChanged({ roomId: "room-2", userId: "m-1", isTyping: true });
     });
     await app.settle();
     expect(screen.queryByText(/is typing/)).toBeNull();
@@ -138,7 +169,7 @@ describe("typing indicator", () => {
     const textarea = screen.getByPlaceholderText("Type a message...");
 
     fireEvent.change(textarea, { target: { value: "abc" } });
-    const typingEvents = app.socket().emitted.filter((e) => e.event === "typing");
+    const typingEvents = app.socket().emitted.filter((e) => e.event === "typing.set");
     expect(typingEvents.length).toBeGreaterThan(0);
     expect(typingEvents.at(-1)?.payload).toMatchObject({ roomId: "room-1", isTyping: true });
   });
@@ -152,7 +183,7 @@ describe("read receipts", () => {
     expect(screen.getByTitle("Member One")).toBeTruthy();
 
     act(() => {
-      app.socket().serverEmit("read_update", {
+      app.socket().serverReadAdvanced({
         roomId: "room-1",
         userId: "m-2",
         messageId: messageId("room-1", 40),

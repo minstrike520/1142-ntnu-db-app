@@ -61,6 +61,11 @@
   "settingsHeader": {
     "backToChat": "Back to chat"
   },
+  "realtime": {
+    "emergencyAlertTitle": "Emergency alert",
+    "emergencyAlertBody": "From user {userId}: {message}",
+    "protocolMismatch": "Near Chat was updated. Reload this page to reconnect safely."
+  },
   "emergency": {
     "emergencyReporting": "Emergency reporting",
     "enableOfflineWarning": "Enable offline warning",

@@ -34,6 +34,21 @@ describe('message validation schemas', () => {
     expect(sendMessageSchema.safeParse({ roomId: 'room-1', content: '' }).success).toBe(false);
   });
 
+  it('shares the realtime message byte and attachment safety budgets', () => {
+    expect(sendMessageSchema.safeParse({
+      roomId: 'room-1',
+      content: 'a'.repeat(16 * 1024 + 1),
+    }).success).toBe(false);
+    expect(sendMessageSchema.safeParse({
+      roomId: 'room-1',
+      content: '',
+      attachmentIds: Array.from(
+        { length: 21 },
+        (_, index) => `550e8400-e29b-41d4-a716-${index.toString().padStart(12, '0')}`,
+      ),
+    }).success).toBe(false);
+  });
+
   it('validates list messages payloads and bounds limit', () => {
     expect(listMessagesSchema.parse({ roomId: 'room-1' })).toEqual({
       roomId: 'room-1',

@@ -69,6 +69,19 @@ describe('inactivityJob', () => {
     expect(mockUserService.checkInactivity).toHaveBeenCalledTimes(2);
   });
 
+  it('refreshes activity instead of alerting when realtime presence is online', async () => {
+    mockUserRepo.findAllWarningEnabled.mockResolvedValue([{ userId: 'u1' }] as any);
+    mockUserRepo.update.mockResolvedValue(undefined);
+    const intervalId = startInactivityJob(mockUserRepo, mockUserService, 2, () => true);
+    activeIntervals.push(intervalId);
+
+    await new Promise(resolve => setTimeout(resolve, 3));
+    await Promise.resolve();
+
+    expect(mockUserRepo.update).toHaveBeenCalledWith('u1', { lastActivity: expect.any(Date) });
+    expect(mockUserService.checkInactivity).not.toHaveBeenCalled();
+  });
+
   it('continues with remaining users when checkInactivity fails for one user', async () => {
     const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
     mockUserRepo.findAllWarningEnabled.mockResolvedValue([

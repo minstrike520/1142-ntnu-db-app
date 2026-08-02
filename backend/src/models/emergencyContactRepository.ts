@@ -92,20 +92,33 @@ export class EmergencyContactRepository implements IEmergencyContactRepository {
   }
 
   async recordAlertIfNew(userId: string, lastActivity: Date): Promise<boolean> {
-    const existingRes = await this.sql<{ exists: number }[]>`
-      SELECT 1 as exists
-      FROM emergency_alert_logs
+    const rows = await this.sql<{ delivery_state: 'pending' | 'completed' }[]>`
+      INSERT INTO emergency_alert_logs (user_id, last_activity_at, delivery_state)
+      VALUES (${userId}, ${lastActivity}, 'pending')
+      ON CONFLICT (user_id, last_activity_at) DO NOTHING
+      RETURNING delivery_state
+    `;
+    if (rows[0]) return true;
+    const existing = await this.sql<{ delivery_state: 'pending' | 'completed' }[]>`
+      SELECT delivery_state FROM emergency_alert_logs
       WHERE user_id = ${userId} AND last_activity_at = ${lastActivity}
     `;
+    return existing[0]?.delivery_state === 'pending';
+  }
 
-    if (existingRes.length > 0) {
-      return false;
-    }
-
+  async completeAlert(userId: string, lastActivity: Date): Promise<void> {
     await this.sql`
-      INSERT INTO emergency_alert_logs (user_id, last_activity_at)
-      VALUES (${userId}, ${lastActivity})
+      UPDATE emergency_alert_logs
+      SET delivery_state = 'completed', alerted_at = NOW()
+      WHERE user_id = ${userId} AND last_activity_at = ${lastActivity}
     `;
-    return true;
+  }
+
+  async releaseAlert(userId: string, lastActivity: Date): Promise<void> {
+    await this.sql`
+      DELETE FROM emergency_alert_logs
+      WHERE user_id = ${userId} AND last_activity_at = ${lastActivity}
+        AND delivery_state = 'pending'
+    `;
   }
 }

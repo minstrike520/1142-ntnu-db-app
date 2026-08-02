@@ -17,6 +17,7 @@ import type {
   UserProfile,
   UserSettings,
 } from '@shared/types';
+import { PROTOCOL_VERSION, REALTIME_SUBPROTOCOL } from '@shared/realtime';
 
 export const getApiBaseUrl = (): string => {
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -625,3 +626,25 @@ export const checkEmergencyInactivity = (
     },
     { token },
   );
+
+export interface RealtimeTicketResponse {
+  ticket: string;
+  expiresAt: string;
+  leaseExpiresAt: string;
+  protocol: typeof REALTIME_SUBPROTOCOL;
+  version: typeof PROTOCOL_VERSION;
+}
+
+export const issueRealtimeTicket = (token: string): Promise<RealtimeTicketResponse> =>
+  requestJson<RealtimeTicketResponse>(
+    '/realtime/ticket',
+    { method: 'POST' },
+    { token },
+  );
+
+export const listDurableEmergencyNotifications = (token: string): Promise<Array<{
+  notificationId: string;
+  userId: string;
+  message: string;
+  createdAt: string;
+}>> => requestJson('/realtime/emergency-notifications', {}, { token });

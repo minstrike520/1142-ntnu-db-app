@@ -125,6 +125,8 @@ export interface Message {
   replyToId?: string;
   isRecalled: boolean;
   sentAt: Date;
+  /** Server-managed global revision used by the native realtime recovery protocol. */
+  revision?: string;
   attachments?: Attachment[];
 }
 
@@ -173,10 +175,12 @@ export interface AuthResponse {
 export interface JwtPayload {
   userId: string;
   name: string;
+  /** Access-token expiry as a UNIX timestamp; populated after token verification. */
+  exp?: number;
 }
 
 // ---------------------------------------------------------------------------
-// API error shape (used by REST responses and Socket.IO error events)
+// API error shape used by REST responses.
 // ---------------------------------------------------------------------------
 
 export interface ApiError {
@@ -184,33 +188,6 @@ export interface ApiError {
   message: string;
   /** Optional machine-readable error code, e.g. "NOT_FOUND", "CONFLICT". */
   code?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Socket.IO event maps — matches api-documentation.md Section 2
-// ---------------------------------------------------------------------------
-
-export interface ClientToServerEvents {
-  join_room:      (payload: { roomId: string }) => void;
-  leave_room:     (payload: { roomId: string }) => void;
-  send_message:   (payload: { roomId: string; content: string; replyTo?: string; attachmentIds?: string[] }) => void;
-  recall_message: (payload: { messageId: string }) => void;
-  update_message: (payload: { roomId: string; messageId: string; content: string }) => void;
-  typing:         (payload: { roomId: string; isTyping: boolean }) => void;
-  read_receipt:   (payload: { roomId: string; messageId: string }) => void;
-}
-
-export interface ServerToClientEvents {
-  new_message:      (payload: MessageWithSender) => void;
-  message_recalled: (payload: { messageId: string }) => void;
-  message_updated:  (payload: MessageWithSender) => void;
-  user_typing:      (payload: { roomId: string; userId: string; isTyping: boolean }) => void;
-  read_update:      (payload: { roomId: string; userId: string; messageId: string }) => void;
-  room_update:      (payload: { type: string; roomId: string; data: any }) => void;
-  friend_request:   (payload: FriendRequest) => void;
-  emergency_alert:  (payload: { userId: string; message: string }) => void;
-  error:            (payload: ApiError) => void;
-  user_status:      (payload: { userId: string; status: 'online' | 'offline' }) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +211,7 @@ export interface FriendResponse {
   status?: 'online' | 'offline';
 }
 
-/** Payload for the `friend_request` Socket.IO server event. */
+/** Friend relationship update carried by the realtime protocol. */
 export interface FriendRequest {
   requesterId: string;
   addresseeId: string;

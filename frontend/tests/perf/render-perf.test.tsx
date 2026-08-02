@@ -53,7 +53,7 @@ describe("scenario 2: receive and send messages", () => {
     app.startMeasure();
     for (let i = 1; i <= 5; i += 1) {
       act(() => {
-        socket.serverEmit("new_message", makeMessage("room-1", 40 + i, "m-2"));
+        socket.serverMessageCreated(makeMessage("room-1", 40 + i, "m-2"));
       });
     }
     await app.settle();
@@ -69,7 +69,7 @@ describe("scenario 2: receive and send messages", () => {
     app.startMeasure();
     for (let i = 1; i <= 3; i += 1) {
       act(() => {
-        socket.serverEmit("new_message", makeMessage("room-3", 10 + i, "f-1"));
+        socket.serverMessageCreated(makeMessage("room-3", 10 + i, "f-1"));
       });
     }
     await app.settle();
@@ -90,15 +90,14 @@ describe("scenario 2: receive and send messages", () => {
     fireEvent.change(textarea, { target: { value: "Hello from me" } });
     fireEvent.click(screen.getByText("Send"));
     act(() => {
-      socket.serverEmit(
-        "new_message",
+      socket.serverMessageCreated(
         makeMessage("room-1", 41, ME_ID, { content: "Hello from me" }),
       );
     });
     await app.settle();
     results.push(app.measure("S2c send 1 msg + server echo"));
 
-    expect(socket.countEmitted("send_message")).toBe(1);
+    expect(socket.countEmitted("message.send")).toBe(1);
     expect(screen.getAllByText("Hello from me").length).toBeGreaterThan(0);
   });
 });
@@ -110,11 +109,11 @@ describe("scenario 3: typing, typing indicator, right panel", () => {
 
     app.startMeasure();
     act(() => {
-      socket.serverEmit("user_typing", { roomId: "room-1", userId: "m-1", isTyping: true });
+      socket.serverTypingChanged({ roomId: "room-1", userId: "m-1", isTyping: true });
     });
     expect(await screen.findByText(/Member One is typing/)).toBeTruthy();
     act(() => {
-      socket.serverEmit("user_typing", { roomId: "room-1", userId: "m-1", isTyping: false });
+      socket.serverTypingChanged({ roomId: "room-1", userId: "m-1", isTyping: false });
     });
     await app.settle();
     results.push(app.measure("S3a remote typing on+off"));
@@ -133,7 +132,7 @@ describe("scenario 3: typing, typing indicator, right panel", () => {
     await app.settle();
     results.push(app.measure("S3b local input x5 keystrokes"));
 
-    expect(app.socket().countEmitted("typing")).toBeGreaterThan(0);
+    expect(app.socket().countEmitted("typing.set")).toBeGreaterThan(0);
   });
 
   test("toggle the right panel off and on", async () => {

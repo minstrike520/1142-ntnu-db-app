@@ -3,7 +3,6 @@ import { cors } from "hono/cors";
 import { getRequestListener } from "@hono/node-server";
 import { createServer } from "node:http";
 import path from "path";
-import { Server } from "socket.io";
 import pool from "./models/db";
 import { signToken, generateRefreshToken, hashToken } from "./utils/jwt";
 import { RefreshTokenRepository } from "./models/refreshTokenRepository";
@@ -15,6 +14,7 @@ import { EmergencyContactRepository } from "./models/emergencyContactRepository"
 import { RoomRepository } from "./models/roomRepository";
 import { RoomMemberRepository } from "./models/roomMemberRepository";
 import { MessageRepository } from "./models/messageRepository";
+import { RealtimeRepository } from "./models/realtimeRepository";
 import { FolderRepository } from "./models/folderRepository";
 import { AttachmentRepository } from "./models/attachmentRepository";
 import { makeAttachmentService } from "./services/attachmentService";
@@ -25,6 +25,7 @@ import { makeRoomService } from "./services/roomService";
 import { makeMessageService } from "./services/messageService";
 import { makeFolderService } from "./services/folderService";
 import { makeFriendService } from "./services/friendService";
+import { makeRealtimeService } from "./services/realtimeService";
 import { startInactivityJob } from "./utils/inactivityJob";
 import { makeAuthRoutes } from "./routes/authRoutes";
 import { makeUserRoutes } from "./routes/userRoutes";
@@ -32,11 +33,15 @@ import { makeRoomRoutes } from "./routes/roomRoutes";
 import { makeMessageRoutes } from "./routes/messageRoutes";
 import { makeFolderRoutes } from "./routes/folderRoutes";
 import { makeFriendRoutes, makeBlockRoutes, makeFriendRequestRoutes } from "./routes/friendRoutes";
-import { attachSocketAuth } from "./realtime/authSocket";
-import { attachSockets } from "./realtime/socketServer";
+import { makeRealtimeRoutes } from "./routes/realtimeRoutes";
+import { RealtimeManager } from "./realtime/manager";
+import { RealtimeCommandHandler } from "./realtime/commandHandler";
+import { createRealtimeServer, type RealtimeServer } from "./realtime/server";
+import { WsTicketService } from "./realtime/wsTicket";
 import { AVATARS_UPLOAD_DIR, ensureUploadDirectories } from "./utils/uploads";
 import { avatarContentType } from "./utils/avatarUpload";
-import type { ClientToServerEvents, ServerToClientEvents } from "../../shared/types";
+import type { MessageWithSender } from "../../shared/types";
+import type { RealtimeMessage } from "../../shared/realtime";
 
 const honoApp = new Hono();
 
@@ -85,6 +90,39 @@ const folderRepo = new FolderRepository(pool);
 const attachmentRepo = new AttachmentRepository(pool);
 const friendRepo = makeFriendRepository(pool);
 const refreshTokenRepo = new RefreshTokenRepository(pool);
+const realtimeRepo = new RealtimeRepository(pool);
+const wsTickets = new WsTicketService();
+const realtimeManager = new RealtimeManager({
+  presenceRecipients: async (userId) =>
+    (await friendRepo.getFriends(userId)).map((friend) => friend.friend.userId),
+});
+const realtimeService = makeRealtimeService({
+  repository: realtimeRepo,
+  publisher: realtimeManager,
+});
+
+const toRealtimeMessage = (message: MessageWithSender): RealtimeMessage => ({
+  messageId: message.messageId,
+  roomId: message.roomId,
+  senderId: message.senderId,
+  content: message.content,
+  ...(message.replyToId ? { replyToId: message.replyToId } : {}),
+  isRecalled: message.isRecalled,
+  sentAt: new Date(message.sentAt).toISOString(),
+  revision: message.revision ?? '0',
+  sender: message.sender,
+  ...(message.mentions ? { mentions: message.mentions } : {}),
+  ...(message.attachments ? {
+    attachments: message.attachments.map((attachment) => ({
+      attachmentId: attachment.attachmentId,
+      uploadedBy: attachment.uploadedBy,
+      fileUrl: attachment.fileUrl,
+      fileType: attachment.fileType,
+      originalName: attachment.originalName,
+      uploadedAt: new Date(attachment.uploadedAt).toISOString(),
+    })),
+  } : {}),
+});
 
 const userService = makeUserService(
   userRepo,
@@ -92,37 +130,24 @@ const userService = makeUserService(
   refreshTokenRepo,
   { signToken, generateRefreshToken, hashToken },
   async (contactId, payload) => {
-    let room = await roomRepo.findPrivateRoomByMembers(payload.userId, contactId);
-    if (!room) {
-      try {
-        const result = await roomService.createPrivate(payload.userId, contactId, true);
-        room = result.room;
-      } catch (err) {
-        console.error('Failed to auto-create private room for emergency contact:', err);
-      }
-    }
-
-    if (room) {
-      try {
-        const message = await messageService.sendMessage(payload.userId, room.roomId, payload.message);
-        io.to(`room_${room.roomId}`).emit('new_message', message);
-      } catch (err) {
-        console.error('Failed to auto-send emergency message:', err);
-        io.to(`user_${contactId}`).emit('emergency_alert', payload);
-      }
-    } else {
-      io.to(`user_${contactId}`).emit('emergency_alert', payload);
-    }
+    await realtimeService.deliverEmergencyAlert({
+      sourceUserId: payload.userId,
+      recipientId: contactId,
+      idempotencyKey: payload.idempotencyKey,
+      message: payload.message,
+    });
   },
   friendRepo,
   async (userId, data) => {
     try {
       const rooms = await roomRepo.findByMember(userId);
       for (const room of rooms) {
-        io.to(`room_${room.roomId}`).emit('room_update', {
-          type: 'USER_UPDATED',
-          roomId: room.roomId,
-          data: { userId, ...data },
+        await realtimeManager.publish({
+          target: { kind: 'room', roomId: room.roomId },
+          type: 'room.updated',
+          streamId: `room:${room.roomId}`,
+          reliable: true,
+          payload: { roomId: room.roomId, change: 'USER_UPDATED', data: { userId, ...data } },
         });
       }
     } catch (err) {
@@ -134,32 +159,76 @@ const userService = makeUserService(
 const roomService = makeRoomService(
   roomRepo,
   roomMemberRepo,
-  (roomId, eventName, payload) => {
-    if (eventName === 'room_update') {
-      const p = payload as { type: string; data: unknown };
-      io.to(`room_${roomId}`).emit('room_update', { ...p, roomId });
-    } else {
-      io.to(`room_${roomId}`).emit(eventName as keyof ServerToClientEvents, payload as never);
-    }
+  {
+    roomUpdated(roomId, change, data) {
+      void realtimeManager.publish({
+        target: { kind: 'room', roomId },
+        type: 'room.updated',
+        streamId: `room:${roomId}`,
+        reliable: true,
+        payload: { roomId, change, data },
+      });
+      const affectedUserId = typeof data === 'object' && data !== null && 'userId' in data
+        ? String(data.userId)
+        : undefined;
+      const accessRevoked = change === 'MEMBER_KICKED'
+        || change === 'MEMBER_LEFT'
+        || (change === 'MEMBER_UPDATED'
+          && typeof data === 'object'
+          && data !== null
+          && 'role' in data
+          && data.role === 'pending');
+      if (affectedUserId && accessRevoked) void realtimeManager.revokeRoom(affectedUserId, roomId);
+    },
+    messageCreated(roomId, value) {
+      const message = toRealtimeMessage(value as MessageWithSender);
+      void realtimeManager.publish({
+        target: { kind: 'room', roomId },
+        type: 'message.created',
+        streamId: `room:${roomId}`,
+        reliable: true,
+        payload: { revision: message.revision, message },
+      });
+    },
+    userRoomUpdated(userId, roomId, change, data) {
+      void realtimeManager.publish({
+        target: { kind: 'user', userId },
+        type: 'room.updated',
+        streamId: `user:${userId}`,
+        reliable: true,
+        payload: { roomId, change, data },
+      });
+    },
   },
   friendRepo,
   userRepo,
   messageRepo,
-  (userId, eventName, payload) => {
-    io.to(`user_${userId}`).emit(eventName as keyof ServerToClientEvents, payload as never);
-  },
+  (userId) => realtimeManager.isUserOnline(userId),
 );
 
 const messageService = makeMessageService(messageRepo, roomRepo, roomMemberRepo);
 const folderService = makeFolderService(folderRepo, roomMemberRepo);
 const attachmentService = makeAttachmentService(attachmentRepo);
 
-const friendService = makeFriendService(friendRepo, (userId, eventName, payload) => {
-  io.to(`user_${userId}`).emit(eventName as keyof ServerToClientEvents, payload as never);
+const friendService = makeFriendService(friendRepo, (userId, payload) => {
+  void realtimeManager.publish({
+    target: { kind: 'user', userId },
+    type: 'friend.requested',
+    streamId: `user:${userId}`,
+    reliable: true,
+    payload: { data: payload },
+  });
 }, {
   markPrivateReadOnly: roomService.markPrivateReadOnly,
   createPrivate: (userA: string, userB: string, bypassFriendCheck?: boolean) => roomService.createPrivate(userA, userB, bypassFriendCheck),
   reopenPrivateRoom: roomService.reopenPrivateRoom,
+}, (userId) => realtimeManager.isUserOnline(userId));
+
+const realtimeCommands = new RealtimeCommandHandler({
+  manager: realtimeManager,
+  tickets: wsTickets,
+  listAuthorizedRoomIds: (userId) => realtimeRepo.listAuthorizedRoomIds(userId),
+  service: realtimeService,
 });
 
 // Attach Hono API Routes
@@ -178,29 +247,18 @@ honoApp.route('/api/v1/attachments', makeAttachmentRoutes(attachmentService));
 honoApp.route('/api/v1/friends', makeFriendRoutes(friendService));
 honoApp.route('/api/v1/friend-requests', makeFriendRequestRoutes(friendService));
 honoApp.route('/api/v1/blocks', makeBlockRoutes(friendService));
+honoApp.route('/api/v1/realtime', makeRealtimeRoutes(wsTickets, realtimeService));
 
 honoApp.onError(errorHandler);
 
 const requestListener = getRequestListener(honoApp.fetch);
 const server = createServer(requestListener);
 const app = server;
-
-const io = new Server<ClientToServerEvents, ServerToClientEvents>(server, {
-  cors: { origin: allowedOrigins, credentials: true },
-});
-
-const PORT = process.env.PORT || 4000;
-
-attachSocketAuth(io);
-attachSockets(io, {
-  messageService,
-  messageRepository: messageRepo,
-  roomMemberRepository: roomMemberRepo,
-  friendRepository: friendRepo
-});
+const PORT = Number(process.env.PORT ?? 4000);
+let productionServer: RealtimeServer | undefined;
 
 if (require.main === module) {
-  startInactivityJob(userRepo, userService);
+  startInactivityJob(userRepo, userService, undefined, (userId) => realtimeManager.isUserOnline(userId));
 
   (async () => {
     let version = "1.0.0";
@@ -214,10 +272,23 @@ if (require.main === module) {
       } catch {}
     }
 
-    server.listen(PORT as number, "0.0.0.0", () =>
-      console.log(`Backend server (v${version}) successfully listening on port ${PORT} (0.0.0.0)`),
-    );
+    productionServer = createRealtimeServer({
+      app: honoApp,
+      tickets: wsTickets,
+      manager: realtimeManager,
+      allowedOrigins,
+      handleCommand: (connectionId, frame) => realtimeCommands.handle(connectionId, frame),
+      port: PORT,
+    });
+    console.log(`Backend server (v${version}) successfully listening on port ${productionServer.port} (0.0.0.0)`);
+
+    const shutdown = async () => {
+      await productionServer?.stop(false);
+      process.exit(0);
+    };
+    process.once('SIGTERM', () => void shutdown());
+    process.once('SIGINT', () => void shutdown());
   })();
 }
 
-export { app, honoApp, server, io };
+export { app, honoApp, server, realtimeManager, realtimeCommands };

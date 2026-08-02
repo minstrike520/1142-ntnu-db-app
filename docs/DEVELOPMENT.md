@@ -80,7 +80,7 @@ Docker Compose exposes different host ports from the container-internal ports:
 | Service | Host URL / port | Container port | Description |
 |---------|------------------|----------------|-------------|
 | **Frontend** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js frontend web app |
-| **Backend API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API & Socket.IO server |
+| **Backend API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API and native WebSocket server (`/ws`) |
 | **Database** | `localhost:5435` | 5432 | PostgreSQL 18 instance |
 
 For browser-facing frontend requests, set the API environment variable to:

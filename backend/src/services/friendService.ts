@@ -1,15 +1,15 @@
 import { AppError, ConflictError, ValidationError } from '../utils/AppError';
 import type { makeFriendRepository } from '../models/friendRepository';
-import { isUserOnline } from '../realtime/presence';
 
 export function makeFriendService(
   repo: ReturnType<typeof makeFriendRepository>,
-  notifyUser?: (userId: string, eventName: string, payload: unknown) => void,
+  notifyUser?: (userId: string, payload: unknown) => void,
   privateRooms?: {
     markPrivateReadOnly(userA: string, userB: string): Promise<void>;
     createPrivate?(userA: string, userB: string): Promise<unknown>;
     reopenPrivateRoom?(userA: string, userB: string): Promise<void>;
-  }
+  },
+  isOnline: (userId: string) => boolean = () => false,
 ) {
   return {
     async sendFriendRequest(requesterId: string, targetUserId: string) {
@@ -32,7 +32,7 @@ export function makeFriendService(
       if (reciprocal) {
         const accepted = await repo.acceptFriendRequest(targetUserId, requesterId);
         if (notifyUser) {
-          notifyUser(targetUserId, 'friend_request', accepted);
+          notifyUser(targetUserId, accepted);
         }
         if (privateRooms?.reopenPrivateRoom) {
           await privateRooms.reopenPrivateRoom(requesterId, targetUserId);
@@ -52,7 +52,7 @@ export function makeFriendService(
       }
       
       if (notifyUser) {
-        notifyUser(targetUserId, 'friend_request', request);
+        notifyUser(targetUserId, request);
       }
       return request;
     },
@@ -77,7 +77,7 @@ export function makeFriendService(
         // Notify the original requester that their request was accepted so their
         // friend list updates in real-time without a page refresh.
         if (notifyUser) {
-          notifyUser(requesterId, 'friend_request', accepted);
+          notifyUser(requesterId, accepted);
         }
         return accepted;
       } else {
@@ -88,7 +88,7 @@ export function makeFriendService(
         // Notify the original requester that their request was rejected so they
         // can remove the pending entry from their list without a page refresh.
         if (notifyUser) {
-          notifyUser(requesterId, 'friend_request', {
+          notifyUser(requesterId, {
             requesterId,
             addresseeId: userId,
             status: 'rejected' as const,
@@ -105,7 +105,7 @@ export function makeFriendService(
         if (f && f.friend) {
           return {
             ...f,
-            status: isUserOnline(f.friend.userId) ? 'online' : 'offline',
+            status: isOnline(f.friend.userId) ? 'online' : 'offline',
           };
         }
         return f;
@@ -116,7 +116,7 @@ export function makeFriendService(
       await repo.deleteFriendship(userId, friendId);
       await privateRooms?.markPrivateReadOnly(userId, friendId);
       if (notifyUser) {
-        notifyUser(friendId, 'friend_request', {
+        notifyUser(friendId, {
           requesterId: userId,
           addresseeId: friendId,
           status: 'deleted',
@@ -132,7 +132,7 @@ export function makeFriendService(
       await repo.blockUser(userId, targetUserId);
       await privateRooms?.markPrivateReadOnly(userId, targetUserId);
       if (notifyUser) {
-        notifyUser(targetUserId, 'friend_request', {
+        notifyUser(targetUserId, {
           requesterId: userId,
           addresseeId: targetUserId,
           status: 'blocked',
@@ -148,7 +148,7 @@ export function makeFriendService(
         await privateRooms?.reopenPrivateRoom?.(userId, blockedId);
       }
       if (notifyUser) {
-        notifyUser(blockedId, 'friend_request', {
+        notifyUser(blockedId, {
           requesterId: userId,
           addresseeId: blockedId,
           status: 'unblocked',

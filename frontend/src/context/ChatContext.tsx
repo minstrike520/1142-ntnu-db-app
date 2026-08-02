@@ -12,6 +12,7 @@ import React, { createContext, useCallback, useContext, useEffect, useLayoutEffe
 import { usePathname, useRouter } from "next/navigation";
 import { resolveAssetUrl } from "@/lib/assets";
 import { NotificationBridge } from "@/lib/notificationBridge";
+import { translate } from "@/lib/i18n";
 import type {
   Attachment as ApiAttachment,
   EmergencyContactResponse,
@@ -49,6 +50,7 @@ import {
   kickRoomMember,
   leaveRoom as leaveRoomApi,
   listEmergencyContacts,
+  listDurableEmergencyNotifications,
   listFolders,
   listFriendRequests,
   listFriends,
@@ -76,17 +78,21 @@ import {
 } from "@/lib/api";
 import {
   createChatSocket,
-  joinRoom,
+  syncRooms,
+  onConnected,
   onEmergencyAlert,
-  onFriendRequest,
+  onFriendRequested,
   onMessageRecalled,
   onMessageUpdated,
-  onNewMessage,
-  onReadUpdate,
-  onSocketError,
-  onRoomUpdate,
-  onUserStatus,
-  onUserTyping,
+  onMessageCreated,
+  onReadAdvanced,
+  onRealtimeError,
+  onProtocolMismatch,
+  onRoomUpdated,
+  onRoomAccessRevoked,
+  onCommandState,
+  onPresenceChanged,
+  onTypingChanged,
   recallMessage,
   sendMessage,
   sendReadReceipt,
@@ -128,6 +134,9 @@ export interface ChatRoom {
 
 export interface Message {
   id: string;
+  revision?: string;
+  commandId?: string;
+  deliveryState?: 'pending' | 'retrying' | 'sent' | 'failed';
   roomId: string;
   senderId: string | null;
   senderName: string;
@@ -479,6 +488,9 @@ const getPrivateRoomName = (
 
 const mapMessage = (message: MessageWithSender, currentUserId?: string): Message => ({
   id: message.messageId,
+  revision: message.revision,
+  commandId: (message as MessageWithSender & { clientCommandId?: string }).clientCommandId,
+  deliveryState: 'sent',
   roomId: message.roomId,
   senderId: message.senderId,
   senderName: message.sender?.name ?? "Deleted User",
@@ -692,6 +704,22 @@ const sortMessages = (items: Message[]) =>
     return a.id.localeCompare(b.id);
   });
 
+export const mergeMessageSnapshot = (current: Message[], snapshot: Message[]): Message[] => {
+  const merged = new Map(current.map((message) => [message.id, message]));
+  for (const message of snapshot) {
+    const existing = merged.get(message.id);
+    if (existing?.revision && message.revision) {
+      try {
+        if (BigInt(existing.revision) > BigInt(message.revision)) continue;
+      } catch {
+        // A malformed revision is replaced by the runtime-validated canonical snapshot.
+      }
+    }
+    merged.set(message.id, message);
+  }
+  return hydrateReplyTargets(sortMessages([...merged.values()]));
+};
+
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -704,6 +732,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const tokenRef = useRef<string | null>(null);
   const activeRoomIdRef = useRef<string | null>(null);
   const notifyDesktopRef = useRef(true);
+  const uiLanguageRef = useRef<UiLanguage>("zh-TW");
+  const shownEmergencyNotificationsRef = useRef(new Set<string>());
 
   const [isMounted, setIsMounted] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -745,6 +775,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     notifyDesktopRef.current = user.notifyDesktop ?? true;
   }, [user.notifyDesktop]);
 
+  useEffect(() => {
+    uiLanguageRef.current = uiLanguage;
+  }, [uiLanguage]);
+
 
   const loadGroupMembers = async (roomId: string): Promise<Member[]> => {
     if (!token) return [];
@@ -780,17 +814,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           return reads;
         }, {});
 
-        setGroupReadStates((current) =>
-          Object.keys(roomReads).length === 0
-            ? current
-            : {
-                ...current,
-                [roomId]: {
-                  ...(current[roomId] ?? {}),
-                  ...roomReads,
-                },
-              },
-        );
+        setGroupReadStates((current) => ({
+          ...current,
+          [roomId]: roomReads,
+        }));
 
         return members;
       })
@@ -853,7 +880,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       }),
     );
-    setMessages(hydrateReplyTargets(roomMessages.flat()));
+    setMessages((current) => mergeMessageSnapshot(current, roomMessages.flat()));
   }, [user.username]);
 
   useEffect(() => {
@@ -954,7 +981,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     tokenRef.current = token;
     if (token && socketRef.current) {
-      socketRef.current.auth = { token };
+      socketRef.current.updateToken(token);
     }
   }, [token]);
 
@@ -1053,12 +1080,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMounted]);
 
+  const roomMembershipManifest = rooms.map((room) => room.id).sort().join('\n');
+
   useEffect(() => {
     roomsRef.current = rooms;
-    if (socketRef.current?.connected) {
-      rooms.forEach((room) => joinRoom(socketRef.current!, room.id));
-    }
   }, [rooms]);
+
+  useEffect(() => {
+    if (socketRef.current?.connected) {
+      syncRooms(socketRef.current);
+    }
+  }, [roomMembershipManifest]);
 
   useEffect(() => {
     if (!token || !currentUserId) return;
@@ -1066,11 +1098,28 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const socket = createChatSocket(token);
     socketRef.current = socket;
 
-    const joinKnownRooms = () => {
-      roomsRef.current.forEach((room) => joinRoom(socket, room.id));
+    const showEmergencyAlert = (payload: {
+      notificationId: string;
+      userId: string;
+      message: string;
+    }) => {
+      if (shownEmergencyNotificationsRef.current.has(payload.notificationId)) return;
+      shownEmergencyNotificationsRef.current.add(payload.notificationId);
+      const title = translate(uiLanguageRef.current, "realtime.emergencyAlertTitle");
+      const body = translate(uiLanguageRef.current, "realtime.emergencyAlertBody", {
+        userId: payload.userId,
+        message: payload.message,
+      });
+      void NotificationBridge.send({
+        title,
+        body,
+        tag: `emergency-${payload.notificationId}`,
+        url: "/",
+      });
+      window.alert(`${title}\n${body}`);
     };
 
-    const cleanupNewMessage = onNewMessage(socket, (payload) => {
+    const cleanupNewMessage = onMessageCreated(socket, (payload) => {
       const incoming = mapMessage(payload, currentUserId);
       const incomingRoom = roomsRef.current.find((room) => room.id === incoming.roomId);
 
@@ -1094,7 +1143,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
 
       setMessages((current) => {
-        const withoutDuplicate = current.filter((message) => message.id !== incoming.id);
+        const withoutDuplicate = current.filter((message) =>
+          message.id !== incoming.id && (!incoming.commandId || message.commandId !== incoming.commandId)
+        );
         return hydrateReplyTargets(sortMessages([...withoutDuplicate, incoming]));
       });
 
@@ -1156,7 +1207,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         ),
       );
     });
-    const cleanupRead = onReadUpdate(socket, ({ roomId, userId, messageId }) => {
+    const cleanupRead = onReadAdvanced(socket, ({ roomId, userId, messageId }) => {
       setGroupReadStates((current) => ({
         ...current,
         [roomId]: {
@@ -1191,7 +1242,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }),
       );
     });
-    const cleanupTyping = onUserTyping(socket, ({ roomId, userId, isTyping }) => {
+    const cleanupTyping = onTypingChanged(socket, ({ roomId, userId, isTyping, expiresAt }) => {
       const typingRoom = roomsRef.current.find(r => r.id === roomId);
       const typingMember = typingRoom?.members?.find(m => m.userId === userId);
       const displayName = typingMember?.nickname ?? typingMember?.name ?? userId;
@@ -1210,7 +1261,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             ...prev,
             [roomId]: (prev[roomId] ?? []).filter(n => n !== displayName),
           }));
-        }, 3000);
+        }, Math.max(0, new Date(expiresAt).getTime() - Date.now()));
       } else {
         setTypingUsers(prev => ({
           ...prev,
@@ -1218,10 +1269,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }));
       }
     });
-    const cleanupError = onSocketError(socket, (error) => {
+    const cleanupError = onRealtimeError(socket, (error) => {
       console.error("Socket error", error);
     });
-    const cleanupFriendRequest = onFriendRequest(socket, (payload) => {
+    const cleanupProtocolMismatch = onProtocolMismatch(socket, () => {
+      window.alert(translate(uiLanguageRef.current, "realtime.protocolMismatch"));
+    });
+    const cleanupFriendRequest = onFriendRequested(socket, (payload) => {
       const activeTok = tokenRef.current;
       if (activeTok) {
         void refreshSocialData(activeTok, undefined, currentUserId);
@@ -1238,9 +1292,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
     });
     const cleanupEmergencyAlert = onEmergencyAlert(socket, (payload) => {
-      window.alert(`[EMERGENCY ALERT]\nFrom User: ${payload.userId}\nMessage: ${payload.message}`);
+      showEmergencyAlert(payload);
     });
-    const cleanupUserStatus = onUserStatus(socket, ({ userId, status }) => {
+    const cleanupUserStatus = onPresenceChanged(socket, ({ userId, status }) => {
       setFriends((prev) =>
         prev.map((friend) =>
           friend.id === userId ? { ...friend, status } : friend,
@@ -1248,7 +1302,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       );
     });
 
-    const cleanupRoomUpdate = onRoomUpdate(socket, ({ type, roomId, data }) => {
+    const cleanupRoomUpdate = onRoomUpdated(socket, ({ type, roomId, data }) => {
       const payload = data as {
         userId?: string;
         name?: string;
@@ -1360,7 +1414,34 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    socket.on("connect", joinKnownRooms);
+    const cleanupRoomAccessRevoked = onRoomAccessRevoked(socket, ({ roomId }) => {
+      setRooms((current) => current.filter((room) => room.id !== roomId));
+      setMessages((current) => current.filter((message) => message.roomId !== roomId));
+      if (activeRoomIdRef.current === roomId) router.push('/');
+    });
+
+    const cleanupCommandState = onCommandState(socket, ({ commandId, state }) => {
+      setMessages((current) => current.map((message) =>
+        message.commandId === commandId ? { ...message, deliveryState: state } : message
+      ));
+    });
+
+    const cleanupConnected = onConnected(socket, () => {
+      const activeToken = tokenRef.current;
+      if (!activeToken) return;
+      void refreshRoomsAndFolders(activeToken, currentUserId)
+        .then(() => {
+          const activeRoomId = activeRoomIdRef.current;
+          if (activeRoomId) return loadGroupMembers(activeRoomId);
+          return undefined;
+        })
+        .catch((error) => console.error("Failed to recover rooms", error));
+      void refreshSocialData(activeToken, undefined, currentUserId)
+        .catch((error) => console.error("Failed to recover social state", error));
+      void listDurableEmergencyNotifications(activeToken)
+        .then((notifications) => notifications.forEach(showEmergencyAlert))
+        .catch((error) => console.error("Failed to recover emergency notifications", error));
+    });
     socket.connect();
 
     return () => {
@@ -1370,11 +1451,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       cleanupRead();
       cleanupTyping();
       cleanupError();
+      cleanupProtocolMismatch();
       cleanupFriendRequest();
       cleanupEmergencyAlert();
       cleanupUserStatus();
       cleanupRoomUpdate();
-      socket.off("connect", joinKnownRooms);
+      cleanupRoomAccessRevoked();
+      cleanupCommandState();
+      cleanupConnected();
       socket.disconnect();
       if (socketRef.current === socket) {
         socketRef.current = null;
@@ -1403,11 +1487,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const handleSendMessage = (roomId: string, content: string, replyTarget: Message | null) => {
     if (!content.trim() || !socketRef.current) return;
 
-    sendMessage(socketRef.current, {
+    const commandId = sendMessage(socketRef.current, {
       roomId,
       content,
       replyTo: replyTarget?.id,
     });
+    const optimistic: Message = {
+      id: commandId,
+      commandId,
+      deliveryState: 'pending',
+      roomId,
+      senderId: currentUserId ?? null,
+      senderName: user.username,
+      content,
+      sentAt: new Date().toISOString(),
+      timestamp: formatMessageTime(new Date()),
+      replyToId: replyTarget?.id,
+      replyTo: replyTarget ? { senderName: replyTarget.senderName, content: replyTarget.content } : null,
+      isOutgoing: true,
+      isRecalled: false,
+      attachments: [],
+      mentions: [],
+    };
+    setMessages((current) => hydrateReplyTargets(sortMessages([...current, optimistic])));
   };
 
   const handleTyping = (roomId: string, isTyping: boolean) => {
@@ -1438,12 +1540,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const handleRecallMessage = (msgId: string) => {
     if (!socketRef.current) return;
-    recallMessage(socketRef.current, msgId);
+    const message = messages.find((item) => item.id === msgId);
+    if (!message) return;
+    recallMessage(socketRef.current, {
+      roomId: message.roomId,
+      messageId: msgId,
+      ...(message.revision ? { expectedRevision: message.revision } : {}),
+    });
   };
 
   const handleUpdateMessage = (roomId: string, messageId: string, content: string) => {
     if (!socketRef.current) return;
-    updateMessage(socketRef.current, { roomId, messageId, content });
+    const message = messages.find((item) => item.id === messageId);
+    updateMessage(socketRef.current, {
+      roomId,
+      messageId,
+      content,
+      expectedRevision: message?.revision ?? '0',
+    });
   };
 
   const handleUpdateProfile = async (profile: ProfileInput) => {

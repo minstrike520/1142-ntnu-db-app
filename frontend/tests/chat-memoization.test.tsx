@@ -34,7 +34,7 @@ describe("message list memo boundary", () => {
 
     app.startMeasure();
     act(() => {
-      app.socket().serverEmit("new_message", makeMessage("room-1", 41, "m-2"));
+      app.socket().serverMessageCreated(makeMessage("room-1", 41, "m-2"));
     });
     await app.settle();
     const m = app.measure("append one message");
@@ -50,7 +50,7 @@ describe("message list memo boundary", () => {
 
     app.startMeasure();
     act(() => {
-      app.socket().serverEmit("new_message", makeMessage("room-3", 11, "f-1"));
+      app.socket().serverMessageCreated(makeMessage("room-3", 11, "f-1"));
     });
     await app.settle();
     const m = app.measure("background message");
@@ -77,7 +77,7 @@ describe("message list memo boundary", () => {
 
     app.startMeasure();
     act(() => {
-      app.socket().serverEmit("user_typing", { roomId: "room-1", userId: "m-1", isTyping: true });
+      app.socket().serverTypingChanged({ roomId: "room-1", userId: "m-1", isTyping: true });
     });
     expect(await screen.findByText(/Member One is typing/)).toBeTruthy();
     await app.settle();
@@ -95,7 +95,7 @@ describe("message list memo boundary", () => {
     expect(screen.getByText("Reply to Me User")).toBeTruthy();
 
     fireEvent.click(screen.getAllByText("Recall").at(-1)!);
-    const recalls = app.socket().emitted.filter((e) => e.event === "recall_message");
+    const recalls = app.socket().emitted.filter((e) => e.event === "message.recall");
     expect(recalls).toHaveLength(1);
     expect(recalls[0].payload).toMatchObject({ messageId: messageId("room-1", 40) });
   });
@@ -108,7 +108,7 @@ describe("ChatContext value stability", () => {
 
     const before = seen.at(-1)!;
     act(() => {
-      app.socket().serverEmit("new_message", makeMessage("room-1", 41, "m-2"));
+      app.socket().serverMessageCreated(makeMessage("room-1", 41, "m-2"));
     });
     await app.settle();
     const after = seen.at(-1)!;
@@ -161,7 +161,7 @@ describe("ChatContext value stability", () => {
 
     const before = seen.at(-1)!;
     act(() => {
-      app.socket().serverEmit("user_typing", { roomId: "room-1", userId: "m-1", isTyping: true });
+      app.socket().serverTypingChanged({ roomId: "room-1", userId: "m-1", isTyping: true });
     });
     expect(await screen.findByText(/Member One is typing/)).toBeTruthy();
 
@@ -170,7 +170,7 @@ describe("ChatContext value stability", () => {
     expect(seen.at(-1)!).toBe(before);
 
     act(() => {
-      app.socket().serverEmit("user_typing", { roomId: "room-1", userId: "m-1", isTyping: false });
+      app.socket().serverTypingChanged({ roomId: "room-1", userId: "m-1", isTyping: false });
     });
     await app.settle();
     expect(seen.at(-1)!).toBe(before);
@@ -225,7 +225,7 @@ describe("ChatContext value stability", () => {
     expect(readersOf(seen.at(-1)!)).toEqual(["Member One"]);
 
     act(() => {
-      app.socket().serverEmit("read_update", {
+      app.socket().serverReadAdvanced({
         roomId: "room-1",
         userId: "m-2",
         messageId: messageId("room-1", 40),

@@ -1,6 +1,6 @@
 # API Documentation
 
-This document defines the RESTful API and Socket.IO real-time communication interface provided by the backend.
+This document defines the RESTful API and native WebSocket protocol provided by the backend.
 
 ---
 
@@ -49,26 +49,21 @@ This document defines the RESTful API and Socket.IO real-time communication inte
 | | `POST` | [`/users/me/emergency-contacts`](#post-usersmeemergency-contacts) | Yes | Add or update emergency contact |
 | | `DELETE` | [`/users/me/emergency-contacts/:contactId`](#delete-usersmeemergency-contactscontactid) | Yes | Delete emergency contact |
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | Yes | Check inactivity to trigger alert automatically |
+| **Realtime** | `POST` | [`/realtime/ticket`](#post-realtimeticket) | Yes | Issue a short-lived, single-use WebSocket ticket |
+| | `GET` | [`/realtime/emergency-notifications`](#get-realtimeemergency-notifications) | Yes | Recover durable emergency notifications |
 
-### Socket.IO Real-Time Communication
+### Native WebSocket Protocol (`near-chat.v1`)
 
-| Type | Event Name | Auth Required | Description |
+| Type | Frame Type | Auth Required | Description |
 | :--- | :--- | :--- | :--- |
-| **Client-to-Server** | `join_room` | Yes (On connection) | Subscribe to message broadcasts of a chat room |
-| | `leave_room` | Yes (On connection) | Unsubscribe from message broadcasts of a chat room |
-| | `send_message` | Yes (On connection) | Send chat message (with attachments or replies) |
-| | `recall_message` | Yes (On connection) | Recall message (Sender only) |
-| | `typing` | Yes (On connection) | Broadcast typing state to other room members |
-| | `read_receipt` | Yes (On connection) | Update read receipt cursor to specified message |
-| **Server-to-Client** | `new_message` | Yes (On connection) | Receive new message notification (including mentions) |
-| | `message_recalled` | Yes (On connection) | Message has been recalled by the sender |
-| | `user_typing` | Yes (On connection) | Typing state changes of other members |
-| | `read_update` | Yes (On connection) | Read receipt updates of other members |
-| | `room_update` | Yes (On connection) | Room settings changes, member changes, or kick notifications. See [room_update subtypes](#room_update-subtypes). |
-| | `friend_request` | Yes (On connection) | Real-time notification for friend request status changes (sent, accepted, rejected) |
-| | `user_status` | Yes (On connection) | Online/offline presence change of a friend |
-| | `emergency_alert` | Yes (On connection) | Receive emergency alert notification from contact |
-| | `error` | Yes (On connection) | Error report for failed event processing |
+| **Commands** | `auth.renew`, `rooms.sync` | Yes | Renew the session lease and synchronize authoritative room subscriptions |
+| | `message.send`, `message.edit`, `message.recall`, `message.delta` | Yes | Mutate or recover durable message changes |
+| | `read.advance`, `typing.set` | Yes | Advance monotonic read position or publish expiring typing indication |
+| **Events** | `session.ready`, `auth.expiring`, `rooms.synced`, `room.access_revoked` | Yes | Session and subscription lifecycle |
+| | `message.created`, `message.updated`, `message.recalled`, `message.delta` | Yes | Durable message change delivery and recovery |
+| | `read.advanced`, `typing.changed`, `presence.changed` | Yes | Interaction state |
+| | `room.updated`, `friend.requested`, `emergency.alert`, `server.draining` | Yes | Domain and server lifecycle notifications |
+| **Responses** | `command.ack`, `command.nack` | Yes | Command correlation, canonical result, or stable error code |
 
 ---
 
@@ -78,7 +73,7 @@ This document defines the RESTful API and Socket.IO real-time communication inte
 
 Docker Compose exposes the following host ports:
 - **Frontend App**: `http://localhost:3005` (container port `3000`)
-- **Backend API / Socket Server**: `http://localhost:4005` (container port `4000`)
+- **Backend API / WebSocket Server**: `http://localhost:4005` (container port `4000`)
 - **PostgreSQL Database**: `localhost:5435` (container port `5432`)
 
 When connecting the frontend to the backend, configure the environment variable:
@@ -1389,73 +1384,76 @@ All errors return the following JSON structure:
 
 ---
 
-## 3. Socket.IO Real-Time Communication
+## 3. Native WebSocket Real-Time Protocol
 
-### Connection
+#### `POST /realtime/ticket`
 
-- **URL**: Same host as REST API (default port `4000`)
-- **Namespace**: `/`
-- **Authentication**: Connection requires `auth_token` Cookie or `Authorization: Bearer <token>` Header
-- **Personal channel**: Upon connection, the server automatically adds the socket to `user_<userId>`. Targeted events (e.g., friend request notifications, room approval) are delivered via this personal channel. No client-side action is needed.
+- **Authentication**: Bearer access token required.
+- **Response**: `201 Created` with `{ ticket, expiresAt, leaseExpiresAt }`.
 
-### Client-to-Server Events
+#### `GET /realtime/emergency-notifications`
 
-| Event Name | Payload | Description |
+- **Authentication**: Bearer access token required.
+- **Response**: `200 OK` with an array of `{ notificationId, userId, message, createdAt }` ordered newest first.
+
+### Ticket and connection
+
+1. Call `POST /api/v1/realtime/ticket` with the access-token Bearer header. The `201` response contains `ticket`, `expiresAt`, and `leaseExpiresAt`.
+2. Connect to `ws(s)://<api-host>/ws?ticket=<ticket>` and offer the `near-chat.v1` WebSocket subprotocol. The browser must send an allowed `Origin`.
+3. A ticket expires after at most 45 seconds, is single-use within the backend process, has audience `near-chat-ws`, and never outlives the access token. The ticket is consumed during upgrade; the access token is not placed in the WebSocket URL.
+4. After upgrade the server emits `session.ready`. Before the session lease expires it emits `auth.expiring`; obtain a new ticket and send `auth.renew` without reconnecting.
+
+`POST /api/v1/realtime/ticket` and `GET /api/v1/realtime/emergency-notifications` both require Bearer authentication. The latter returns the authenticated user's durable emergency notifications, including alerts missed while offline.
+
+### Envelope
+
+Every frame is strict JSON with `version: 1`, a unique `id`, logical `streamId`, and a `reliable` delivery-policy flag. Client commands use `kind: "command"`; server frames use `kind: "event"`, `"ack"`, or `"nack"`. A response uses `correlationId` to reference its command.
+
+```json
+{
+  "version": 1,
+  "kind": "command",
+  "id": "019-command-id",
+  "type": "message.send",
+  "streamId": "room:8ea2...",
+  "reliable": true,
+  "payload": { "roomId": "8ea2...", "content": "Hello" }
+}
+```
+
+All commands except `typing.set` must set `reliable: true`. ACK means authorization and the durable business mutation completed; it does not mean every subscriber received the broadcast. Stable NACK codes include `INVALID_PAYLOAD`, `AUTH_EXPIRED`, `FORBIDDEN`, `NOT_FOUND`, `VERSION_CONFLICT`, `IDEMPOTENCY_CONFLICT`, `CURSOR_INVALID`, `RATE_LIMITED`, `LIMIT_EXCEEDED`, `BACKPRESSURE`, and `RETRY_LATER`. The NACK payload also contains `retryable`, optional `retryAfterMs`, and `traceId`.
+
+### Commands
+
+| `type` | Payload | Semantics |
 | :--- | :--- | :--- |
-| `join_room` | `{ roomId: string }` | Subscribe to message broadcasts of a chat room (must be a member) |
-| `leave_room` | `{ roomId: string }` | Unsubscribe |
-| `send_message` | `{ roomId: string, content: string, replyTo?: string, attachmentIds?: string[] }` | Send message; `replyTo` is the referenced message ID; `attachmentIds` is the array of attachment IDs. Note: `content` can be empty only if at least one attachment ID is provided; otherwise `content` must not be empty. |
-| `recall_message` | `{ messageId: string }` | Recall message (Sender only) |
-| `typing` | `{ roomId: string, isTyping: boolean }` | Broadcast typing state |
-| `read_receipt` | `{ roomId: string, messageId: string }` | Update read receipt cursor to specified message |
+| `auth.renew` | `{ ticket }` | Consume a new ticket for the same user and extend the lease |
+| `rooms.sync` | `{ roomIds?: string[] }` | Replace subscriptions with the server-authoritative authorized room set; the supplied list is only advisory |
+| `message.send` | `{ roomId, content, replyToId?, attachmentIds? }` | Create a message. At least non-empty `content` or one attachment is required. The command `id` is the idempotency key; replaying the same intent returns the original message |
+| `message.edit` | `{ roomId, messageId, content, expectedRevision }` | Edit only when `expectedRevision` matches |
+| `message.recall` | `{ roomId, messageId, expectedRevision? }` | Recall a message idempotently |
+| `message.delta` | `{ cursor?, limit? }` | Recover authorized message changes through a signed opaque cursor and fixed high-water window |
+| `read.advance` | `{ roomId, messageId }` | Move the member's read position forward in canonical message order; never regress it |
+| `typing.set` | `{ roomId, isTyping, ttlMs? }` | Publish a best-effort typing indication that expires; default TTL is 3 seconds |
 
-### Server-to-Client Events
+Message content is limited to 16 KiB of UTF-8 data, attachment lists to 20 items, a frame to 64 KiB, subscriptions to 1,000 per connection, and concurrent connections to 10 per user. The default command budget is 20/second with a burst of 40.
 
-| Event Name | Payload Type | Description |
-| :--- | :--- | :--- |
-| `new_message` | `MessageWithSender` | Receive new message (mentions also trigger this event) |
-| `message_recalled` | `{ messageId: string }` | Message has been recalled |
-| `user_typing` | `{ roomId: string, userId: string, isTyping: boolean }` | Typing status of other members |
-| `read_update` | `{ roomId: string, userId: string, messageId: string }` | Read receipt updates of other members |
-| `room_update` | `{ type: string, roomId: string, data: unknown }` | Room or membership state change. `type` determines the subtype. See [`room_update` Subtypes](#room_update-subtypes). |
-| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected', createdAt: string }` | Friend request status change notification. Delivered to **both** the addressee (new request) and the requester (accepted / rejected). The client should refresh friend and pending-request lists upon receiving this event regardless of `status`. |
-| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | Presence update for a friend. Delivered when a friend connects or disconnects. |
-| `emergency_alert` | `{ userId: string, message: string }` | Receive emergency alert from contact |
-| `error` | `ApiError` | Error report for failed event processing |
+### Events
 
----
+| `type` | Payload summary |
+| :--- | :--- |
+| `session.ready` | User identity, lease expiry, and negotiated resource limits |
+| `auth.expiring` | Current lease expiry |
+| `rooms.synced` | Authoritative subscribed room IDs |
+| `room.access_revoked` | Room whose subscription was immediately removed |
+| `message.created`, `message.updated`, `message.recalled` | `{ revision, message }` canonical snapshot |
+| `message.delta` | Ordered `changes`, opaque `cursor`, fixed `highWaterRevision`, and `complete` |
+| `read.advanced` | `{ roomId, userId, messageId }` |
+| `typing.changed` | `{ roomId, userId, isTyping, expiresAt }` |
+| `presence.changed` | `{ userId, status: "online" | "offline" }`; offline has a brief disconnect grace period and all user sessions are considered |
+| `room.updated` | `{ roomId, change, data }` for room and membership changes |
+| `friend.requested` | `{ data }` friend relationship update |
+| `emergency.alert` | `{ notificationId, userId, message }`; persisted before realtime publication |
+| `server.draining` | `{ retryAfterMs }` before graceful restart |
 
-### `room_update` Subtypes
-
-All `room_update` events share the envelope `{ type: string, roomId: string, data: any }`. The `type` field determines how the payload should be handled.
-
-#### Room-level subtypes
-Broadcast to all current members of the room (`room_<roomId>` socket channel).
-
-| `type` | `data` shape | Trigger | Who receives it |
-| :--- | :--- | :--- | :--- |
-| `ROOM_SETTINGS_UPDATED` | `Room` object | `PATCH /rooms/:id` (name, avatar, settings) | All room members |
-| `ROOM_AVATAR_UPDATED` | `{ roomId: string, avatarUrl: string }` | Room avatar upload | All room members |
-| `ROOM_DELETED` | `{ roomId: string }` | `DELETE /rooms/:id` (archive/delete) | All room members |
-
-#### Member-level subtypes
-Broadcast to all current members of the room.
-
-| `type` | `data` shape | Trigger | Who receives it |
-| :--- | :--- | :--- | :--- |
-| `MEMBER_JOINED` | `{ userId: string }` | User joins via invite code (no approval required) | All existing room members |
-| `MEMBER_APPROVED` | `{ userId: string }` | Pending member approved by owner/admin | All existing room members |
-| `MEMBER_UPDATED` | `{ userId: string, role?: string, nickname?: string, isMuted?: boolean }` | Member role/nickname/mute changed | All room members |
-| `MEMBER_KICKED` | `{ userId: string }` | Member removed by owner/admin | All room members (including kicked user) |
-| `MEMBER_LEFT` | `{ userId: string }` | Member voluntarily left | All remaining room members |
-| `OWNERSHIP_TRANSFERRED` | `{ oldOwner: string, newOwner: string }` | Group ownership transferred | All room members |
-| `USER_UPDATED` | `{ userId: string, name?: string, avatarUrl?: string }` | Member updates their own profile | All rooms the user belongs to |
-
-#### Personal subtypes
-Sent **only** to the target user's personal socket channel (`user_<userId>`), not to the room.
-
-| `type` | `data` shape | Trigger | Who receives it |
-| :--- | :--- | :--- | :--- |
-| `ROOM_JOINED` | `{}` | User joins via invite code **or** pending member is approved | Only the joining / approved user |
-
-> **Client handling**: When `ROOM_JOINED` is received, the client should call `GET /rooms` to refresh the full room list. The client must then call `join_room` for the newly appeared room to begin receiving its broadcasts.
+Reliable commands awaiting ACK are resent with the same ID after reconnect. After each connection the client sends `rooms.sync`, then runs `message.delta`; live message changes above the recovery high-water are buffered until the delta window completes. Duplicate or out-of-order message snapshots are ignored by per-message revision. Typing is not repaired by delta sync.

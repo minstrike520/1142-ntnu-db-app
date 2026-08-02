@@ -78,7 +78,7 @@ export const makeUserService = (
   emergencyContactRepo: IEmergencyContactRepository,
   refreshTokenRepo: IRefreshTokenRepository,
   jwt: JwtHelper,
-  notifyEmergencyContact?: (contactId: string, payload: { userId: string; message: string }) => void | Promise<void>,
+  notifyEmergencyContact?: (contactId: string, payload: { userId: string; message: string; idempotencyKey: string }) => void | Promise<void>,
   friendRepo?: { getFriends(userId: string): Promise<FriendResponse[]> },
   onUserUpdated?: (userId: string, data: { name?: string; avatarUrl?: string }) => void | Promise<void>,
 ) => {
@@ -98,6 +98,7 @@ export const makeUserService = (
         await notifyEmergencyContact(contact.contactId, {
           userId,
           message: msg,
+          idempotencyKey: `inactivity:${userId}:${user.lastActivity.toISOString()}:${contact.contactId}`,
         });
       }
       recipients.push(contact.contactId);
@@ -335,7 +336,14 @@ export const makeUserService = (
         return { alerted: false, recipients: [], reason: 'ALREADY_ALERTED' };
       }
 
-      return notifyContacts(userId, 'User has exceeded their inactivity warning threshold');
+      try {
+        const result = await notifyContacts(userId, 'User has exceeded their inactivity warning threshold');
+        await emergencyContactRepo.completeAlert(userId, user.lastActivity);
+        return result;
+      } catch (error) {
+        await emergencyContactRepo.releaseAlert(userId, user.lastActivity);
+        throw error;
+      }
     },
 
 

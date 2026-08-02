@@ -1,11 +1,11 @@
 import type { makeUserService } from '../services/userService';
 import type { IUserRepository } from '../models/IUserRepository';
-import { isUserOnline } from '../realtime/presence';
 
 export function startInactivityJob(
   userRepo: IUserRepository,
   userService: ReturnType<typeof makeUserService>,
-  intervalMs = 60 * 60 * 1000 // default 1 hour
+  intervalMs = 60 * 60 * 1000, // default 1 hour
+  isOnline: (userId: string) => boolean = () => false,
 ) {
   let isRunning = false;
   return setInterval(async () => {
@@ -16,7 +16,7 @@ export function startInactivityJob(
       const now = new Date();
       for (const user of users) {
         try {
-          if (isUserOnline(user.userId)) {
+          if (isOnline(user.userId)) {
             await userRepo.update(user.userId, { lastActivity: now });
             continue;
           }
@@ -32,6 +32,5 @@ export function startInactivityJob(
     }
   }, intervalMs);
 }
-
 
 

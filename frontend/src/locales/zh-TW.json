@@ -53,6 +53,11 @@
   "settingsHeader": {
     "backToChat": "回到聊天室"
   },
+  "realtime": {
+    "emergencyAlertTitle": "緊急警報",
+    "emergencyAlertBody": "來自使用者 {userId}：{message}",
+    "protocolMismatch": "Near Chat 已更新，請重新載入頁面以安全地重新連線。"
+  },
   "emergency": {
     "emergencyReporting": "離線警示",
     "enableOfflineWarning": "啟用離線警示",

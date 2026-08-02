@@ -42,7 +42,6 @@ const reactCompilerForTests = (): Plugin => ({
  * Without it, render-count measurements would overstate re-render costs.
  *
  * Module aliases (order matters — most specific first):
- *  - socket.io-client  → in-memory fake socket (tests can emit server events)
  *  - next/navigation   → controllable pathname/router mock
  *  - @iconify/react    → static stub (the real one fetches icon data over HTTP)
  *  - @/lib/api         → fixture-backed REST mock
@@ -53,7 +52,6 @@ export default defineConfig({
   plugins: [reactCompilerForTests()],
   resolve: {
     alias: [
-      { find: /^socket\.io-client$/, replacement: r("tests/mocks/socket-io-client.ts") },
       { find: /^next\/navigation$/, replacement: r("tests/mocks/next-navigation.ts") },
       { find: /^@iconify\/react$/, replacement: r("tests/mocks/iconify.tsx") },
       { find: /^@\/lib\/api$/, replacement: r("tests/mocks/api.ts") },

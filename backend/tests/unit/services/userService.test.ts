@@ -59,6 +59,8 @@ describe('userService', () => {
       upsert: mock(),
       delete: mock(),
       recordAlertIfNew: mock(),
+      completeAlert: mock(),
+      releaseAlert: mock(),
     };
     mockRefreshTokenRepo = {
       create: mock(),
@@ -494,7 +496,35 @@ describe('userService', () => {
       expect(notifyEmergencyContact).toHaveBeenCalledWith('u2', {
         userId: 'u1',
         message: 'inactive',
+        idempotencyKey: 'inactivity:u1:2026-01-01T00:00:00.000Z:u2',
       });
+      expect(emergencyContactRepo.completeAlert).toHaveBeenCalledWith(
+        'u1',
+        inactiveUser.lastActivity,
+      );
+    });
+
+    it('releases the alert claim when durable delivery fails so the job can retry', async () => {
+      mockRepo.findById.mockResolvedValue(inactiveUser);
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      emergencyContactRepo.findByUserId.mockResolvedValue([{
+        userId: 'u1',
+        contactId: 'u2',
+        message: 'inactive',
+        createdAt: new Date(),
+      }]);
+      notifyEmergencyContact.mockRejectedValueOnce(new Error('database unavailable'));
+
+      await expect(userService.checkInactivity(
+        'u1',
+        new Date('2026-01-04T00:00:00.000Z'),
+      )).rejects.toThrow('database unavailable');
+
+      expect(emergencyContactRepo.releaseAlert).toHaveBeenCalledWith(
+        'u1',
+        inactiveUser.lastActivity,
+      );
+      expect(emergencyContactRepo.completeAlert).not.toHaveBeenCalled();
     });
 
     it('does not alert below the inactivity threshold', async () => {

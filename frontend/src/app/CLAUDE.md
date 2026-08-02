@@ -22,7 +22,7 @@ Next.js App Router directory for the implemented frontend. It contains public au
 ## For AI Agents
 
 ### Working In This Directory
-- Add `"use client"` to route components that use hooks, context, localStorage, Socket.IO, or browser APIs.
+- Add `"use client"` to route components that use hooks, context, localStorage, WebSocket, or browser APIs.
 - New authenticated routes should generally live under `(main)/` so they share the sidebar layout.
 - Import shared frontend state through `@/context/ChatContext` where appropriate.
 - Use UI primitives from `@/components/ui/*` rather than duplicating button/input/modal styling.

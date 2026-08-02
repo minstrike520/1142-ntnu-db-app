@@ -49,6 +49,7 @@ This document defines the relational schema for the real-time group chat applica
 | `reply_to_id` | UUID | Replied message ID | FK(`messages`), SET NULL |
 | `is_recalled` | BOOLEAN | If message has been recalled | NOT NULL, DEFAULT FALSE |
 | `sent_at` | TIMESTAMPTZ | Sent timestamp | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+| `revision` | BIGINT | Global realtime revision of the canonical snapshot | UNIQUE, NOT NULL, DEFAULT `nextval('realtime_revision_seq')` |
 
 #### `attachments`
 | Column Name | Type | Description | Constraints |
@@ -75,6 +76,7 @@ This document defines the relational schema for the real-time group chat applica
 | `is_muted` | BOOLEAN | Muted status | NOT NULL, DEFAULT FALSE |
 | `last_read_id` | UUID | ID of last read message | FK(`messages`), SET NULL |
 | `join_time` | TIMESTAMPTZ | Join timestamp | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+| `membership_epoch` | UUID | Rotating scope token used to invalidate delta cursors after access-state changes | NOT NULL, DEFAULT `gen_random_uuid()` |
 
 #### `friendships`
 | Column Name | Type | Description | Constraints |
@@ -138,3 +140,49 @@ This document defines the relational schema for the real-time group chat applica
 | `user_id` | UUID | User ID | PK, FK(`users`), CASCADE DELETE |
 | `last_activity_at`| TIMESTAMPTZ| Last activity time | PK, NOT NULL |
 | `alerted_at` | TIMESTAMPTZ | Alert triggered timestamp | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+| `delivery_state` | VARCHAR(20) | Recoverable scheduler claim: `pending` or `completed` | NOT NULL, DEFAULT `pending`, CHECK |
+
+An interrupted `pending` claim is resumed on the next inactivity-job run. It changes to `completed` only after every recipient has a durable, idempotent notification.
+
+#### `message_changes`
+Durable, immutable snapshots used by `message.delta`. A row is created for every message create, edit, or recall.
+
+| Column Name | Type | Description | Constraints |
+| :--- | :--- | :--- | :--- |
+| `revision` | BIGINT | Global ordering key | PK, DEFAULT `nextval('realtime_revision_seq')` |
+| `message_id` | UUID | Changed message | FK(`messages`), CASCADE DELETE, NOT NULL |
+| `room_id` | UUID | Authorization and recovery scope | FK(`chat_rooms`), CASCADE DELETE, NOT NULL |
+| `change_type` | VARCHAR(10) | `created`, `updated`, or `recalled` | NOT NULL, CHECK |
+| `sender_id` | UUID | Sender snapshot | FK(`users`), SET NULL |
+| `content` | TEXT | Content snapshot | NOT NULL |
+| `reply_to_id` | UUID | Reply target snapshot | FK(`messages`), SET NULL |
+| `is_recalled` | BOOLEAN | Recall snapshot | NOT NULL |
+| `sent_at` | TIMESTAMPTZ | Original message time | NOT NULL |
+| `changed_at` | TIMESTAMPTZ | Change commit time | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+
+#### `message_commands`
+Stores message mutation idempotency claims. Reusing `(user_id, command_id)` with a different command type or `payload_hash` is rejected.
+
+| Column Name | Type | Description | Constraints |
+| :--- | :--- | :--- | :--- |
+| `user_id` | UUID | Command owner | PK, FK(`users`), CASCADE DELETE |
+| `command_id` | VARCHAR(128) | Client-generated command ID | PK |
+| `command_type` | VARCHAR(20) | `message.send`, `message.edit`, or `message.recall` | NOT NULL, CHECK |
+| `payload_hash` | CHAR(64) | SHA-256 hash of message intent | NOT NULL |
+| `message_id` | UUID | Canonical result | FK(`messages`), CASCADE DELETE |
+| `result_revision` | BIGINT | Revision committed by the command, used to replay its original result | NULL until commit |
+| `created_at` | TIMESTAMPTZ | Claim creation time | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+
+#### `emergency_notifications`
+Durable emergency-alert inbox. `pending` rows remain recoverable even if realtime publication fails.
+
+| Column Name | Type | Description | Constraints |
+| :--- | :--- | :--- | :--- |
+| `notification_id` | UUID | Notification ID | PK, DEFAULT `gen_random_uuid()` |
+| `source_user_id` | UUID | Inactive source user | FK(`users`), CASCADE DELETE, NOT NULL |
+| `recipient_id` | UUID | Emergency contact | FK(`users`), CASCADE DELETE, NOT NULL |
+| `idempotency_key` | VARCHAR(255) | Stable inactivity/contact key | NOT NULL, UNIQUE with `recipient_id` |
+| `message` | TEXT | Alert message | NOT NULL |
+| `delivery_state` | VARCHAR(20) | `pending` or `published` | NOT NULL, DEFAULT `pending`, CHECK |
+| `created_at` | TIMESTAMPTZ | Durable creation time | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+| `published_at` | TIMESTAMPTZ | Last successful realtime publication time | NULLABLE |

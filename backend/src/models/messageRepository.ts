@@ -12,6 +12,7 @@ export interface MessageRow {
   reply_to_id?: string | null;
   is_recalled: boolean;
   sent_at: Date;
+  revision?: bigint | string | number;
 }
 
 export interface MessageWithSenderRow {
@@ -22,6 +23,7 @@ export interface MessageWithSenderRow {
   reply_to_id?: string | null;
   is_recalled: boolean;
   sent_at: Date;
+  revision?: bigint | string | number;
   sender_user_id?: string | null;
   sender_name?: string | null;
   sender_avatar_url?: string | null;
@@ -63,6 +65,7 @@ function mapRowToMessage(row: MessageRow | MessageWithSenderRow): Message {
     replyToId: row.reply_to_id ?? undefined,
     isRecalled: row.is_recalled,
     sentAt: row.sent_at,
+    ...(row.revision === undefined ? {} : { revision: String(row.revision) }),
   };
 }
 
@@ -223,6 +226,14 @@ export class MessageRepository implements IMessageRepository {
           throw new ValidationError('Attachments must exist and must not already belong to a message');
         }
       }
+
+      await tx`
+        INSERT INTO message_changes (
+          revision, message_id, room_id, change_type, sender_id, content, reply_to_id, is_recalled, sent_at
+        )
+        SELECT revision, message_id, room_id, 'created', sender_id, content, reply_to_id, is_recalled, sent_at
+        FROM messages WHERE message_id = ${createdMessageId}
+      `;
     });
 
     const [message] = await this.fetchMessageWithSenderByIds([createdMessageId]);
@@ -230,22 +241,43 @@ export class MessageRepository implements IMessageRepository {
   }
 
   async markRecalled(messageId: string): Promise<MessageWithSender> {
-    const rows = await this.sql<{ message_id: string }[]>`
-      UPDATE messages
-      SET is_recalled = true
-      WHERE message_id = ${messageId}
-      RETURNING message_id
-    `;
-    if (rows.length === 0) throw new Error('Message not found');
+    let found = false;
+    await this.sql.begin(async (tx) => {
+      const existing = await tx<{ is_recalled: boolean }[]>`
+        SELECT is_recalled FROM messages WHERE message_id = ${messageId} FOR UPDATE
+      `;
+      if (!existing[0]) return;
+      found = true;
+      if (existing[0].is_recalled) return;
+      const revisions = await tx<{ revision: bigint | string | number }[]>`
+        SELECT nextval('realtime_revision_seq') AS revision
+      `;
+      await tx`
+        UPDATE messages
+        SET is_recalled = true, content = '', revision = ${revisions[0].revision}
+        WHERE message_id = ${messageId}
+      `;
+      await tx`
+        INSERT INTO message_changes (
+          revision, message_id, room_id, change_type, sender_id, content, reply_to_id, is_recalled, sent_at
+        )
+        SELECT revision, message_id, room_id, 'recalled', sender_id, content, reply_to_id, is_recalled, sent_at
+        FROM messages WHERE message_id = ${messageId}
+      `;
+    });
+    if (!found) throw new Error('Message not found');
     const [message] = await this.fetchMessageWithSenderByIds([messageId]);
     return message;
   }
 
   async update(messageId: string, content: string, mentions?: string[]): Promise<MessageWithSender> {
     await this.sql.begin(async (tx) => {
+      const revisions = await tx<{ revision: bigint | string | number }[]>`
+        SELECT nextval('realtime_revision_seq') AS revision
+      `;
       const rows = await tx<{ message_id: string }[]>`
         UPDATE messages
-        SET content = ${content}
+        SET content = ${content}, revision = ${revisions[0].revision}
         WHERE message_id = ${messageId}
         RETURNING message_id
       `;
@@ -263,6 +295,14 @@ export class MessageRepository implements IMessageRepository {
           `;
         }
       }
+
+      await tx`
+        INSERT INTO message_changes (
+          revision, message_id, room_id, change_type, sender_id, content, reply_to_id, is_recalled, sent_at
+        )
+        SELECT revision, message_id, room_id, 'updated', sender_id, content, reply_to_id, is_recalled, sent_at
+        FROM messages WHERE message_id = ${messageId}
+      `;
     });
 
     const [message] = await this.fetchMessageWithSenderByIds([messageId]);

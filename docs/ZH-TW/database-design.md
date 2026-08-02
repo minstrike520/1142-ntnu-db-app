@@ -49,6 +49,7 @@
 | `reply_to_id` | UUID | 被引用的訊息 ID | FK(`messages`), 刪除時設為 SET NULL |
 | `is_recalled` | BOOLEAN | 訊息是否已被收回 | NOT NULL, 預設值: FALSE |
 | `sent_at` | TIMESTAMPTZ | 發送時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
+| `revision` | BIGINT | Canonical snapshot 的全域即時通訊版本 | UNIQUE, NOT NULL, 預設值: `nextval('realtime_revision_seq')` |
 
 #### `attachments` (附件)
 | 欄位名稱 | 類型 | 說明 | 條件約束 |
@@ -75,6 +76,7 @@
 | `is_muted` | BOOLEAN | 成員在此聊天室是否被禁言 | NOT NULL, 預設值: FALSE |
 | `last_read_id` | UUID | 最後已讀的訊息 ID | FK(`messages`), 刪除時設為 SET NULL |
 | `join_time` | TIMESTAMPTZ | 加入聊天室時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
+| `membership_epoch` | UUID | 存取狀態改變時輪替，用來使舊 delta cursor 失效 | NOT NULL, 預設值: `gen_random_uuid()` |
 
 #### `friendships` (好友關係)
 | 欄位名稱 | 類型 | 說明 | 條件約束 |
@@ -138,3 +140,49 @@
 | `user_id` | UUID | 使用者 ID | PK, FK(`users`), CASCADE DELETE |
 | `last_activity_at`| TIMESTAMPTZ| 使用者最後活動時間 | PK, NOT NULL |
 | `alerted_at` | TIMESTAMPTZ | 警報觸發時間標記 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
+| `delivery_state` | VARCHAR(20) | 可恢復的排程 claim：`pending` 或 `completed` | NOT NULL, 預設值: `pending`, CHECK |
+
+若程序中斷，下一輪 inactivity job 會續跑 `pending` claim；只有每位收件人的冪等持久通知都建立成功後，才改為 `completed`。
+
+#### `message_changes` (訊息變更)
+供 `message.delta` 使用的不可變持久化 snapshot；每次建立、編輯或收回訊息都新增一筆。
+
+| 欄位名稱 | 類型 | 說明 | 條件約束 |
+| :--- | :--- | :--- | :--- |
+| `revision` | BIGINT | 全域排序鍵 | PK, 預設值: `nextval('realtime_revision_seq')` |
+| `message_id` | UUID | 異動的訊息 | FK(`messages`), CASCADE DELETE, NOT NULL |
+| `room_id` | UUID | 授權與修復範圍 | FK(`chat_rooms`), CASCADE DELETE, NOT NULL |
+| `change_type` | VARCHAR(10) | `created`、`updated` 或 `recalled` | NOT NULL, CHECK |
+| `sender_id` | UUID | 發送者 snapshot | FK(`users`), SET NULL |
+| `content` | TEXT | 內容 snapshot | NOT NULL |
+| `reply_to_id` | UUID | 引用目標 snapshot | FK(`messages`), SET NULL |
+| `is_recalled` | BOOLEAN | 收回狀態 snapshot | NOT NULL |
+| `sent_at` | TIMESTAMPTZ | 原始訊息時間 | NOT NULL |
+| `changed_at` | TIMESTAMPTZ | 異動提交時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
+
+#### `message_commands` (訊息命令)
+保存訊息異動的冪等 claim；若以不同命令類型或 `payload_hash` 重用 `(user_id, command_id)`，伺服器會拒絕。
+
+| 欄位名稱 | 類型 | 說明 | 條件約束 |
+| :--- | :--- | :--- | :--- |
+| `user_id` | UUID | 命令擁有者 | PK, FK(`users`), CASCADE DELETE |
+| `command_id` | VARCHAR(128) | 客戶端產生的命令 ID | PK |
+| `command_type` | VARCHAR(20) | `message.send`、`message.edit` 或 `message.recall` | NOT NULL, CHECK |
+| `payload_hash` | CHAR(64) | 訊息意圖的 SHA-256 | NOT NULL |
+| `message_id` | UUID | Canonical 結果 | FK(`messages`), CASCADE DELETE |
+| `result_revision` | BIGINT | 命令提交的 revision，用於重播原始結果 | 提交前可為 NULL |
+| `created_at` | TIMESTAMPTZ | Claim 建立時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
+
+#### `emergency_notifications` (緊急通知)
+持久化的緊急警報收件匣；即時發布失敗時，`pending` 資料仍可補取。
+
+| 欄位名稱 | 類型 | 說明 | 條件約束 |
+| :--- | :--- | :--- | :--- |
+| `notification_id` | UUID | 通知 ID | PK, 預設值: `gen_random_uuid()` |
+| `source_user_id` | UUID | 不活躍的來源使用者 | FK(`users`), CASCADE DELETE, NOT NULL |
+| `recipient_id` | UUID | 緊急聯絡人 | FK(`users`), CASCADE DELETE, NOT NULL |
+| `idempotency_key` | VARCHAR(255) | 固定的不活躍狀態／聯絡人鍵 | NOT NULL，與 `recipient_id` 組合 UNIQUE |
+| `message` | TEXT | 警報訊息 | NOT NULL |
+| `delivery_state` | VARCHAR(20) | `pending` 或 `published` | NOT NULL, 預設值: `pending`, CHECK |
+| `created_at` | TIMESTAMPTZ | 持久化建立時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
+| `published_at` | TIMESTAMPTZ | 最近一次成功即時發布時間 | 可為 NULL |

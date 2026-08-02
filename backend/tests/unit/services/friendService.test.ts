@@ -3,6 +3,22 @@ import { makeFriendService } from '../../../src/services/friendService';
 import { AppError } from '../../../src/utils/AppError';
 
 describe('friendService', () => {
+  it('uses the injected realtime presence lookup in the friend list', async () => {
+    const mockRepo = {
+      getFriends: mock().mockResolvedValue([{
+        friend: { userId: 'u2', name: 'Friend' },
+        friendshipCreatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      }]),
+    } as any;
+    const service = makeFriendService(mockRepo, undefined, undefined, (userId) => userId === 'u2');
+
+    expect(await service.getFriends('u1')).toEqual([{
+      friend: { userId: 'u2', name: 'Friend' },
+      friendshipCreatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      status: 'online',
+    }]);
+  });
+
   it('respondFriendRequest throws NOT_FOUND when accepting non-existent request', async () => {
     const mockRepo = {
       isBlocked: mock().mockResolvedValue(false),
@@ -77,7 +93,7 @@ describe('friendService', () => {
     const service = makeFriendService(mockRepo, notifyUser);
     const result = await service.sendFriendRequest('u1', 'u2');
     expect(result as any).toEqual(request);
-    expect(notifyUser).toHaveBeenCalledWith('u2', 'friend_request', request);
+    expect(notifyUser).toHaveBeenCalledWith('u2', request);
   });
 
   it('sendFriendRequest auto-accepts a reciprocal pending request and reopens private room if exists', async () => {
@@ -95,7 +111,7 @@ describe('friendService', () => {
     expect(result as any).toEqual(accepted);
     expect(mockRepo.acceptFriendRequest).toHaveBeenCalledWith('u2', 'u1');
     expect(privateRooms.reopenPrivateRoom).toHaveBeenCalledWith('u1', 'u2');
-    expect(notifyUser).toHaveBeenCalledWith('u2', 'friend_request', accepted);
+    expect(notifyUser).toHaveBeenCalledWith('u2', accepted);
   });
 
   it('respondFriendRequest accepted reopens private room if exists', async () => {

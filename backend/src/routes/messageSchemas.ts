@@ -1,13 +1,18 @@
 import { z } from 'zod';
+import { REALTIME_LIMITS } from '@shared/realtime';
 
 const idSchema = z.string().trim().min(1, 'Id cannot be empty');
+const messageTextSchema = z.string().trim().refine(
+  (content) => new TextEncoder().encode(content).byteLength <= REALTIME_LIMITS.maxMessageBytes,
+  { message: 'Message exceeds the UTF-8 byte limit' },
+);
 
 export const sendMessageSchema = z
   .object({
     roomId: idSchema,
-    content: z.string().trim(),
+    content: messageTextSchema,
     replyToId: idSchema.optional(),
-    attachmentIds: z.array(z.string().uuid()).optional(),
+    attachmentIds: z.array(z.string().uuid()).max(REALTIME_LIMITS.maxAttachments).optional(),
   })
   .refine((data) => data.content.length > 0 || (data.attachmentIds?.length ?? 0) > 0, {
     message: 'Message content cannot be empty',

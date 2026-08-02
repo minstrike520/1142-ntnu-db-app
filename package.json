@@ -9,5 +9,8 @@
   "packageManager": "pnpm@11.15.0",
   "engines": {
     "node": ">=24"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
   }
 }
