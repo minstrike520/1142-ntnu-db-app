@@ -363,16 +363,16 @@ To keep the commit history clean and prevent cluttered changelogs, **all Pull Re
 * **Squash Merge Benefit**: Squashing compresses multiple small/WIP commits in a feature branch into a single, clean conventional commit on `main`.
 
 ### Automated Version Release Flow (tag-based)
-When changes are merged into `main`, GitHub Actions (`.github/workflows/ci.yml`) automatically triggers the `release` job running `semantic-release` upon CI completion:
+After changes merge into `main`, GitHub Actions runs CI and then Release Please prepares a reviewable Release PR:
 
 1. **Semantic Versioning (`a.b.c`) Calculation**:
    - `fix:` → Increments **Patch (`c`)** (e.g. `v1.0.1` → `v1.0.2`)
    - `feat:` → Increments **Minor (`b`)** (e.g. `v1.0.1` → `v1.1.0`)
    - `BREAKING CHANGE:` → Increments **Major (`a`)** (e.g. `v1.0.1` → `v2.0.0`)
    - `docs:`, `chore:`, `refactor:` → No version increment
-2. **Multi-Package Version Sync**: Runs `scripts/update-versions.js` to synchronize `"version"` in root `package.json`, `frontend/package.json`, and `backend/package.json`.
-3. **Tag & GitHub Release**: After `ci.yml` completes successfully on `main`, `.github/workflows/release.yml` creates a short-lived token for the dedicated Release GitHub App. Semantic Release pushes the version commit and a **lightweight** `vX.Y.Z` tag, generates `CHANGELOG.md`, and — via `@semantic-release/github` — **creates the GitHub Release** with formatted release notes. The release guard skips version commits, reuses a successful CI result across ignored-path-only successors, and leaves CI-relevant successors to their own runs.
-4. **Tag → Stack Hand-off**: App pushes start workflows, so the `vX.Y.Z` tag directly triggers `release-stack.yml`; no bridge or Actions API dispatch is involved. The Stack workflow waits for the active `release.yml` run to finish before reading or creating the GitHub Release, then appends the Stack artifacts. The version commit also gets a second validation `CI`, whose downstream release run exits at the guard.
+2. **Reviewable Release PR**: After the exact `main` commit passes CI, `.github/workflows/release-please.yml` creates or updates one Release PR. Its manifest-mode configuration synchronizes root, frontend, and backend `package.json`, `.release-please-manifest.json`, and `CHANGELOG.md`. No production tag is created yet.
+3. **Tag & GitHub Release**: A maintainer reviews and merges the Release PR. After that merge passes CI, Release Please creates the matching `vX.Y.Z` tag and English GitHub Release.
+4. **Tag → Stack Hand-off**: App token events start workflows, so the `vX.Y.Z` tag directly triggers `release-stack.yml`. The Stack workflow waits for the matching Release Please run, then appends images, attestations, the deployment bundle, and a full diff link.
 5. **Stack Image & Bundle Publication**: `.github/workflows/release-stack.yml` builds & pushes Docker images to GHCR, signs provenance attestations, appends its stack section (image digests, PostgreSQL runtime, bundle SHA-256) to the existing release notes, and uploads the `near-chat-stack-vX.Y.Z.tar.gz` deployment bundle. The bundle asset — not the Release itself — is the idempotency key that marks a version as published.
 
 For the full flow, manual entry points (`gh workflow run release-stack.yml --ref vX.Y.Z`), and a table of what to check when a release stalls, see [docs/RELEASE.md](RELEASE.md).

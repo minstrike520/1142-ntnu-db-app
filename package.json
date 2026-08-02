@@ -4,20 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "docker compose up -d",
-    "build": "pnpm --filter near-chat-frontend build && pnpm --filter near-chat-backend build",
-    "release": "semantic-release"
+    "build": "pnpm --filter near-chat-frontend build && pnpm --filter near-chat-backend build"
   },
   "packageManager": "pnpm@11.15.0",
   "engines": {
     "node": ">=24"
-  },
-  "devDependencies": {
-    "@semantic-release/changelog": "^7.0.0",
-    "@semantic-release/commit-analyzer": "^13.0.1",
-    "@semantic-release/exec": "^7.1.0",
-    "@semantic-release/git": "^11.0.1",
-    "@semantic-release/github": "^12.0.9",
-    "@semantic-release/release-notes-generator": "^14.0.0",
-    "semantic-release": "^25.0.8"
   }
 }

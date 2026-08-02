@@ -3,13 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - 'README.md'
-      - 'README.zh-TW.md'
-      - '.github/ISSUE_TEMPLATE/**'
-      - 'LICENSE'
-      - 'AGENTS.md'
+    # Every main commit needs a completed run so release-please.yml can safely
+    # act on that exact commit. The existing paths-filter still skips expensive
+    # frontend/backend jobs when only documentation or metadata changed.
   pull_request:
     branches: [main]
     paths-ignore:
