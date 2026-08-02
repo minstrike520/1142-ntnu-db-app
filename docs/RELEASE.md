@@ -2,15 +2,15 @@
 
 [繁體中文](ZH-TW/RELEASE.md) | English
 
-Near Chat release tags represent a deployable stack, not only the Express backend. Starting with `v1.0.1`, every release contains the frontend image, backend image, PostgreSQL 18 runtime digest, database migration runner, and a Docker Compose bundle. The existing `v1.0.0` backend-only release is immutable and remains available for rollback.
+Near Chat release tags represent a deployable stack, not only one application package. Starting with `v1.0.1`, every release contains the frontend image, backend image, PostgreSQL 18 runtime digest, database migration runner, and a Docker Compose bundle. The existing `v1.0.0` backend-only release is immutable and remains available for rollback.
 
 ## Publish a version
 
-Releases are cut automatically. You never pick a version number or push a tag — merging a Conventional Commit into `main` is the entire trigger.
+Release Please prepares releases behind a reviewable pull request. A normal merge into `main` never creates a production tag by itself.
 
 ### What the version number comes from
 
-Pull requests are squash-merged, so the **PR title** becomes the commit on `main` that `@semantic-release/commit-analyzer` reads:
+Pull requests are squash-merged, so the **PR title** becomes the Conventional Commit on `main` that Release Please reads:
 
 | Commit prefix | Effect | Example |
 | --- | --- | --- |
@@ -19,43 +19,34 @@ Pull requests are squash-merged, so the **PR title** becomes the commit on `main
 | `feat!:` or a `BREAKING CHANGE:` footer | Major | `v1.0.1` → `v2.0.0` |
 | `docs:`, `chore:`, `refactor:`, `test:`, `ci:` | No release | — |
 
-If a batch of merges contains nothing but no-release types, Semantic Release logs `no release` and the chain stops there — that is normal, not a failure.
+If the unreleased commits contain only no-release types, Release Please does not open a Release PR. That is normal, not a failure.
 
-### The three stages of a release
+### Review and publish flow
 
 ```
-merge commit M lands on main
-  1. ci.yml            lint, builds, tests, security gate
-  2. release.yml       successful CI → Release App → commit R + tag + GitHub Release
-  3. release-stack.yml tag push → images, attestations, bundle
+normal PR merge → CI → release-please.yml → create/update Release PR
+Release PR review and merge → CI → release-please.yml → vX.Y.Z + GitHub Release
+vX.Y.Z push → release-stack.yml → images + attestations + bundle
 ```
 
-1. **`ci.yml` — the gate.** The merge commit `M` must finish the frontend lint/typecheck/test/build, backend build/unit/integration/E2E, and dependency security jobs successfully. CI has no release credentials and does not publish anything.
-2. **`release.yml` — Semantic Release.** A successful `CI` `workflow_run` on `main` starts this workflow. It creates a short-lived installation token for the dedicated Release GitHub App, computes the next version, runs `scripts/update-versions.js` to sync `version` across the root, `backend/package.json`, and `frontend/package.json`, updates `CHANGELOG.md`, pushes the `chore(release): X.Y.Z` commit `R` and the `vX.Y.Z` tag, and — via `@semantic-release/github` — creates the GitHub Release with generated notes. Semantic Release owns the tag and the Release.
-3. **`release-stack.yml` — the stack.** The App's tag push directly starts this workflow. It builds and pushes the four GHCR image references, signs both provenance attestations, appends its stack section to the existing release notes, and uploads `near-chat-stack-vX.Y.Z.tar.gz`.
+1. **`ci.yml` — the gate.** Every `main` commit produces a completed CI run. Existing path filters skip expensive application jobs for documentation-only commits; code changes must pass frontend lint/typecheck/test/build, backend build/unit/integration/E2E, and dependency security jobs. CI has no release credentials and publishes nothing.
+2. **`release-please.yml` — the review boundary.** After the exact `main` commit passes CI, Release Please parses its Conventional Commits. It creates or updates one Release PR using `release-please-config.json` and `.release-please-manifest.json`. The PR proposes the version, updates `CHANGELOG.md`, and synchronizes `version` in the root, backend, and frontend `package.json` files. No tag is created while this PR remains open.
+3. **Merge the Release PR.** A maintainer checks the proposed version, English changelog structure, and all four version files before merging. After that merge passes CI, Release Please creates the matching `vX.Y.Z` tag and GitHub Release. The tag points to the reviewed commit containing the three synchronized package versions, manifest version, and changelog.
+4. **`release-stack.yml` — the stack.** The App-generated tag push starts this workflow. It builds and pushes four immutable GHCR references, signs both provenance attestations, appends an English Stack section with a full diff link to the GitHub Release, and uploads `near-chat-stack-vX.Y.Z.tar.gz`.
+
+The repository is configured as one logical release package at path `.`. Backend and frontend are `extra-files`, not independently versioned components, so a release produces one tag and one version shared by the whole Stack.
 
 ### Release App identity and the event chain
 
-The default `secrets.GITHUB_TOKEN` cannot bypass the repository ruleset that restricts creation of `v*` tags. `release.yml` therefore exchanges `RELEASE_APP_CLIENT_ID` and `RELEASE_APP_PRIVATE_KEY` for a short-lived GitHub App installation token. The App is installed only on this repository, has write permission for Contents, Issues, and Pull Requests, and is the actor granted bypass for the release-tag creation ruleset.
+The default `secrets.GITHUB_TOKEN` does not start workflows for resources it creates and cannot bypass the ruleset that restricts `v*` tags. `release-please.yml` therefore exchanges `RELEASE_APP_CLIENT_ID` and `RELEASE_APP_PRIVATE_KEY` for a short-lived installation token. The App must be installed on this repository with write permission for Contents, Issues, and Pull Requests. It must also be an allowed bypass actor for the tag ruleset.
 
-Events created with an App installation token start workflows, which makes the direct three-stage chain possible. The release workflow itself does not start until `M` has a successful, completed CI run. Its tag push then starts Stack publication without a bridge or an Actions API dispatch.
+The repository's "Allow GitHub Actions to create and approve pull requests" setting only controls `GITHUB_TOKEN`; it can remain disabled because this workflow uses the dedicated App token and never approves its own PR. The repository currently has no branch protection rule that blocks an App-created Release PR. If protection is added later, it must allow the App to create and update the PR branch while retaining the normal checks and maintainer-controlled merge into `main`. App installation-token events start workflows, so the Release PR gets CI and the `vX.Y.Z` push starts Stack publication without an Actions API dispatch bridge.
 
-The App also pushes `R`, so `R` gets its own `CI` run. When that run completes, it would ordinarily trigger `release.yml` again; the release guard recognizes the exact `chore(release): X.Y.Z` subject from the CI source commit and exits before requesting an App token. If `main` has advanced, the guard reuses the successful result only when every intervening commit changes paths ignored by `ci.yml`; any code, workspace, Compose, or workflow change is left to its own newer CI run. This prevents a docs-only commit from silently stranding the only releasable CI result without allowing unverified code to ship.
-
-The tag push can start stage 3 before `R`'s CI finishes. Stage 3 therefore accepts the already-successful CI for `R`'s first parent `M`, but only after proving that `R` is the tightly scoped version-assets commit Semantic Release is expected to create. It diffs the tag commit against its first parent and only falls back when **both** hold:
-
-- every changed path is one of the four `@semantic-release/git` `assets` — `package.json`, `frontend/package.json`, `backend/package.json`, `CHANGELOG.md`; and
-- the three `package.json` files are identical to the parent's apart from `version` (compared as parsed JSON, so formatting does not matter).
-
-The second condition is not redundant. `backend/package.json` is copied into the runtime image (`backend/Dockerfile.prod`), and its `migrate:up` script is what the image's `CMD` and the release bundle's `migrate` service actually execute — a commit that bumps all three versions correctly while quietly editing that script would otherwise ship unreviewed behaviour into production on a borrowed green run. `CHANGELOG.md` is checked by path only: no Dockerfile copies it and nothing executes it, so the worst case is inaccurate release notes.
-
-Anything failing either condition must have passed CI as itself.
-
-Semantic Release pushes the tag immediately before `@semantic-release/github` creates the GitHub Release. When stage 3 starts from that tag, it waits for the active `release.yml` run to reach a terminal state so the two workflows cannot race to create the same Release. If the upstream publish failed after pushing the tag, stage 3 continues through the existing recovery path and creates the Release itself. A bounded timeout fails closed and can be retried through the manual entry point.
+If `main` advances after a CI run completes, the older Release Please run exits without using release credentials and leaves the work to the newer run. This keeps the tag source equal to the commit that passed CI. Because Release Please creates the tag before it finishes creating the GitHub Release, `release-stack.yml` waits for the matching Release Please run before it reads or recovers the Release.
 
 ### What is still enforced
 
-Semantic Release is the source of truth for tags. It creates **lightweight** tags, and `release-stack.yml` accepts both lightweight and annotated tags; the tag type is not checked. Stage 3 still refuses to publish unless: the tag name matches `vX.Y.Z` exactly, the numeric version matches all three `package.json` files, the tag commit is on `main`'s history, and the tag commit — or its first parent, when the tag commit changes nothing outside the four release assets — has a main CI run whose frontend lint/typecheck/build, backend build, unit, integration, E2E, and security jobs all either succeeded or were skipped by the paths filter.
+Release Please is the source of truth for tags. `release-stack.yml` refuses to publish unless the tag matches `vX.Y.Z` exactly, its numeric version equals all three `package.json` versions, the tag commit is in `main` history, and that exact commit has a successful main CI run whose required frontend, backend, test, and security jobs succeeded or were skipped by the path filter.
 
 ### Manual entry points
 
@@ -65,16 +56,7 @@ Stage 3 can be dispatched by hand at any time — this is the normal way to retr
 gh workflow run release-stack.yml --ref v1.0.1
 ```
 
-If the tag itself is missing, push one manually. The tag push directly starts stage 3:
-
-```bash
-git switch main
-git pull --ff-only origin main
-git tag v1.0.1
-git push origin v1.0.1
-```
-
-If no GitHub Release exists for the tag, `release-stack.yml` creates one itself. Never hand-create a tag for a version Semantic Release has already released; see "Immutability and failure handling" below.
+Do not manually create a production tag in the normal flow. If Release Please created a tag but not the GitHub Release, wait for or rerun `release-please.yml`; `release-stack.yml` retains a recovery path that can create a missing Release after the upstream run has reached a terminal state.
 
 The workflow publishes two immutable application images, each with a version tag and commit tag:
 
@@ -83,7 +65,7 @@ The workflow publishes two immutable application images, each with a version tag
 - `ghcr.io/nearcsie/near-chat-frontend:1.0.1`
 - `ghcr.io/nearcsie/near-chat-frontend:sha-<12-character-commit>`
 
-It also records the pinned PostgreSQL runtime (`postgres:18-alpine`), both image digests, provenance attestations, and a `near-chat-stack-vX.Y.Z.tar.gz` deployment bundle in the Traditional Chinese GitHub Release. No mutable `latest` tag is published.
+It also records the pinned PostgreSQL runtime (`postgres:18-alpine`), both image digests, provenance attestations, a comparison link, and a `near-chat-stack-vX.Y.Z.tar.gz` deployment bundle in the English GitHub Release. No mutable `latest` tag is published.
 
 ## Deploy the release bundle
 
@@ -106,23 +88,22 @@ The database runtime is fixed to PostgreSQL 18 Alpine by digest. The schema is v
 
 ## Immutability and failure handling
 
-The four application image references and the stack artifacts attached to the GitHub Release are treated as one immutable publication. Semantic Release normally creates the Release immediately after pushing the tag, and `release-stack.yml` waits for the active upstream workflow to finish; nevertheless, the existence of a Release is *not* the idempotency key — the presence of the `near-chat-stack-vX.Y.Z.tar.gz` bundle asset is. A clean first publication requires all four image references and that bundle asset to be absent; `release-stack.yml` then appends its stack section to the existing release notes and uploads the bundle. A rerun only verifies that all four references resolve to their recorded digests, both provenance attestations exist, and the Release contains the matching manifest and bundle. Partial publications, mismatched digests, missing attestations, or a bundle asset present without its images fail closed; the workflow never overwrites an existing version.
+The four application image references and the stack artifacts attached to the GitHub Release are treated as one immutable publication. Release Please normally creates the Release immediately after the tag, and `release-stack.yml` waits for that upstream run; nevertheless, the existence of a Release is *not* the idempotency key — the presence of `near-chat-stack-vX.Y.Z.tar.gz` is. A clean first publication requires all four image references and that bundle asset to be absent. A rerun only verifies that all references resolve to their recorded digests, both attestations exist, and the Release contains the matching manifest and bundle. Partial publication, digest mismatch, missing attestation, or a bundle without its images fails closed; the workflow never overwrites a completed version.
 
-Recovering from a half-published version therefore means deleting the bundle asset and the four image references (or the whole Release and tag) by hand before rerunning.
+Recovering from a half-published version therefore means deleting only the partial bundle asset and four image references before rerunning. The `v*` tag ruleset forbids updating or deleting a published tag, so historical tags such as `v1.1.0` and `v2.0.0` must not be moved to rewritten commits. Incorrect historical notes can be corrected in the GitHub Release body and in a later changelog entry without changing the tag target.
 
 ### Where to look when a release stalls
 
-A releasing merge has three publication stages, plus an expected validation `CI` and guarded `release.yml` run for version commit `R`. Find the last stage that appeared and read the row below it:
+A release passes through the Release PR and then the Stack workflow. Find the last stage that appeared and read the row below it:
 
 | Runs you see | What happened | What to do |
 | --- | --- | --- |
-| `CI` failed | A quality or security gate rejected the merge commit | Read the failing CI job. `release.yml` correctly does not run. |
-| `CI` green, `release.yml` green, no tag | Semantic Release found no release-worthy commits (`no release` in the job log), skipped a version commit, or deferred to a newer CI because `main` gained CI-relevant paths | Read the guard and Semantic Release log. These are normally expected outcomes. |
-| `release.yml` failed | Semantic Release could not compute or push the release | Common causes are shallow history, invalid `RELEASE_APP_CLIENT_ID` / `RELEASE_APP_PRIVATE_KEY`, missing App permissions or installation, or the App not being listed in the tag ruleset bypass actors. |
+| `CI` failed | A quality or security gate rejected the `main` commit | Read the failing CI job. `release-please.yml` correctly does not run. |
+| `CI` and `release-please.yml` green, Release PR open, no tag | Normal pre-release state | Review the proposed version, `CHANGELOG.md`, manifest, and three package versions, then merge the Release PR when ready. |
+| `release-please.yml` green, no Release PR | There are no unreleased `feat:`, `fix:`, or breaking commits, or a newer `main` run superseded this one | Read the guard and Release Please log. No production tag should exist. |
+| `release-please.yml` failed | Release Please could not create/update the PR, tag, or Release | Check `RELEASE_APP_CLIENT_ID`, `RELEASE_APP_PRIVATE_KEY`, App installation and Contents/Issues/Pull Requests permissions, branch rules, and the tag-ruleset bypass actor. |
 | Tag exists but no `發布完整 Near Chat Stack` run | The App-generated tag event did not start stage 3 | Check that `release-stack.yml` still listens for `push.tags: v*`; dispatch stage 3 by hand meanwhile. |
-| `發布完整 Near Chat Stack` failed | A stage 3 gate rejected the publication | The failing step names the reason: tag format, `package.json` version mismatch, tag not on `main`, no successful CI run for the tag commit or its parent, or a partial publication. |
-
-A releasing merge normally creates a second `CI` run for the `chore(release): X.Y.Z` commit. It is expected and performs validation only; its downstream `release.yml` run exits at the release-commit guard, preventing a loop.
+| `發布完整 Near Chat Stack` failed | A Stack gate rejected the publication | The failing step names the reason: tag format, package-version mismatch, tag not on `main`, no successful CI for the exact tag commit, or a partial publication. |
 
 Once the cause is fixed, re-run stage 3 with `gh workflow run release-stack.yml --ref vX.Y.Z`. It is safe to run repeatedly: a version whose bundle is already attached takes the verify-only path and changes nothing.
 

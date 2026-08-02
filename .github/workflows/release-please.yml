@@ -1,0 +1,70 @@
+name: 管理 Release PR 與 GitHub Release
+
+# Release Please only runs after the exact main commit has completed CI. A
+# regular feat/fix commit creates or updates a reviewable Release PR; merging
+# that Release PR causes a later run to create the vX.Y.Z tag and GitHub Release.
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: release-please-main
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: 執行 Release Please
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    permissions:
+      contents: read
+    steps:
+      - name: 取出已通過 CI 的 main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: 確認 main 尚未前進
+        id: guard
+        shell: bash
+        env:
+          CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          main_sha="$(git rev-parse HEAD)"
+          if [[ "$main_sha" != "$CI_HEAD_SHA" ]]; then
+            echo "CI 完成後 main 已前進；交由較新的 CI run 執行 Release Please：ci=$CI_HEAD_SHA main=$main_sha"
+            echo 'should_run=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'should_run=true' >> "$GITHUB_OUTPUT"
+
+      - name: 建立 Release App token
+        if: steps.guard.outputs.should_run == 'true'
+        id: release-app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: 建立或更新 Release PR，或完成 GitHub Release
+        if: steps.guard.outputs.should_run == 'true'
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ steps.release-app.outputs.token }}
+          target-branch: main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -346,16 +346,16 @@ describe('userRepository', () => {
 * **Squash Merge 優點**：在合併時將 Feature 分支中多個微小的提交（如修飾註解、修復排版）壓縮為單一精確的提交。
 
 ### 自動化版本發布流程（以 tag 發布）
-當變更合併進 `main` 分支時，GitHub Actions (`.github/workflows/ci.yml`) 會於 CI 測試全數通過後自動執行 `semantic-release` 發布工作：
+變更合併進 `main` 後，GitHub Actions 會先執行 CI，再由 Release Please 準備一份可審查的 Release PR：
 
 1. **語意化版本 (`a.b.c`) 計算**：
    - `fix:` $\rightarrow$ 遞增 **Patch (`c`)**（如 `v1.0.1` $\rightarrow$ `v1.0.2`）
    - `feat:` $\rightarrow$ 遞增 **Minor (`b`)**（如 `v1.0.1` $\rightarrow$ `v1.1.0`）
    - `BREAKING CHANGE:` $\rightarrow$ 遞增 **Major (`a`)**（如 `v1.0.1` $\rightarrow$ `v2.0.0`）
    - `docs:`, `chore:`, `refactor:` $\rightarrow$ 不遞增版本號
-2. **三方版本號同步**：自動執行 `scripts/update-versions.js` 同步更新根目錄 `package.json`、`frontend/package.json` 與 `backend/package.json` 的版本。
-3. **Tag 與 Release 頁面**：`main` 上的 `ci.yml` 成功完成後，`.github/workflows/release.yml` 會為專用 Release GitHub App 建立短效 token。Semantic Release 接著推送版本號 commit 與 **lightweight** `vX.Y.Z` tag、更新 `CHANGELOG.md`，並由 `@semantic-release/github` **建立 GitHub Release** 與格式化後的 Release Notes。Release guard 會略過版本號 commit、允許只新增 ignored paths 的後續 commits 沿用成功 CI，並把 CI-relevant 後續變更交給其自身的 run。
-4. **Tag 至 Stack 的交棒**：App 的推送會啟動 workflow，所以 `vX.Y.Z` tag 會直接觸發 `release-stack.yml`，不經 bridge 或 Actions API dispatch。Stack workflow 會等仍在執行的 `release.yml` run 完成，再讀取或建立 GitHub Release 並附加 Stack artifacts。版本號 commit 也會有第二次驗證 `CI`，其下游 release run 會在 guard 結束。
+2. **可審查的 Release PR**：同一個 `main` commit 通過 CI 後，`.github/workflows/release-please.yml` 會建立或更新一份 Release PR。Manifest 模式會同步 root、frontend、backend 三份 `package.json`、`.release-please-manifest.json` 與 `CHANGELOG.md`；此時不建立正式 tag。
+3. **Tag 與 GitHub Release**：維護者審查並合併 Release PR；該 merge 通過 CI 後，Release Please 才建立對應的 `vX.Y.Z` tag 與英文 GitHub Release。
+4. **Tag 至 Stack 的交棒**：App token 事件會啟動 workflow，因此 `vX.Y.Z` tag 會直接觸發 `release-stack.yml`。Stack workflow 等待同一個 Release Please run，再附加 images、attestations、部署 bundle 與完整 diff 連結。
 5. **Stack 映像檔與部署包發布**：`.github/workflows/release-stack.yml` 建置 Frontend/Backend 容器映像檔推至 GHCR、簽署 SLSA Provenance，把 Stack 區段（image digest、PostgreSQL runtime、bundle SHA-256）附加到既有的 Release Notes 之後，並上傳 `near-chat-stack-vX.Y.Z.tar.gz` 部署包。判斷某版本是否已發布的冪等性依據是這個 bundle asset，而非 Release 本身。
 
 完整流程、手動入口（`gh workflow run release-stack.yml --ref vX.Y.Z`），以及發布卡住時的排查對照表，見 [docs/ZH-TW/RELEASE.md](RELEASE.md)。

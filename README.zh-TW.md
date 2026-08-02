@@ -144,4 +144,4 @@ docker compose -f docker-compose.prod.yml down
 
 ## 完整 Stack 版本發布
 
-Conventional Commit 合併進 `main` 後，Semantic Release 會算出下一個版本號並推送 `vX.Y.Z` tag，系統隨即自動發布不可變的 GHCR 前後端映像、固定版本的 PostgreSQL 18 runtime、migration、Docker Compose bundle，以及記錄 digest 的 GitHub Release。詳見[完整 Stack 版本發布指南](docs/ZH-TW/RELEASE.md)。
+Conventional Commits 合併進 `main` 後，Release Please 會準備可審查的 Release PR；只有合併該 PR 才會建立 `vX.Y.Z` tag，並發布不可變的 GHCR 前後端映像、固定版本的 PostgreSQL 18 runtime、migration、Docker Compose bundle，以及記錄 digest 的 GitHub Release。詳見[完整 Stack 版本發布指南](docs/ZH-TW/RELEASE.md)。

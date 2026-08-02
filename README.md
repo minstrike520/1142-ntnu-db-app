@@ -145,4 +145,4 @@ For detailed instructions on running unit, integration, and E2E tests, please re
 
 ## Stack Releases
 
-Merging a Conventional Commit into `main` lets Semantic Release compute the next version and push a `vX.Y.Z` tag, which automatically publishes immutable frontend and backend GHCR images, a pinned PostgreSQL 18 runtime, migrations, a Docker Compose bundle, and a digest-recorded GitHub Release. See the [Stack Version Release Guide](docs/RELEASE.md).
+Merging Conventional Commits into `main` lets Release Please prepare a reviewable Release PR. Only merging that Release PR creates the `vX.Y.Z` tag and publishes immutable frontend and backend GHCR images, a pinned PostgreSQL 18 runtime, migrations, a Docker Compose bundle, and a digest-recorded GitHub Release. See the [Stack Version Release Guide](docs/RELEASE.md).

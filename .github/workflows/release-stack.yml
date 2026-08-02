@@ -1,7 +1,7 @@
 name: 發布完整 Near Chat Stack
 
 on:
-  # 第三階段：release.yml 使用 GitHub App token 推送版本 tag，該 push 會直接
+  # Release Please 使用 GitHub App token 推送版本 tag，該 push 會直接
   # 觸發本 workflow。workflow_dispatch 保留作為人工復原入口。
   push:
     tags:
@@ -60,8 +60,7 @@ jobs:
           tag_ref="refs/tags/${GITHUB_REF_NAME}"
           git fetch --force origin "${tag_ref}:${tag_ref}"
 
-          # Tag 型別不設限：Semantic Release 建立的是 lightweight tag，手動備援
-          # 流程建立的是 annotated tag。`^{}` 對兩種型別都會 peel 到同一個 commit，
+          # Tag 型別不設限；`^{}` 對 lightweight 與 annotated tag 都會 peel 到 commit，
           # 所以下面這段檢查對兩者等效，不需要再多一道 object type 判斷。
           peeled_sha="$(git rev-parse "${tag_ref}^{}")"
           if [[ "$(git cat-file -t "$peeled_sha")" != "commit" || "$peeled_sha" != "$GITHUB_SHA" ]]; then
@@ -80,97 +79,37 @@ jobs:
             exit 1
           fi
 
-          # 預設只接受 tag commit 自己的成功 CI run。
-          #
-          # 例外：semantic-release 產生的版本號 commit 由 Release App 推送。Tag
-          # push 會立即觸發本 workflow，此時 R 的 CI 通常尚未完成；但 release.yml
-          # 是在父 commit M 的 CI 成功後才建立 R，因此允許在嚴格驗證版本號 commit
-          # 後退到父 commit 的 run。
-          #
-          # 但這個退路必須綁定在「這確實是一個 semantic-release 版本號 commit」的
-          # 事實上，否則任何人只要把一個未經測試的 commit 連同 tag 一起推上 main，
-          # 就能靠父 commit 的舊 run 通過這道驗證。判定分兩層：
-          #
-          #   (a) 變更的路徑必須全部落在 @semantic-release/git 的 assets 白名單內。
-          #   (b) 三份 package.json 相對父 commit 必須「除了 version 之外完全相同」。
-          #
-          # (b) 不能省略：只比對路徑的話，一個同時改了三份版本號、又在
-          # backend/package.json 的 scripts 動手腳的 commit 也會通過。該檔會被
-          # backend/Dockerfile.prod 複製進 runtime 映像，其 migrate:up 由映像的 CMD
-          # 與部署 bundle 的 migrate service 實際執行 —— 未經 CI 驗證的行為會直接
-          # 進入正式環境。
-          #
-          # CHANGELOG.md 只比對路徑：它不會被任何 Dockerfile 複製進映像，也不會被
-          # 執行，最壞情況只是 release notes 內容不實。
-          candidate_shas=("$GITHUB_SHA")
-          parent_sha="$(git rev-parse --verify --quiet "${GITHUB_SHA}^" || true)"
-          if [[ -n "$parent_sha" ]]; then
-            release_assets_only=true
-
-            while IFS= read -r changed_file; do
-              [[ -z "$changed_file" ]] && continue
-              case "$changed_file" in
-                package.json | frontend/package.json | backend/package.json | CHANGELOG.md) ;;
-                *)
-                  release_assets_only=false
-                  echo "Tag commit 含 semantic-release assets 白名單以外的變更：$changed_file"
-                  ;;
-              esac
-            done < <(git diff --name-only "$parent_sha" "$GITHUB_SHA")
-
-            for pkg_file in package.json frontend/package.json backend/package.json; do
-              if ! diff -q \
-                <(git show "${parent_sha}:${pkg_file}" | jq -S 'del(.version)') \
-                <(git show "${GITHUB_SHA}:${pkg_file}" | jq -S 'del(.version)') \
-                >/dev/null 2>&1; then
-                release_assets_only=false
-                echo "Tag commit 對 $pkg_file 的變更不只有 version 欄位。"
-              fi
-            done
-
-            if [[ "$release_assets_only" == "true" ]]; then
-              candidate_shas+=("$parent_sha")
-            else
-              echo "因此不接受父 commit 的 CI run，要求 tag commit 自己通過完整 CI。"
-            fi
-          fi
-
-          ci_verified_sha=''
-          for candidate_sha in "${candidate_shas[@]}"; do
-            runs="$(gh api --method GET \
-              -H 'Accept: application/vnd.github+json' \
-              -H 'X-GitHub-Api-Version: 2022-11-28' \
-              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
-              -f head_sha="$candidate_sha" \
-              -f branch=main \
-              -f event=push \
-              -f status=completed \
-              -f per_page=100)"
-            run_id="$(jq -r '
-              [.workflow_runs[] | select(.conclusion == "success")]
-              | first
-              | .id // empty
-            ' <<< "$runs")"
-            if [[ -n "$run_id" ]]; then
-              ci_verified_sha="$candidate_sha"
-              break
-            fi
-          done
-          if [[ -z "$ci_verified_sha" ]]; then
-            echo "找不到已完成且成功的 ci.yml push run（已檢查：${candidate_shas[*]}）" >&2
+          # Release Please 只會在這個 exact main commit 的 CI 成功後建立 tag，
+          # 因此只接受 tag commit 本身的 CI，不接受父 commit fallback。
+          runs="$(gh api --method GET \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+            -f head_sha="$GITHUB_SHA" \
+            -f branch=main \
+            -f event=push \
+            -f status=completed \
+            -f per_page=100)"
+          run_id="$(jq -r '
+            [.workflow_runs[] | select(.conclusion == "success")]
+            | first
+            | .id // empty
+          ' <<< "$runs")"
+          if [[ -z "$run_id" ]]; then
+            echo "找不到 tag commit 已完成且成功的 ci.yml push run：$GITHUB_SHA" >&2
             exit 1
           fi
-          echo "CI 驗證來源 commit：$ci_verified_sha"
+          echo "CI 驗證來源 commit：$GITHUB_SHA"
 
           jobs="$(gh api --method GET \
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs" \
             -f per_page=100)"
-          required='["frontend-lint","frontend-typecheck","frontend-build","backend-build","unit-tests","integration-tests","e2e-tests","security-scan"]'
+          required='["frontend-lint","frontend-typecheck","frontend-test","frontend-build","backend-build","unit-tests","integration-tests","e2e-tests","security-scan"]'
           # 接受 success 或 skipped。這一點是必要的：ci.yml 的 paths-filter 會在只動前端的
           # 變更上跳過 backend 的 job（反之亦然），而 skipped 正代表該側程式碼未變更、
-          # 沿用上一次已驗證的狀態。要求 8 個 job 一律 success 會擋掉大部分正常發布。
+          # 沿用上一次已驗證的狀態。要求 9 個 job 一律 success 會擋掉大部分正常發布。
           if ! jq -e --argjson required "$required" '
             [.jobs[] | select(.conclusion == "success" or .conclusion == "skipped") | .name] as $accepted
             | ($required - $accepted | length == 0)
@@ -184,7 +123,7 @@ jobs:
             echo "sha_tag=sha-${GITHUB_SHA:0:12}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: 等待 Semantic Release workflow 完成
+      - name: 等待 Release Please workflow 完成
         if: github.event_name == 'push'
         shell: bash
         env:
@@ -192,16 +131,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Semantic Release 先推 tag，再由 @semantic-release/github 建立 Release。
-          # Tag push 可能讓本 workflow 在 release.yml 尚未結束時抵達。release-main
-          # concurrency 保證同時最多只有一個上游 run 實際執行（另可有一個 queued
-          # run），因此只等待 in_progress 的 run 進入終態，避免誤選較新的 queued
-          # run，也避免兩邊競相建立同一個 Release。
+          # Release Please 建立 tag 後才建立 GitHub Release。Tag push 可能讓本 workflow
+          # 先抵達，因此等待同一個 commit 的 Release Please run，避免競相建立 Release。
           runs="$(gh api --method GET \
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "/repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs" \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/release-please.yml/runs" \
             -f event=workflow_run \
+            -f head_sha="$GITHUB_SHA" \
             -f per_page=20)"
           release_run_id="$(jq -r '
             [.workflow_runs[] | select(.status == "in_progress")]
@@ -210,7 +147,7 @@ jobs:
           ' <<< "$runs")"
 
           if [[ -z "$release_run_id" ]]; then
-            echo "沒有仍在執行的 Semantic Release workflow。"
+            echo "沒有仍在執行的 Release Please workflow。"
             exit 0
           fi
 
@@ -219,14 +156,14 @@ jobs:
             status="$(jq -r .status <<< "$run")"
             conclusion="$(jq -r '.conclusion // empty' <<< "$run")"
             if [[ "$status" == "completed" ]]; then
-              echo "Semantic Release workflow 已完成：run=$release_run_id conclusion=$conclusion"
+              echo "Release Please workflow 已完成：run=$release_run_id conclusion=$conclusion"
               exit 0
             fi
-            echo "等待 Semantic Release workflow：run=$release_run_id，第 ${attempt}/60 次"
+            echo "等待 Release Please workflow：run=$release_run_id，第 ${attempt}/60 次"
             sleep 5
           done
 
-          echo "等待 Semantic Release workflow 逾時：run=$release_run_id" >&2
+          echo "等待 Release Please workflow 逾時：run=$release_run_id" >&2
           exit 1
 
       - name: 檢查既有 GitHub Release 與 Stack 發布狀態
@@ -240,7 +177,7 @@ jobs:
           release_json="$RUNNER_TEMP/existing-stack-release.json"
           release_error="$RUNNER_TEMP/existing-stack-release.error"
 
-          # Release 本身由 @semantic-release/github 建立（見 .releaserc.json），本
+          # Release 本身通常由 Release Please 建立，本
           # workflow 只負責補上映像、provenance 與部署 bundle。因此「Release 是否
           # 存在」已不等於「Stack 是否已發布」，冪等性判準改用 bundle asset。
           if gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
@@ -598,27 +535,30 @@ jobs:
           frontend_image="${REGISTRY}/${FRONTEND_IMAGE_NAME}"
 
           {
-            echo '## 完整 Stack'
+            previous_tag="$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)"
+
+            echo '## Complete Stack'
             echo
-            printf -- '- version：`%s`\n' "$GITHUB_REF_NAME"
-            printf -- '- Commit：`%s`\n' "$GITHUB_SHA"
-            printf -- '- Backend image：`%s:%s`\n' "$backend_image" "$VERSION_NUMBER"
-            printf -- '- Backend commit image：`%s:%s`\n' "$backend_image" "$IMAGE_SHA_TAG"
-            printf -- '- Backend digest：`%s@%s`\n' "$backend_image" "$BACKEND_DIGEST"
-            printf -- '- Frontend image：`%s:%s`\n' "$frontend_image" "$VERSION_NUMBER"
-            printf -- '- Frontend commit image：`%s:%s`\n' "$frontend_image" "$IMAGE_SHA_TAG"
-            printf -- '- Frontend digest：`%s@%s`\n' "$frontend_image" "$FRONTEND_DIGEST"
-            printf -- '- PostgreSQL runtime：`%s`\n' "$POSTGRES_IMAGE"
-            printf -- '- Deploy bundle：`%s`\n' "$BUNDLE_ASSET_NAME"
-            printf -- '- Bundle SHA-256：`%s`\n' "$BUNDLE_SHA256"
-            echo
-            printf -- '發布說明：[繁體中文](https://github.com/%s/blob/%s/docs/ZH-TW/RELEASE.md)／[English](https://github.com/%s/blob/%s/docs/RELEASE.md)\n' \
-              "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+            printf -- '- Version: `%s`\n' "$GITHUB_REF_NAME"
+            printf -- '- Commit: `%s`\n' "$GITHUB_SHA"
+            printf -- '- Backend image: `%s:%s`\n' "$backend_image" "$VERSION_NUMBER"
+            printf -- '- Backend commit image: `%s:%s`\n' "$backend_image" "$IMAGE_SHA_TAG"
+            printf -- '- Backend digest: `%s@%s`\n' "$backend_image" "$BACKEND_DIGEST"
+            printf -- '- Frontend image: `%s:%s`\n' "$frontend_image" "$VERSION_NUMBER"
+            printf -- '- Frontend commit image: `%s:%s`\n' "$frontend_image" "$IMAGE_SHA_TAG"
+            printf -- '- Frontend digest: `%s@%s`\n' "$frontend_image" "$FRONTEND_DIGEST"
+            printf -- '- PostgreSQL runtime: `%s`\n' "$POSTGRES_IMAGE"
+            printf -- '- Deployment bundle: `%s`\n' "$BUNDLE_ASSET_NAME"
+            printf -- '- Bundle SHA-256: `%s`\n' "$BUNDLE_SHA256"
+            if [[ -n "$previous_tag" ]]; then
+              printf -- '- Full diff: https://github.com/%s/compare/%s...%s\n' \
+                "$GITHUB_REPOSITORY" "$previous_tag" "$GITHUB_REF_NAME"
+            fi
           } > "$notes_file"
 
           echo "file=$notes_file" >> "$GITHUB_OUTPUT"
 
-      # 正常路徑：Release 已由 Semantic Release 建立，這裡只把 Stack 區段附加到既有
+      # 正常路徑：Release 已由 Release Please 建立，這裡只把 Stack 區段附加到既有
       # release notes 後面，再上傳 bundle。asset 上傳放在最後一步，因為
       # `stack_published` 正是以 asset 是否存在判定 —— 讓它成為最終的提交點。
       - name: 於既有 Release 補上 Stack artifact
@@ -647,7 +587,7 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" "$BUNDLE_ARCHIVE" \
             --repo "$GITHUB_REPOSITORY"
 
-      # 備援路徑：Release 不存在（手動推 tag，或 Semantic Release 未建立時的復原）。
+      # 備援路徑：Release 不存在（手動推 tag，或 Release Please 未建立時的復原）。
       - name: 建立 GitHub Release
         if: steps.release.outputs.exists == 'false'
         shell: bash
