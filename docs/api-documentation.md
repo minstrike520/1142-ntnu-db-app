@@ -1398,12 +1398,12 @@ All errors return the following JSON structure:
 
 ### Ticket and connection
 
-1. Call `POST /api/v1/realtime/ticket` with the access-token Bearer header. The `201` response contains `ticket`, `expiresAt`, and `leaseExpiresAt`.
+1. Call `POST /realtime/ticket` with the access-token Bearer header. The `201` response contains `ticket`, `expiresAt`, and `leaseExpiresAt`.
 2. Connect to `ws(s)://<api-host>/ws?ticket=<ticket>` and offer the `near-chat.v1` WebSocket subprotocol. The browser must send an allowed `Origin`.
 3. A ticket expires after at most 45 seconds, is single-use within the backend process, has audience `near-chat-ws`, and never outlives the access token. The ticket is consumed during upgrade; the access token is not placed in the WebSocket URL.
 4. After upgrade the server emits `session.ready`. Before the session lease expires it emits `auth.expiring`; obtain a new ticket and send `auth.renew` without reconnecting.
 
-`POST /api/v1/realtime/ticket` and `GET /api/v1/realtime/emergency-notifications` both require Bearer authentication. The latter returns the authenticated user's durable emergency notifications, including alerts missed while offline.
+`POST /realtime/ticket` and `GET /realtime/emergency-notifications` both require Bearer authentication. The latter returns the authenticated user's durable emergency notifications, including alerts missed while offline.
 
 ### Envelope
 
