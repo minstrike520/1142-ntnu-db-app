@@ -21,6 +21,7 @@ type Mocked<T> = {
 
 const makeRealtimeNotifier = () => ({
   roomUpdated: mock(),
+  roomDeleted: mock(),
   messageCreated: mock(),
   userRoomUpdated: mock(),
 });
@@ -128,6 +129,7 @@ describe('roomService', () => {
   it('deleteGroup deletes the group for the owner', async () => {
     mockRepo.findById.mockResolvedValueOnce(room);
     mockMemberRepo.findMember.mockResolvedValueOnce(ownerMember);
+    mockMemberRepo.findByRoom.mockResolvedValueOnce([ownerMember]);
     await expect(roomService.deleteGroup('room-1', 'user-1')).resolves.toBeUndefined();
     expect(mockRepo.delete).toHaveBeenCalledWith('room-1');
     expect(mockRepo.update).not.toHaveBeenCalled();
@@ -705,9 +707,11 @@ describe('roomService', () => {
       const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, realtime);
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue(ownerMember);
+      mockMemberRepo.findByRoom.mockResolvedValue([ownerMember]);
 
       await serviceWithEmit.deleteGroup('room-1', 'user-1');
 
+      expect(realtime.roomDeleted).toHaveBeenCalledWith('room-1', ['user-1']);
       expect(realtime.roomUpdated).toHaveBeenCalledWith('room-1', 'ROOM_DELETED', { roomId: 'room-1' });
     });
   });

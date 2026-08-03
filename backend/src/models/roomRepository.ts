@@ -130,7 +130,7 @@ export class RoomRepository implements IRoomRepository {
     }
 
     const roomIds = roomRows.map((row) => row.room_id);
-    const pgRoomIds = `{${roomIds.join(',')}}`;
+    const pgRoomIds = this.sql.array(roomIds, 'uuid');
 
     const [unreadRows, privateRoomMemberRows] = await Promise.all([
       this.sql<{ room_id: string; unread_count: number }[]>`

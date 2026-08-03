@@ -174,7 +174,7 @@
 | `created_at` | TIMESTAMPTZ | Claim 建立時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
 
 #### `emergency_notifications` (緊急通知)
-持久化的緊急警報收件匣；即時發布失敗時，`pending` 資料仍可補取。
+持久化的緊急警報收件匣；即時發布失敗時，`pending` 資料仍可補取。收件人確認後，通知不會在後續恢復請求中重複出現。
 
 | 欄位名稱 | 類型 | 說明 | 條件約束 |
 | :--- | :--- | :--- | :--- |
@@ -184,5 +184,6 @@
 | `idempotency_key` | VARCHAR(255) | 固定的不活躍狀態／聯絡人鍵 | NOT NULL，與 `recipient_id` 組合 UNIQUE |
 | `message` | TEXT | 警報訊息 | NOT NULL |
 | `delivery_state` | VARCHAR(20) | `pending` 或 `published` | NOT NULL, 預設值: `pending`, CHECK |
+| `acknowledged_at` | TIMESTAMPTZ | 收件人確認時間 | 可為 NULL |
 | `created_at` | TIMESTAMPTZ | 持久化建立時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
 | `published_at` | TIMESTAMPTZ | 最近一次成功即時發布時間 | 可為 NULL |

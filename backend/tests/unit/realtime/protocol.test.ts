@@ -6,15 +6,18 @@ import {
   type RealtimeCommand,
 } from '@shared/realtime';
 
+const roomId = '550e8400-e29b-41d4-a716-446655440000';
+const attachmentId = '550e8400-e29b-41d4-a716-446655440001';
+
 const sendMessageCommand: RealtimeCommand = {
   version: PROTOCOL_VERSION,
   kind: 'command',
   id: 'command-1',
   type: 'message.send',
-  streamId: 'room:room-1',
+  streamId: `room:${roomId}`,
   reliable: true,
   payload: {
-    roomId: 'room-1',
+    roomId,
     content: 'hello',
   },
 };
@@ -33,7 +36,15 @@ describe('near-chat.v1 runtime contract', () => {
 
     expect(parseClientFrame(JSON.stringify({
       ...sendMessageCommand,
-      payload: { roomId: 'room-1', content: '' },
+      payload: { roomId, content: '' },
+    }))).toMatchObject({
+      success: false,
+      code: 'INVALID_PAYLOAD',
+    });
+
+    expect(parseClientFrame(JSON.stringify({
+      ...sendMessageCommand,
+      payload: { roomId: 'not-a-uuid', content: 'hello' },
     }))).toMatchObject({
       success: false,
       code: 'INVALID_PAYLOAD',
@@ -48,12 +59,12 @@ describe('near-chat.v1 runtime contract', () => {
   test('accepts attachment-only sends while requiring content or an attachment', () => {
     expect(parseClientFrame(JSON.stringify({
       ...sendMessageCommand,
-      payload: { roomId: 'room-1', content: '', attachmentIds: ['attachment-1'] },
+      payload: { roomId, content: '', attachmentIds: [attachmentId] },
     }))).toMatchObject({ success: true });
 
     expect(parseClientFrame(JSON.stringify({
       ...sendMessageCommand,
-      payload: { roomId: 'room-1', content: '', attachmentIds: [] },
+      payload: { roomId, content: '', attachmentIds: [] },
     }))).toMatchObject({
       success: false,
       code: 'INVALID_PAYLOAD',
@@ -70,14 +81,14 @@ describe('near-chat.v1 runtime contract', () => {
       ...sendMessageCommand,
       type: 'typing.set',
       reliable: false,
-      payload: { roomId: 'room-1', isTyping: true },
+      payload: { roomId, isTyping: true },
     }))).toEqual({
       success: true,
       data: {
         ...sendMessageCommand,
         type: 'typing.set',
         reliable: false,
-        payload: { roomId: 'room-1', isTyping: true },
+        payload: { roomId, isTyping: true },
       },
     });
   });

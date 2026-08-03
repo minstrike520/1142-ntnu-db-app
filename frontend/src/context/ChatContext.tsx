@@ -31,6 +31,7 @@ import type {
 } from "@shared/types";
 import {
   approveRoomMember,
+  acknowledgeDurableEmergencyNotification,
   attachmentDownloadUrl,
   blockUser as blockUserApi,
   createFolder,
@@ -1117,6 +1118,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         url: "/",
       });
       window.alert(`${title}\n${body}`);
+      const activeToken = tokenRef.current;
+      if (activeToken) {
+        void acknowledgeDurableEmergencyNotification(activeToken, payload.notificationId)
+          .catch((error) => console.error("Failed to acknowledge emergency notification", error));
+      }
     };
 
     const cleanupNewMessage = onMessageCreated(socket, (payload) => {

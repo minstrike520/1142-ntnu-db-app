@@ -19,6 +19,8 @@ const frames = (connection: FakeConnection) => connection.sent.map((value) => {
   return parsed.data;
 });
 
+const roomId = '550e8400-e29b-41d4-a716-446655440000';
+
 describe('RealtimeCommandHandler', () => {
   test('replays an ACK-lost auth renewal after reconnecting as the same user', async () => {
     const now = Date.now();
@@ -81,12 +83,12 @@ describe('RealtimeCommandHandler', () => {
     const bob = new FakeConnection();
     await manager.register(alice, { connectionId: 'alice-1', userId: 'alice', leaseExpiresAt: now + 60_000 });
     await manager.register(bob, { connectionId: 'bob-1', userId: 'bob', leaseExpiresAt: now + 60_000 });
-    manager.syncRooms('bob-1', ['room-1']);
+    manager.syncRooms('bob-1', [roomId]);
 
     const handler = new RealtimeCommandHandler({
       manager,
       tickets: new WsTicketService({ secret: 'test' }),
-      listAuthorizedRoomIds: async (userId) => userId === 'alice' ? ['room-1'] : [],
+      listAuthorizedRoomIds: async (userId) => userId === 'alice' ? [roomId] : [],
       service: {
         sendMessage: async () => { throw new Error('unused'); },
         editMessage: async () => { throw new Error('unused'); },
@@ -104,26 +106,26 @@ describe('RealtimeCommandHandler', () => {
       type: 'rooms.sync',
       streamId: 'control',
       reliable: true,
-      payload: { roomIds: ['room-not-authorized'] },
+      payload: { roomIds: ['550e8400-e29b-41d4-a716-446655440001'] },
     }));
     expect(frames(alice).find((frame) => frame.kind === 'ack' && frame.correlationId === 'sync-1')).toBeDefined();
-    expect(manager.hasRoomSubscription('alice-1', 'room-1')).toBe(true);
-    expect(manager.hasRoomSubscription('alice-1', 'room-not-authorized')).toBe(false);
+    expect(manager.hasRoomSubscription('alice-1', roomId)).toBe(true);
+    expect(manager.hasRoomSubscription('alice-1', '550e8400-e29b-41d4-a716-446655440001')).toBe(false);
 
     await handler.handle('alice-1', JSON.stringify({
       version: PROTOCOL_VERSION,
       kind: 'command',
       id: 'typing-1',
       type: 'typing.set',
-      streamId: 'room:room-1',
+      streamId: `room:${roomId}`,
       reliable: false,
-      payload: { roomId: 'room-1', isTyping: true },
+      payload: { roomId, isTyping: true },
     }));
     const typing = frames(bob).find((frame) => frame.kind === 'event' && frame.type === 'typing.changed');
     expect(typing).toMatchObject({
       kind: 'event',
       reliable: false,
-      payload: { roomId: 'room-1', userId: 'alice', isTyping: true },
+      payload: { roomId, userId: 'alice', isTyping: true },
     });
 
     await handler.handle('alice-1', JSON.stringify({
@@ -131,9 +133,9 @@ describe('RealtimeCommandHandler', () => {
       kind: 'command',
       id: 'invalid-send-1',
       type: 'message.send',
-      streamId: 'room:room-1',
+      streamId: `room:${roomId}`,
       reliable: true,
-      payload: { roomId: 'room-1', content: '' },
+      payload: { roomId, content: '' },
     }));
     expect(frames(alice).find(
       (frame) => frame.kind === 'nack' && frame.correlationId === 'invalid-send-1',

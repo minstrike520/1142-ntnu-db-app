@@ -77,7 +77,7 @@ export class RoomMemberRepository implements IRoomMemberRepository {
 
   async resolveMentions(roomId: string, names: string[]): Promise<string[]> {
     if (names.length === 0) return [];
-    const pgArray = `{${names.map(n => `"${n.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`).join(',')}}`;
+    const pgArray = this.sql.array(names, 'text');
     const rows = await this.sql<{ user_id: string }[]>`
       SELECT u.user_id 
       FROM room_members rm 

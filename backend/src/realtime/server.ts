@@ -118,20 +118,7 @@ export const createRealtimeServer = (options: CreateRealtimeServerOptions): Real
   });
 
   const requestedPort = options.port ?? Number(process.env.PORT ?? 4000);
-  let server: Bun.Server<RealtimeSocketData> | undefined;
-  if (requestedPort !== 0) {
-    server = start(requestedPort);
-  } else {
-    for (let attempt = 0; attempt < 20 && !server; attempt += 1) {
-      const candidate = 20_000 + Math.floor(Math.random() * 30_000);
-      try {
-        server = start(candidate);
-      } catch (error) {
-        if ((error as { code?: string }).code !== 'EADDRINUSE') throw error;
-      }
-    }
-  }
-  if (!server) throw new Error('Unable to allocate an ephemeral realtime test port');
+  const server = start(requestedPort);
 
   const heartbeat = setInterval(
     () => options.manager.heartbeat(),

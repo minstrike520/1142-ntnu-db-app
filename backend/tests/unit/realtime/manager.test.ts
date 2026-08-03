@@ -5,6 +5,7 @@ import { RealtimeManager, type RealtimeConnection } from '../../../src/realtime/
 class FakeConnection implements RealtimeConnection {
   readonly sent: string[] = [];
   readonly closes: Array<{ code: number; reason: string }> = [];
+  pings = 0;
   bufferedAmount = 0;
 
   send(frame: string): number {
@@ -16,7 +17,7 @@ class FakeConnection implements RealtimeConnection {
     this.closes.push({ code, reason });
   }
 
-  ping(): void {}
+  ping(): void { this.pings += 1; }
 }
 
 const eventTypes = (connection: FakeConnection) => connection.sent.flatMap((frame) => {
@@ -25,6 +26,21 @@ const eventTypes = (connection: FakeConnection) => connection.sent.flatMap((fram
 });
 
 describe('RealtimeManager lifecycle and routing', () => {
+  test('sends the auth-expiring notice and heartbeat ping in the same tick', async () => {
+    const now = 1_000;
+    const manager = new RealtimeManager({ now: () => now });
+    const connection = new FakeConnection();
+    await manager.register(connection, {
+      connectionId: 'alice-1', userId: 'alice', leaseExpiresAt: now + 20_000,
+    });
+    connection.sent.length = 0;
+
+    manager.heartbeat();
+
+    expect(eventTypes(connection)).toContain('auth.expiring');
+    expect(connection.pings).toBe(1);
+  });
+
   test('bounds queued outbound frames independently from queued bytes', async () => {
     const manager = new RealtimeManager({ limits: { maxOutboundFrames: 2 } });
     const connection = new FakeConnection();

@@ -174,7 +174,7 @@ Stores message mutation idempotency claims. Reusing `(user_id, command_id)` with
 | `created_at` | TIMESTAMPTZ | Claim creation time | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
 
 #### `emergency_notifications`
-Durable emergency-alert inbox. `pending` rows remain recoverable even if realtime publication fails.
+Durable emergency-alert inbox. `pending` rows remain recoverable even if realtime publication fails. Unacknowledged rows are returned by the recovery endpoint until the recipient acknowledges them.
 
 | Column Name | Type | Description | Constraints |
 | :--- | :--- | :--- | :--- |
@@ -184,5 +184,6 @@ Durable emergency-alert inbox. `pending` rows remain recoverable even if realtim
 | `idempotency_key` | VARCHAR(255) | Stable inactivity/contact key | NOT NULL, UNIQUE with `recipient_id` |
 | `message` | TEXT | Alert message | NOT NULL |
 | `delivery_state` | VARCHAR(20) | `pending` or `published` | NOT NULL, DEFAULT `pending`, CHECK |
+| `acknowledged_at` | TIMESTAMPTZ | Recipient acknowledgement time | NULLABLE |
 | `created_at` | TIMESTAMPTZ | Durable creation time | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
 | `published_at` | TIMESTAMPTZ | Last successful realtime publication time | NULLABLE |

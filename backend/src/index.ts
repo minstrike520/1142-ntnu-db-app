@@ -180,6 +180,9 @@ const roomService = makeRoomService(
           && data.role === 'pending');
       if (affectedUserId && accessRevoked) void realtimeManager.revokeRoom(affectedUserId, roomId);
     },
+    roomDeleted(roomId, memberIds) {
+      for (const userId of memberIds) void realtimeManager.revokeRoom(userId, roomId);
+    },
     messageCreated(roomId, value) {
       const message = toRealtimeMessage(value as MessageWithSender);
       void realtimeManager.publish({
@@ -251,6 +254,8 @@ honoApp.route('/api/v1/realtime', makeRealtimeRoutes(wsTickets, realtimeService)
 
 honoApp.onError(errorHandler);
 
+// This unlistened node:http server is retained as the route-test adapter.
+// Production traffic uses the Bun native realtime server below.
 const requestListener = getRequestListener(honoApp.fetch);
 const server = createServer(requestListener);
 const app = server;

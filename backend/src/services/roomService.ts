@@ -21,6 +21,7 @@ const generateInviteCode = () => randomBytes(6).toString('base64url').slice(0, 8
 
 export interface RoomRealtimeNotifier {
   roomUpdated(roomId: string, change: string, data: unknown): void;
+  roomDeleted?(roomId: string, memberIds: string[]): void;
   messageCreated(roomId: string, message: unknown): void;
   userRoomUpdated(userId: string, roomId: string, change: string, data: unknown): void;
 }
@@ -274,7 +275,9 @@ export const makeRoomService = (
         throw new ForbiddenError('Only the owner can delete the group');
       }
 
+      const members = await roomMemberRepo.findByRoom(roomId);
       await repo.delete(roomId);
+      realtime?.roomDeleted?.(roomId, members.map((member) => member.userId));
       realtime?.roomUpdated(roomId, 'ROOM_DELETED', { roomId });
     },
 

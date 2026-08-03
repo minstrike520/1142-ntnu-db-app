@@ -295,7 +295,9 @@ export class RealtimeManager implements RealtimePublisher {
       if (!meta) continue;
       if (meta.leaseExpiresAt <= now) {
         connection.close(1008, 'AUTH_EXPIRED');
-      } else if (meta.leaseExpiresAt - now <= 30_000 && !meta.authExpiringSent) {
+        continue;
+      }
+      if (meta.leaseExpiresAt - now <= 30_000 && !meta.authExpiringSent) {
         meta.authExpiringSent = true;
         this.sendEvent(connectionId, {
           type: 'auth.expiring',
@@ -303,11 +305,12 @@ export class RealtimeManager implements RealtimePublisher {
           reliable: true,
           payload: { leaseExpiresAt: new Date(meta.leaseExpiresAt).toISOString() },
         });
-      } else if (now - meta.lastPongAt > this.limits.heartbeatTimeoutMs) {
-        connection.close(1001, 'HEARTBEAT_TIMEOUT');
-      } else {
-        connection.ping();
       }
+      if (now - meta.lastPongAt > this.limits.heartbeatTimeoutMs) {
+        connection.close(1001, 'HEARTBEAT_TIMEOUT');
+        continue;
+      }
+      connection.ping();
     }
   }
 

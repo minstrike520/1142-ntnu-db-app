@@ -101,7 +101,7 @@ export class MessageRepository implements IMessageRepository {
       return [];
     }
 
-    const pgMessageIds = `{${messageIds.join(',')}}`;
+    const pgMessageIds = this.sql.array(messageIds, 'uuid');
 
     const [messageRows, mentionRows, attachmentRows] = await Promise.all([
       this.sql<MessageWithSenderRow[]>`
@@ -216,7 +216,7 @@ export class MessageRepository implements IMessageRepository {
       }
 
       if (data.attachmentIds && data.attachmentIds.length > 0) {
-        const pgAttIds = `{${data.attachmentIds.join(',')}}`;
+        const pgAttIds = this.sql.array(data.attachmentIds, 'uuid');
         const updatedAtts = await tx<{ attachment_id: string }[]>`
           UPDATE attachments SET message_id = ${createdMessageId}
           WHERE attachment_id = ANY(${pgAttIds}::uuid[]) AND message_id IS NULL

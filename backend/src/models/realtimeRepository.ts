@@ -75,6 +75,7 @@ interface AttachmentExtraRow {
 export interface MessageMutationResult {
   message: RealtimeMessage;
   replayed: boolean;
+  readAdvanced?: boolean;
 }
 
 export interface MessageDeltaResult {
@@ -160,7 +161,7 @@ export class RealtimeRepository {
   ): Promise<string[]> {
     const resolved = new Set<string>();
     if (names.length > 0) {
-      const pgNames = `{${names.map((name) => `"${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`).join(',')}}`;
+      const pgNames = this.sql.array(names, 'text');
       const direct = await this.sql<{ user_id: string }[]>`
         SELECT u.user_id
         FROM room_members rm
@@ -193,6 +194,7 @@ export class RealtimeRepository {
     let messageId = '';
     let replayed = false;
     let replayRevision: string | undefined;
+    let readAdvanced = false;
 
     await this.sql.begin(async (tx) => {
       const claim = await tx<{ command_id: string }[]>`
@@ -225,10 +227,14 @@ export class RealtimeRepository {
         return;
       }
 
-      const created = await tx<{ message_id: string; revision: bigint | string | number }[]>`
+      const created = await tx<{
+        message_id: string;
+        revision: bigint | string | number;
+        sent_at: Date | string;
+      }[]>`
         INSERT INTO messages (room_id, sender_id, content, reply_to_id)
         VALUES (${input.roomId}, ${input.userId}, ${input.content}, ${input.replyToId ?? null})
-        RETURNING message_id, revision
+        RETURNING message_id, revision, sent_at
       `;
       messageId = created[0].message_id;
 
@@ -244,11 +250,10 @@ export class RealtimeRepository {
 
       if (input.attachmentIds?.length) {
         const uniqueAttachmentIds = [...new Set(input.attachmentIds)];
-        const pgAttachmentIds = `{${uniqueAttachmentIds.join(',')}}`;
         const attached = await tx<{ attachment_id: string }[]>`
           UPDATE attachments
           SET message_id = ${messageId}
-          WHERE attachment_id = ANY(${pgAttachmentIds}::uuid[]) AND message_id IS NULL
+          WHERE attachment_id = ANY(${tx.array(uniqueAttachmentIds, 'uuid')}) AND message_id IS NULL
           RETURNING attachment_id
         `;
         if (attached.length !== uniqueAttachmentIds.length) {
@@ -267,15 +272,21 @@ export class RealtimeRepository {
         UPDATE message_commands SET message_id = ${messageId}, result_revision = ${created[0].revision}
         WHERE user_id = ${input.userId} AND command_id = ${input.commandId}
       `;
-      await tx`
+      const readUpdates = await tx<{ message_id: string }[]>`
         UPDATE room_members
         SET last_read_id = ${messageId}
         WHERE room_id = ${input.roomId} AND user_id = ${input.userId}
           AND (
             last_read_id IS NULL
-            OR (SELECT revision FROM messages WHERE message_id = last_read_id) < ${created[0].revision}
+            OR (SELECT sent_at FROM messages WHERE message_id = last_read_id) < ${created[0].sent_at}
+            OR (
+              (SELECT sent_at FROM messages WHERE message_id = last_read_id) = ${created[0].sent_at}
+              AND last_read_id < ${messageId}
+            )
           )
+        RETURNING last_read_id AS message_id
       `;
+      readAdvanced = readUpdates.length > 0;
     });
 
     return {
@@ -283,6 +294,7 @@ export class RealtimeRepository {
         ? await this.loadMessageAtRevision(replayRevision)
         : await this.loadMessage(messageId),
       replayed,
+      readAdvanced,
     };
   }
 
@@ -651,8 +663,9 @@ export class RealtimeRepository {
     }[]>`
       SELECT notification_id, source_user_id, message, created_at
       FROM emergency_notifications
-      WHERE recipient_id = ${recipientId}
+      WHERE recipient_id = ${recipientId} AND acknowledged_at IS NULL
       ORDER BY created_at DESC, notification_id DESC
+      LIMIT 20
     `;
     return rows.map((row) => ({
       notificationId: row.notification_id,
@@ -660,6 +673,14 @@ export class RealtimeRepository {
       message: row.message,
       createdAt: asIso(row.created_at),
     }));
+  }
+
+  async acknowledgeEmergencyNotification(recipientId: string, notificationId: string): Promise<void> {
+    await this.sql`
+      UPDATE emergency_notifications
+      SET acknowledged_at = COALESCE(acknowledged_at, NOW())
+      WHERE notification_id = ${notificationId} AND recipient_id = ${recipientId}
+    `;
   }
 
   private async loadMessage(messageId: string): Promise<RealtimeMessage> {
@@ -729,18 +750,17 @@ export class RealtimeRepository {
   private async loadMessageExtras(messageIds: string[]): Promise<Map<string, Partial<RealtimeMessage>>> {
     const uniqueIds = [...new Set(messageIds)];
     if (uniqueIds.length === 0) return new Map();
-    const pgMessageIds = `{${uniqueIds.join(',')}}`;
     const [mentions, attachments] = await Promise.all([
       this.sql<{ message_id: string; user_id: string }[]>`
         SELECT message_id, user_id
         FROM message_mentions
-        WHERE message_id = ANY(${pgMessageIds}::uuid[])
+        WHERE message_id = ANY(${this.sql.array(uniqueIds, 'uuid')})
         ORDER BY message_id, user_id
       `,
       this.sql<AttachmentExtraRow[]>`
         SELECT message_id, attachment_id, uploaded_by, file_type, original_name, uploaded_at
         FROM attachments
-        WHERE message_id = ANY(${pgMessageIds}::uuid[])
+        WHERE message_id = ANY(${this.sql.array(uniqueIds, 'uuid')})
         ORDER BY message_id, uploaded_at
       `,
     ]);

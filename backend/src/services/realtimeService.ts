@@ -68,6 +68,7 @@ interface RealtimeDataRepository {
     message: string;
     createdAt: string;
   }>>;
+  acknowledgeEmergencyNotification(recipientId: string, notificationId: string): Promise<void>;
 }
 
 export class RealtimeServiceError extends AppError {
@@ -115,10 +116,6 @@ const parseMentions = (content: string): { names: string[]; everyone: boolean } 
   };
 };
 
-const ensureReliablePublication = (result: { dropped: number }): void => {
-  if (result.dropped > 0) throw new RealtimeServiceError('BACKPRESSURE', true);
-};
-
 export const makeRealtimeService = (dependencies: {
   repository: RealtimeDataRepository;
   publisher: RealtimePublisher;
@@ -156,7 +153,7 @@ export const makeRealtimeService = (dependencies: {
     connectionId: string,
     correlationId: string,
   ): Promise<void> => {
-    const result = await publisher.publish({
+    await publisher.publish({
       target: { kind: 'room', roomId: message.roomId, excludeConnectionId: connectionId },
       type,
       streamId: `room:${message.roomId}`,
@@ -164,7 +161,6 @@ export const makeRealtimeService = (dependencies: {
       correlationId,
       payload: { revision: message.revision, message },
     });
-    ensureReliablePublication(result);
   };
 
   return {
@@ -187,15 +183,16 @@ export const makeRealtimeService = (dependencies: {
         ...(mentionIds.length > 0 ? { mentionIds } : {}),
       });
       await publishMessage('message.created', result.message, connectionId, commandId);
-      const readPublication = await publisher.publish({
-        target: { kind: 'room', roomId: payload.roomId, excludeConnectionId: connectionId },
-        type: 'read.advanced',
-        streamId: `room:${payload.roomId}`,
-        reliable: true,
-        correlationId: commandId,
-        payload: { roomId: payload.roomId, userId, messageId: result.message.messageId },
-      });
-      ensureReliablePublication(readPublication);
+      if (result.readAdvanced) {
+        await publisher.publish({
+          target: { kind: 'room', roomId: payload.roomId, excludeConnectionId: connectionId },
+          type: 'read.advanced',
+          streamId: `room:${payload.roomId}`,
+          reliable: true,
+          correlationId: commandId,
+          payload: { roomId: payload.roomId, userId, messageId: result.message.messageId },
+        });
+      }
       return result;
     },
 
@@ -275,7 +272,7 @@ export const makeRealtimeService = (dependencies: {
     }): Promise<{ notificationId: string; replayed: boolean }> {
       const durable = await repository.createEmergencyNotification(input);
       if (!durable.published) {
-        const result = await publisher.publish({
+        await publisher.publish({
           target: { kind: 'user', userId: input.recipientId },
           type: 'emergency.alert',
           streamId: `user:${input.recipientId}`,
@@ -286,7 +283,6 @@ export const makeRealtimeService = (dependencies: {
             message: input.message,
           },
         });
-        ensureReliablePublication(result);
         await repository.markEmergencyNotificationPublished(durable.notificationId);
       }
       return durable;
@@ -294,6 +290,10 @@ export const makeRealtimeService = (dependencies: {
 
     listEmergencyNotifications(recipientId: string) {
       return repository.listEmergencyNotifications(recipientId);
+    },
+
+    acknowledgeEmergencyNotification(recipientId: string, notificationId: string) {
+      return repository.acknowledgeEmergencyNotification(recipientId, notificationId);
     },
   };
 };

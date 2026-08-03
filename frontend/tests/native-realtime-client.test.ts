@@ -1,5 +1,10 @@
 import { describe, expect, test, vi } from 'vitest';
-import { PROTOCOL_VERSION, type RealtimeMessage, type RealtimeServerFrame } from '@shared/realtime';
+import {
+  PROTOCOL_VERSION,
+  REALTIME_LIMITS,
+  type RealtimeMessage,
+  type RealtimeServerFrame,
+} from '@shared/realtime';
 import { ChatSocket } from '@/lib/socket';
 
 class FakeWebSocket extends EventTarget {
@@ -113,6 +118,57 @@ describe('native realtime client', () => {
     sockets[1].open();
 
     expect(sockets[1].sent.some((frame) => JSON.parse(frame).id === commandId)).toBe(true);
+    client.disconnect();
+  });
+
+  test('bounds retryable command NACK retries before failing the command', async () => {
+    const socket = new FakeWebSocket();
+    const timers: Array<{ callback: () => void; delay: number }> = [];
+    const states = vi.fn();
+    const client = new ChatSocket('access-token', {
+      ticketIssuer: async () => ({
+        ...ticketMetadata,
+        ticket: 'ticket',
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      webSocketFactory: () => socket as unknown as WebSocket,
+      random: () => 0,
+      schedule: ((callback: () => void, delay: number) => {
+        timers.push({ callback, delay });
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      }) as typeof setTimeout,
+      cancelSchedule: vi.fn() as unknown as typeof clearTimeout,
+    });
+    client.on('commandState', states);
+    client.connect();
+    await flush();
+    socket.open();
+    const commandId = client.sendMessage({ roomId: 'room-1', content: 'hello' });
+
+    for (let attempt = 0; attempt <= REALTIME_LIMITS.maxCommandRetries; attempt += 1) {
+      socket.serverSend({
+        version: PROTOCOL_VERSION,
+        kind: 'nack',
+        id: `nack-${attempt}`,
+        correlationId: commandId,
+        streamId: 'room:room-1',
+        reliable: true,
+        type: 'command.nack',
+        payload: { code: 'INTERNAL_ERROR', retryable: true, traceId: `trace-${attempt}` },
+      });
+      if (attempt < REALTIME_LIMITS.maxCommandRetries) {
+        timers[timers.length - 1]?.callback();
+      }
+    }
+
+    expect(states).toHaveBeenLastCalledWith({
+      commandId,
+      state: 'failed',
+      code: 'INTERNAL_ERROR',
+    });
+    expect(socket.sent.map((frame) => JSON.parse(frame).id).filter((id) => id === commandId))
+      .toHaveLength(REALTIME_LIMITS.maxCommandRetries + 1);
     client.disconnect();
   });
 
@@ -259,6 +315,53 @@ describe('native realtime client', () => {
     });
 
     expect(contents).toEqual(['recovered', 'live']);
+    client.disconnect();
+  });
+
+  test('flushes buffered changes and exits recovery after a permanent delta failure', async () => {
+    const socket = new FakeWebSocket();
+    const client = new ChatSocket('access-token', {
+      ticketIssuer: async () => ({
+        ...ticketMetadata,
+        ticket: 'ticket',
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      webSocketFactory: () => socket as unknown as WebSocket,
+    });
+    const contents: string[] = [];
+    client.on('messageCreated', (value) => contents.push(value.content));
+    client.connect();
+    await flush();
+    socket.open();
+    const sync = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === 'rooms.sync');
+    socket.serverSend({
+      version: PROTOCOL_VERSION,
+      kind: 'ack',
+      id: 'ack-sync',
+      correlationId: sync.id,
+      type: 'command.ack',
+      streamId: 'control',
+      reliable: true,
+      payload: { roomIds: ['room-1'] },
+    });
+    socket.serverSend(event('message.created', message('5', 'buffered', 'message-buffered')));
+    const delta = socket.sent.map((frame) => JSON.parse(frame))
+      .find((frame) => frame.type === 'message.delta');
+    socket.serverSend({
+      version: PROTOCOL_VERSION,
+      kind: 'nack',
+      id: 'nack-delta',
+      correlationId: delta.id,
+      streamId: 'control',
+      reliable: true,
+      type: 'command.nack',
+      payload: { code: 'INTERNAL_ERROR', retryable: false, traceId: 'trace-delta' },
+    });
+
+    expect(contents).toEqual(['buffered']);
+    socket.serverSend(event('message.created', message('6', 'live-after-failure', 'message-after-failure')));
+    expect(contents).toEqual(['buffered', 'live-after-failure']);
     client.disconnect();
   });
 

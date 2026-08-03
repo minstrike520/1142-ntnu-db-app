@@ -252,4 +252,29 @@ describe('RealtimeRepository durable semantics', () => {
       advanced: false,
     });
   });
+
+  test('emergency notifications are acknowledged per recipient and not replayed', async () => {
+    const first = await repo.createEmergencyNotification({
+      sourceUserId: userId,
+      recipientId: userId,
+      idempotencyKey: 'alert-1',
+      message: 'first alert',
+    });
+    const second = await repo.createEmergencyNotification({
+      sourceUserId: userId,
+      recipientId: userId,
+      idempotencyKey: 'alert-2',
+      message: 'second alert',
+    });
+
+    expect((await repo.listEmergencyNotifications(userId)).map((item) => item.notificationId))
+      .toEqual([second.notificationId, first.notificationId]);
+
+    await repo.acknowledgeEmergencyNotification(userId, first.notificationId);
+    expect((await repo.listEmergencyNotifications(userId)).map((item) => item.notificationId))
+      .toEqual([second.notificationId]);
+    await repo.acknowledgeEmergencyNotification(userId, first.notificationId);
+    expect((await repo.listEmergencyNotifications(userId)).map((item) => item.notificationId))
+      .toEqual([second.notificationId]);
+  });
 });

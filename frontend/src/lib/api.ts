@@ -648,3 +648,12 @@ export const listDurableEmergencyNotifications = (token: string): Promise<Array<
   message: string;
   createdAt: string;
 }>> => requestJson('/realtime/emergency-notifications', {}, { token });
+
+export const acknowledgeDurableEmergencyNotification = (
+  token: string,
+  notificationId: string,
+): Promise<void> => requestJson<void>(
+  `/realtime/emergency-notifications/${notificationId}/acknowledge`,
+  { method: 'POST' },
+  { token },
+);

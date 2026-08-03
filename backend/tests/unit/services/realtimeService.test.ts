@@ -29,7 +29,7 @@ describe('RealtimeService durable-first publishing', () => {
         hasAuthorizedMembership: async () => true,
         getRoomAccess: async () => ({ role: 'owner', isMuted: false, isArchived: false, isReadonly: false }),
         resolveMentionUserIds: async () => [],
-        createMessage: async () => ({ message, replayed: false }),
+        createMessage: async () => ({ message, replayed: false, readAdvanced: true }),
         editMessage: async () => ({ message: { ...message, content: 'edited', revision: '2' }, replayed: false }),
         recallMessage: async () => ({ message: { ...message, content: '', isRecalled: true, revision: '3' }, replayed: false }),
         getMessageDelta: async () => ({ changes: [], cursor: 'cursor', highWaterRevision: '3', complete: true }),
@@ -37,6 +37,7 @@ describe('RealtimeService durable-first publishing', () => {
         createEmergencyNotification: async () => ({ notificationId: 'notification-1', replayed: false, published: false }),
         markEmergencyNotificationPublished: async () => undefined,
         listEmergencyNotifications: async () => [],
+        acknowledgeEmergencyNotification: async () => undefined,
       },
       publisher,
     });
@@ -69,6 +70,7 @@ describe('RealtimeService durable-first publishing', () => {
         createEmergencyNotification: async () => { throw new Error('database unavailable'); },
         markEmergencyNotificationPublished: async () => undefined,
         listEmergencyNotifications: async () => [],
+        acknowledgeEmergencyNotification: async () => undefined,
       },
       publisher: {
         async publish() {
@@ -106,6 +108,7 @@ describe('RealtimeService durable-first publishing', () => {
         createEmergencyNotification: async () => ({ notificationId: 'notification-1', replayed: false, published: false }),
         markEmergencyNotificationPublished: async () => undefined,
         listEmergencyNotifications: async () => [],
+        acknowledgeEmergencyNotification: async () => undefined,
       },
       publisher: { publish: async () => ({ delivered: 0, dropped: 0 }) },
     });
@@ -130,5 +133,29 @@ describe('RealtimeService durable-first publishing', () => {
     expect(createMessage).toHaveBeenCalledWith(expect.objectContaining({
       mentionIds: ['bob', 'carol'],
     }));
+  });
+
+  test('ACKs a committed message even when a recipient is dropped by backpressure', async () => {
+    const service = makeRealtimeService({
+      repository: {
+        hasAuthorizedMembership: async () => true,
+        getRoomAccess: async () => ({ role: 'member', isMuted: false, isArchived: false, isReadonly: false }),
+        resolveMentionUserIds: async () => [],
+        createMessage: async () => ({ message, replayed: false, readAdvanced: false }),
+        editMessage: async () => ({ message, replayed: false }),
+        recallMessage: async () => ({ message, replayed: false }),
+        getMessageDelta: async () => ({ changes: [], cursor: 'cursor', highWaterRevision: '1', complete: true }),
+        advanceReadPosition: async () => ({ messageId: message.messageId, advanced: false }),
+        createEmergencyNotification: async () => ({ notificationId: 'notification-1', replayed: false, published: false }),
+        markEmergencyNotificationPublished: async () => undefined,
+        listEmergencyNotifications: async () => [],
+        acknowledgeEmergencyNotification: async () => undefined,
+      },
+      publisher: { publish: async () => ({ delivered: 0, dropped: 1 }) },
+    });
+
+    await expect(service.sendMessage('alice', 'connection-1', 'command-1', {
+      roomId: 'room-1', content: 'hello',
+    })).resolves.toMatchObject({ message, replayed: false });
   });
 });

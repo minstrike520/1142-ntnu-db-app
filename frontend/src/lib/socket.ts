@@ -36,6 +36,7 @@ type Listener<K extends keyof ClientEvents> = ClientEvents[K];
 interface PendingCommand {
   command: RealtimeCommand;
   retryTimer?: ReturnType<typeof setTimeout>;
+  retryCount: number;
 }
 
 interface ChatSocketOptions {
@@ -229,6 +230,11 @@ export class ChatSocket {
     if (this.socket !== socket) return;
     this.socket = null;
     if (this.stableTimer) this.options.cancelSchedule(this.stableTimer);
+    for (const pending of this.pending.values()) {
+      if (pending.retryTimer) this.options.cancelSchedule(pending.retryTimer);
+      pending.retryTimer = undefined;
+    }
+    this.resetRecovery(false);
     if (this.manualClose) return;
     if (event.code === 1002 || event.reason === 'PROTOCOL_MISMATCH') {
       this.manualClose = true;
@@ -274,7 +280,7 @@ export class ChatSocket {
       reliable,
       payload,
     } as Extract<RealtimeCommand, { type: T }>;
-    if (reliable) this.pending.set(command.id, { command });
+    if (reliable) this.pending.set(command.id, { command, retryCount: 0 });
     this.write(command);
     return command.id;
   }
@@ -318,25 +324,37 @@ export class ChatSocket {
 
   private handleNack(frame: RealtimeNack): void {
     const pending = this.pending.get(frame.correlationId);
-    if (pending && frame.payload.retryable) {
+    if (pending && frame.payload.retryable && pending.retryCount < REALTIME_LIMITS.maxCommandRetries) {
+      pending.retryCount += 1;
       this.emit('commandState', {
         commandId: frame.correlationId,
         state: 'retrying',
         code: frame.payload.code,
       });
-      const delay = frame.payload.retryAfterMs ?? 500;
+      const cap = Math.min(30_000, 500 * (2 ** pending.retryCount));
+      const delay = Math.max(
+        frame.payload.retryAfterMs ?? 0,
+        Math.floor(this.options.random() * cap),
+      );
       pending.retryTimer = this.options.schedule(() => {
         pending.retryTimer = undefined;
         this.write(pending.command);
       }, delay);
     } else {
       this.pending.delete(frame.correlationId);
-      if (pending?.command.type === 'message.delta' && frame.payload.code === 'CURSOR_INVALID') {
-        this.deltaCursor = undefined;
-        this.recovering = true;
-        this.recoveryHighWater = '0';
-        this.requestDelta();
-        return;
+      if (pending?.retryTimer) {
+        this.options.cancelSchedule(pending.retryTimer);
+        pending.retryTimer = undefined;
+      }
+      if (pending?.command.type === 'message.delta') {
+        if (frame.payload.code === 'CURSOR_INVALID') {
+          this.resetRecovery(false);
+          this.deltaCursor = undefined;
+          this.recovering = true;
+          this.requestDelta();
+        } else {
+          this.resetRecovery(true);
+        }
       }
       if (pending) {
         this.emit('commandState', {
@@ -359,6 +377,10 @@ export class ChatSocket {
       case 'message.updated':
       case 'message.recalled':
         if (this.recovering && BigInt(event.payload.revision) > BigInt(this.recoveryHighWater)) {
+          if (this.bufferedChanges.length >= REALTIME_LIMITS.maxRecoveryBufferedChanges) {
+            this.socket?.close(1013, 'RECOVERY_BUFFER_EXCEEDED');
+            return;
+          }
           this.bufferedChanges.push(event);
         } else {
           this.applyMessageEvent(event.type, event.payload.message);
@@ -422,6 +444,11 @@ export class ChatSocket {
   ): void {
     const revision = BigInt(message.revision);
     if ((this.messageRevisions.get(message.messageId) ?? BigInt(-1)) >= revision) return;
+    if (!this.messageRevisions.has(message.messageId)
+      && this.messageRevisions.size >= REALTIME_LIMITS.maxTrackedMessageRevisions) {
+      const oldest = this.messageRevisions.keys().next().value;
+      if (oldest) this.messageRevisions.delete(oldest);
+    }
     this.messageRevisions.set(message.messageId, revision);
     const apiMessage = toApiMessage(message);
     if (type === 'message.created') this.emit('messageCreated', {
@@ -436,6 +463,16 @@ export class ChatSocket {
     if (this.recovering) return;
     this.recovering = true;
     this.requestDelta();
+  }
+
+  private resetRecovery(flushBuffered: boolean): void {
+    const buffered = this.bufferedChanges.splice(0);
+    this.recovering = false;
+    this.recoveryHighWater = '0';
+    if (!flushBuffered) return;
+    buffered
+      .sort((left, right) => Number(BigInt(left.payload.revision) - BigInt(right.payload.revision)))
+      .forEach((change) => this.applyMessageEvent(change.type, change.payload.message));
   }
 
   private requestDelta(): void {

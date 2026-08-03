@@ -51,6 +51,7 @@ This document defines the RESTful API and native WebSocket protocol provided by 
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | Yes | Check inactivity to trigger alert automatically |
 | **Realtime** | `POST` | [`/realtime/ticket`](#post-realtimeticket) | Yes | Issue a short-lived, single-use WebSocket ticket |
 | | `GET` | [`/realtime/emergency-notifications`](#get-realtimeemergency-notifications) | Yes | Recover durable emergency notifications |
+| | `POST` | [`/realtime/emergency-notifications/:notificationId/acknowledge`](#post-realtimeemergency-notificationsnotificationidacknowledge) | Yes | Acknowledge a recovered emergency notification |
 
 ### Native WebSocket Protocol (`near-chat.v1`)
 
@@ -1396,6 +1397,11 @@ All errors return the following JSON structure:
 - **Authentication**: Bearer access token required.
 - **Response**: `200 OK` with an array of `{ notificationId, userId, message, createdAt }` ordered newest first.
 
+#### `POST /realtime/emergency-notifications/:notificationId/acknowledge`
+
+- **Authentication**: Bearer access token required.
+- **Response**: `204 No Content`. The operation is idempotent and only affects the authenticated user's notification.
+
 ### Ticket and connection
 
 1. Call `POST /realtime/ticket` with the access-token Bearer header. The `201` response contains `ticket`, `expiresAt`, and `leaseExpiresAt`.
@@ -1403,7 +1409,7 @@ All errors return the following JSON structure:
 3. A ticket expires after at most 45 seconds, is single-use within the backend process, has audience `near-chat-ws`, and never outlives the access token. The ticket is consumed during upgrade; the access token is not placed in the WebSocket URL.
 4. After upgrade the server emits `session.ready`. Before the session lease expires it emits `auth.expiring`; obtain a new ticket and send `auth.renew` without reconnecting.
 
-`POST /realtime/ticket` and `GET /realtime/emergency-notifications` both require Bearer authentication. The latter returns the authenticated user's durable emergency notifications, including alerts missed while offline.
+`POST /realtime/ticket` and the emergency-notification endpoints require Bearer authentication. The list endpoint returns the authenticated user's unacknowledged durable notifications, including alerts missed while offline; acknowledging one prevents it from being replayed on a later load.
 
 ### Envelope
 
@@ -1431,7 +1437,7 @@ All commands except `typing.set` must set `reliable: true`. ACK means authorizat
 | `rooms.sync` | `{ roomIds?: string[] }` | Replace subscriptions with the server-authoritative authorized room set; the supplied list is only advisory |
 | `message.send` | `{ roomId, content, replyToId?, attachmentIds? }` | Create a message. At least non-empty `content` or one attachment is required. The command `id` is the idempotency key; replaying the same intent returns the original message |
 | `message.edit` | `{ roomId, messageId, content, expectedRevision }` | Edit only when `expectedRevision` matches |
-| `message.recall` | `{ roomId, messageId, expectedRevision? }` | Recall a message idempotently |
+| `message.recall` | `{ roomId, messageId, expectedRevision? }` | Recall a message idempotently; the canonical result has empty `content` and `isRecalled: true` |
 | `message.delta` | `{ cursor?, limit? }` | Recover authorized message changes through a signed opaque cursor and fixed high-water window |
 | `read.advance` | `{ roomId, messageId }` | Move the member's read position forward in canonical message order; never regress it |
 | `typing.set` | `{ roomId, isTyping, ttlMs? }` | Publish a best-effort typing indication that expires; default TTL is 3 seconds |

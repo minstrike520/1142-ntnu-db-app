@@ -51,6 +51,7 @@
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | 需驗證 | 檢查不活躍狀態以判定是否發送警報 |
 | **即時通訊** | `POST` | [`/realtime/ticket`](#post-realtimeticket) | 需驗證 | 核發短效、單次使用的 WebSocket ticket |
 | | `GET` | [`/realtime/emergency-notifications`](#get-realtimeemergency-notifications) | 需驗證 | 補取持久化的緊急通知 |
+| | `POST` | [`/realtime/emergency-notifications/:notificationId/acknowledge`](#post-realtimeemergency-notificationsnotificationidacknowledge) | 需驗證 | 標記補取的緊急通知已讀 |
 
 ### 原生 WebSocket 協議 (`near-chat.v1`)
 
@@ -1396,14 +1397,19 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 - **驗證**：需 Bearer access token。
 - **回應**：`200 OK`，內容為依新到舊排序的 `{ notificationId, userId, message, createdAt }` 陣列。
 
+#### `POST /realtime/emergency-notifications/:notificationId/acknowledge`
+
+- **驗證**：需 Bearer access token。
+- **回應**：`204 No Content`。操作具冪等性，且只會影響目前驗證使用者所屬的通知。
+
 ### Ticket 與連線
 
-1. 以 access token 的 Bearer header 呼叫 `POST /api/v1/realtime/ticket`。`201` 回應包含 `ticket`、`expiresAt` 與 `leaseExpiresAt`。
+1. 以 access token 的 Bearer header 呼叫 `POST /realtime/ticket`。`201` 回應包含 `ticket`、`expiresAt` 與 `leaseExpiresAt`。
 2. 連線至 `ws(s)://<api-host>/ws?ticket=<ticket>`，並提供 `near-chat.v1` WebSocket subprotocol；瀏覽器的 `Origin` 必須在允許清單內。
 3. Ticket 最長 45 秒後失效、在單一 backend process 內只能使用一次、audience 固定為 `near-chat-ws`，且不會晚於 access token 到期。Upgrade 時只傳 ticket，不把 access token 放入 URL。
 4. Upgrade 後伺服器送出 `session.ready`；lease 到期前送出 `auth.expiring`。客戶端應取得新 ticket，再透過 `auth.renew` 原地延長 lease。
 
-`POST /api/v1/realtime/ticket` 與 `GET /api/v1/realtime/emergency-notifications` 均需 Bearer 驗證。後者回傳目前使用者的持久化緊急通知，也能補取離線期間錯過的警報。
+即時 ticket 與緊急通知端點均需 Bearer 驗證。列表端點只回傳目前使用者尚未確認的持久化緊急通知，也能補取離線期間錯過的警報；確認通知後，後續載入不會再次顯示。
 
 ### Envelope
 
@@ -1431,7 +1437,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 | `rooms.sync` | `{ roomIds?: string[] }` | 以伺服器授權結果完整取代房間訂閱；client 清單僅供參考 |
 | `message.send` | `{ roomId, content, replyToId?, attachmentIds? }` | 建立訊息；至少需要非空白 `content` 或一個附件；命令 `id` 是冪等鍵，同一意圖重送會回傳原訊息 |
 | `message.edit` | `{ roomId, messageId, content, expectedRevision }` | 僅在 `expectedRevision` 相符時編輯 |
-| `message.recall` | `{ roomId, messageId, expectedRevision? }` | 冪等地收回訊息 |
+| `message.recall` | `{ roomId, messageId, expectedRevision? }` | 冪等地收回訊息；canonical 結果的 `content` 為空字串且 `isRecalled: true` |
 | `message.delta` | `{ cursor?, limit? }` | 透過簽名 opaque cursor 與固定 high-water 視窗補取有權存取的訊息變更 |
 | `read.advance` | `{ roomId, messageId }` | 依 canonical 訊息順序向前推進已讀位置，不允許倒退 |
 | `typing.set` | `{ roomId, isTyping, ttlMs? }` | 發布 best-effort 且會過期的輸入狀態；預設 TTL 3 秒 |

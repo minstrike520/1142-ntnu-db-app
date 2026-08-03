@@ -20,13 +20,18 @@ export const REALTIME_LIMITS = {
   heartbeatTimeoutMs: 60_000,
   shutdownDrainMs: 5_000,
   deltaPageSize: 100,
+  maxCommandRetries: 5,
+  maxRecoveryBufferedChanges: 1_000,
+  maxTrackedMessageRevisions: 10_000,
 } as const;
 
 const idSchema = z.string().trim().min(1).max(128);
+const uuidSchema = z.uuid();
 const streamIdSchema = z.string().trim().min(1).max(256);
-const roomIdSchema = z.string().trim().min(1).max(128);
+const roomIdSchema = idSchema;
+const commandRoomIdSchema = uuidSchema;
 const revisionSchema = z.string().regex(/^\d+$/);
-const attachmentIdsSchema = z.array(idSchema).max(REALTIME_LIMITS.maxAttachments);
+const attachmentIdsSchema = z.array(uuidSchema).max(REALTIME_LIMITS.maxAttachments);
 const messageTextSchema = z.string().trim().refine(
   (content) => new TextEncoder().encode(content).byteLength <= REALTIME_LIMITS.maxMessageBytes,
   { message: 'Message exceeds the UTF-8 byte limit' },
@@ -35,9 +40,9 @@ const messageContentSchema = messageTextSchema.refine((content) => content.lengt
   message: 'Message content is required',
 });
 const messageSendPayloadSchema = z.object({
-  roomId: roomIdSchema,
+  roomId: commandRoomIdSchema,
   content: messageTextSchema,
-  replyToId: idSchema.optional(),
+  replyToId: uuidSchema.optional(),
   attachmentIds: attachmentIdsSchema.optional(),
 }).strict().refine(
   ({ content, attachmentIds }) => content.length > 0 || Boolean(attachmentIds?.length),
@@ -59,7 +64,7 @@ const commandSchemas = {
   }).strict(),
   'rooms.sync': commandBaseSchema.extend({
     type: z.literal('rooms.sync'),
-    payload: z.object({ roomIds: z.array(roomIdSchema).max(1_000).optional() }).strict(),
+    payload: z.object({ roomIds: z.array(commandRoomIdSchema).max(1_000).optional() }).strict(),
   }).strict(),
   'message.send': commandBaseSchema.extend({
     type: z.literal('message.send'),
@@ -68,8 +73,8 @@ const commandSchemas = {
   'message.edit': commandBaseSchema.extend({
     type: z.literal('message.edit'),
     payload: z.object({
-      roomId: roomIdSchema,
-      messageId: idSchema,
+      roomId: commandRoomIdSchema,
+      messageId: uuidSchema,
       content: messageContentSchema,
       expectedRevision: revisionSchema,
     }).strict(),
@@ -77,8 +82,8 @@ const commandSchemas = {
   'message.recall': commandBaseSchema.extend({
     type: z.literal('message.recall'),
     payload: z.object({
-      roomId: roomIdSchema,
-      messageId: idSchema,
+      roomId: commandRoomIdSchema,
+      messageId: uuidSchema,
       expectedRevision: revisionSchema.optional(),
     }).strict(),
   }).strict(),
@@ -91,12 +96,12 @@ const commandSchemas = {
   }).strict(),
   'read.advance': commandBaseSchema.extend({
     type: z.literal('read.advance'),
-    payload: z.object({ roomId: roomIdSchema, messageId: idSchema }).strict(),
+    payload: z.object({ roomId: commandRoomIdSchema, messageId: uuidSchema }).strict(),
   }).strict(),
   'typing.set': commandBaseSchema.extend({
     type: z.literal('typing.set'),
     payload: z.object({
-      roomId: roomIdSchema,
+      roomId: commandRoomIdSchema,
       isTyping: z.boolean(),
       ttlMs: z.number().int().min(500).max(10_000).optional(),
     }).strict(),

@@ -5,9 +5,15 @@ CREATE SEQUENCE realtime_revision_seq AS BIGINT;
 ALTER TABLE messages
   ADD COLUMN revision BIGINT;
 
-UPDATE messages
-SET revision = nextval('realtime_revision_seq')
-WHERE revision IS NULL;
+UPDATE messages AS m
+SET revision = ordered.revision
+FROM (
+  SELECT message_id, nextval('realtime_revision_seq') AS revision
+  FROM messages
+  WHERE revision IS NULL
+  ORDER BY sent_at, message_id
+) AS ordered
+WHERE m.message_id = ordered.message_id;
 
 ALTER TABLE messages
   ALTER COLUMN revision SET DEFAULT nextval('realtime_revision_seq'),
@@ -107,13 +113,14 @@ CREATE TABLE emergency_notifications (
   message          TEXT NOT NULL,
   delivery_state   VARCHAR(20) NOT NULL DEFAULT 'pending'
     CHECK (delivery_state IN ('pending', 'published')),
+  acknowledged_at  TIMESTAMPTZ,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   published_at     TIMESTAMPTZ,
   UNIQUE (recipient_id, idempotency_key)
 );
 
 CREATE INDEX emergency_notifications_recipient_created_idx
-  ON emergency_notifications (recipient_id, created_at DESC);
+  ON emergency_notifications (recipient_id, acknowledged_at, created_at DESC);
 
 ALTER TABLE emergency_alert_logs
   ADD COLUMN delivery_state VARCHAR(20) NOT NULL DEFAULT 'completed'
