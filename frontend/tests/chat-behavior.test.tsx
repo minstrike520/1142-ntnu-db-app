@@ -4,11 +4,22 @@
  * of messages, typing, read receipts, unread state, panel toggling and room
  * switching so the render-performance fixes cannot change semantics.
  */
+import React from "react";
 import { describe, expect, test } from "vitest";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { mountChatApp } from "./harness";
 import { ME_ID, makeMessage, messageId } from "./fixtures";
-import { mergeMessageSnapshot, type Message } from "@/context/ChatContext";
+import { mergeMessageSnapshot, useChat, type Message } from "@/context/ChatContext";
+
+type ChatContextValue = ReturnType<typeof useChat>;
+
+function makeProbe(sink: ChatContextValue[]): React.ReactElement {
+  function ContextProbe(): null {
+    sink.push(useChat());
+    return null;
+  }
+  return <ContextProbe />;
+}
 
 describe("reconnect snapshot convergence", () => {
   test("a delayed REST snapshot cannot wipe pending commands or newer live revisions", () => {
@@ -102,8 +113,9 @@ describe("receiving and sending messages", () => {
     expect(screen.getAllByText("1", { exact: true }).length).toBeGreaterThan(0);
   });
 
-  test("sends a message over the socket and renders the server echo", async () => {
-    const app = await mountChatApp("/chat/room-1");
+  test("converges an optimistic send onto the canonical ACK without duplicating it", async () => {
+    const seen: ChatContextValue[] = [];
+    const app = await mountChatApp("/chat/room-1", { probe: makeProbe(seen) });
     const textarea = screen.getByPlaceholderText<HTMLTextAreaElement>("Type a message...");
 
     fireEvent.change(textarea, { target: { value: "Hello there" } });
@@ -114,14 +126,16 @@ describe("receiving and sending messages", () => {
     expect(sends[0].payload).toMatchObject({ roomId: "room-1", content: "Hello there" });
     expect(textarea.value).toBe("");
 
-    act(() => {
-      app.socket().serverMessageCreated(
-        makeMessage("room-1", 41, ME_ID, { content: "Hello there" }),
-      );
-    });
     await app.settle();
 
-    expect(screen.getAllByText("Hello there").length).toBeGreaterThan(0);
+    // The server excludes the originating connection from the room broadcast, so
+    // the ACK is the sole delivery and must replace the optimistic placeholder
+    // rather than sit alongside it.
+    const sent = seen.at(-1)!.messages.filter((m: Message) => m.content === "Hello there");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].id).not.toBe(sends[0].id);
+    expect(sent[0].deliveryState).toBe("sent");
+    expect(screen.getAllByText("Hello there")).toHaveLength(2);
   });
 
   test("marks a message as recalled when the server says so", async () => {

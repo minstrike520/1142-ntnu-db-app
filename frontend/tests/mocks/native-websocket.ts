@@ -1,7 +1,8 @@
 import { PROTOCOL_VERSION, type RealtimeEventType, type RealtimeMessage } from '@shared/realtime';
 import type { MessageWithSender } from '@shared/types';
+import { ME_ID, ME_NAME } from '../fixtures';
 
-const toRealtimeMessage = (message: MessageWithSender): RealtimeMessage => ({
+const toRealtimeMessage = (message: MessageWithSender, revision: string): RealtimeMessage => ({
   messageId: message.messageId,
   roomId: message.roomId,
   senderId: message.senderId,
@@ -9,7 +10,7 @@ const toRealtimeMessage = (message: MessageWithSender): RealtimeMessage => ({
   ...(message.replyToId ? { replyToId: message.replyToId } : {}),
   isRecalled: message.isRecalled,
   sentAt: new Date(message.sentAt).toISOString(),
-  revision: message.revision ?? '1',
+  revision: message.revision ?? revision,
   sender: message.sender,
   ...(message.mentions ? { mentions: message.mentions } : {}),
   ...(message.attachments ? {
@@ -40,6 +41,8 @@ export class MockNativeWebSocket extends EventTarget {
   bufferedAmount = 0;
   readyState = MockNativeWebSocket.CONNECTING;
   emitted: Array<{ event: string; payload: unknown; id: string }> = [];
+  /** Server-managed monotonic revision, so a later change always supersedes an earlier one. */
+  private revisionCounter = 0;
   onopen: ((event: Event) => void) | null = null;
   onclose: ((event: CloseEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
@@ -56,7 +59,12 @@ export class MockNativeWebSocket extends EventTarget {
   }
 
   send(frame: string): void {
-    const command = JSON.parse(frame) as { id: string; type: string; payload: unknown; streamId: string };
+    const command = JSON.parse(frame) as {
+      id: string;
+      type: string;
+      payload: Record<string, unknown>;
+      streamId: string;
+    };
     this.emitted.push({ event: command.type, payload: command.payload, id: command.id });
     if (command.type === 'message.delta') {
       this.serverEvent('message.delta', {
@@ -66,7 +74,40 @@ export class MockNativeWebSocket extends EventTarget {
         complete: true,
       }, command.id);
     }
-    this.serverAck(command.id, command.streamId, {});
+    // The real server ACKs a durable message mutation with the canonical
+    // MessageMutationResult, and excludes the originating connection from the
+    // room broadcast. The originating tab therefore converges through the ACK
+    // alone — modelling the empty ACK here would let a duplicate render pass.
+    this.serverAck(command.id, command.streamId, this.durableAckPayload(command));
+  }
+
+  private durableAckPayload(command: { id: string; type: string; payload: Record<string, unknown> }): unknown {
+    if (command.type !== 'message.send'
+      && command.type !== 'message.edit'
+      && command.type !== 'message.recall') return {};
+
+    const roomId = String(command.payload.roomId ?? 'room-1');
+    const isRecall = command.type === 'message.recall';
+    const messageId = command.type === 'message.send'
+      ? `${roomId}-ack-${command.id}`
+      : String(command.payload.messageId);
+    const message: RealtimeMessage = {
+      messageId,
+      roomId,
+      senderId: ME_ID,
+      content: isRecall ? '' : String(command.payload.content ?? ''),
+      ...(command.payload.replyToId ? { replyToId: String(command.payload.replyToId) } : {}),
+      isRecalled: isRecall,
+      sentAt: new Date().toISOString(),
+      revision: this.allocateRevision(),
+      sender: { userId: ME_ID, name: ME_NAME },
+    };
+    return { message, replayed: false, readAdvanced: command.type === 'message.send' };
+  }
+
+  private allocateRevision(): string {
+    this.revisionCounter += 1;
+    return String(this.revisionCounter);
   }
 
   close(code = 1000, reason = ''): void {
@@ -75,7 +116,7 @@ export class MockNativeWebSocket extends EventTarget {
   }
 
   serverMessageCreated(message: MessageWithSender): void {
-    const realtimeMessage = toRealtimeMessage(message);
+    const realtimeMessage = toRealtimeMessage(message, this.allocateRevision());
     this.serverEvent('message.created', {
       revision: realtimeMessage.revision,
       message: realtimeMessage,
@@ -83,14 +124,18 @@ export class MockNativeWebSocket extends EventTarget {
   }
 
   serverMessageUpdated(message: MessageWithSender): void {
-    const realtimeMessage = toRealtimeMessage(message);
+    // Must outrank the create, or the client's revision dedupe drops the update.
+    const realtimeMessage = toRealtimeMessage(
+      { ...message, revision: undefined },
+      this.allocateRevision(),
+    );
     this.serverEvent('message.updated', {
       revision: realtimeMessage.revision,
       message: realtimeMessage,
     });
   }
 
-  serverMessageRecalled(messageId: string, roomId = 'room-1', revision = '999'): void {
+  serverMessageRecalled(messageId: string, roomId = 'room-1', revision = this.allocateRevision()): void {
     const message: RealtimeMessage = {
       messageId,
       roomId,

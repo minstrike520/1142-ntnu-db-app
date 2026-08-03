@@ -265,6 +265,49 @@ describe('native realtime client', () => {
     client.disconnect();
   });
 
+  test('surfaces a send ACK once, tagged with the originating command id', async () => {
+    const socket = new FakeWebSocket();
+    const client = new ChatSocket('access-token', {
+      ticketIssuer: async () => ({
+        ...ticketMetadata,
+        ticket: 'ticket',
+        expiresAt: '2026-08-03T00:00:30.000Z',
+        leaseExpiresAt: '2026-08-03T00:01:00.000Z',
+      }),
+      webSocketFactory: () => socket as unknown as WebSocket,
+    });
+    const received = vi.fn();
+    client.on('messageCreated', received);
+    client.connect();
+    await flush();
+    socket.open();
+
+    const commandId = client.sendMessage({ roomId: 'room-1', content: 'hello' });
+    const committed = message('7', 'hello', 'message-committed');
+    socket.serverSend({
+      version: PROTOCOL_VERSION,
+      kind: 'ack',
+      id: 'ack-1',
+      correlationId: commandId,
+      streamId: 'room:room-1',
+      reliable: true,
+      type: 'command.ack',
+      payload: { message: committed, replayed: false, readAdvanced: true },
+    });
+
+    // The ACK is what reconciles the optimistic entry, so it must carry the
+    // originating command id back to the UI.
+    expect(received).toHaveBeenCalledTimes(1);
+    expect(received).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'message-committed', clientCommandId: commandId }),
+    );
+
+    // A redelivery of the same committed revision must not surface a second time.
+    socket.serverSend(event('message.created', committed));
+    expect(received).toHaveBeenCalledTimes(1);
+    client.disconnect();
+  });
+
   test('buffers live changes until the fixed high-water delta window completes', async () => {
     const socket = new FakeWebSocket();
     const client = new ChatSocket('access-token', {

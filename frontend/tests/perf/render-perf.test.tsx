@@ -13,7 +13,7 @@ import path from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { formatMeasurement, mountChatApp, type Measurement } from "../harness";
-import { ME_ID, makeMessage } from "../fixtures";
+import { makeMessage } from "../fixtures";
 
 const results: Measurement[] = [];
 
@@ -89,16 +89,12 @@ describe("scenario 2: receive and send messages", () => {
     app.startMeasure();
     fireEvent.change(textarea, { target: { value: "Hello from me" } });
     fireEvent.click(screen.getByText("Send"));
-    act(() => {
-      socket.serverMessageCreated(
-        makeMessage("room-1", 41, ME_ID, { content: "Hello from me" }),
-      );
-    });
     await app.settle();
-    results.push(app.measure("S2c send 1 msg + server echo"));
+    results.push(app.measure("S2c send 1 msg + canonical ACK"));
 
     expect(socket.countEmitted("message.send")).toBe(1);
-    expect(screen.getAllByText("Hello from me").length).toBeGreaterThan(0);
+    // One chat bubble plus one sidebar preview — the optimistic entry has converged.
+    expect(screen.getAllByText("Hello from me")).toHaveLength(2);
   });
 });
 
