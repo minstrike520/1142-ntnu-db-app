@@ -142,3 +142,25 @@ export const removeManagedAvatar = async (
     }
   }
 };
+
+/**
+ * The avatar side effects a service needs, as an injectable seam.
+ *
+ * Services take this instead of importing `saveAvatarUpload` /
+ * `removeManagedAvatar` directly so their unit tests can pass a stub through
+ * the factory. The alternative — `mock.module('../utils/avatarUpload', ...)` —
+ * mutates Bun's process-global module registry, so it also replaces the real
+ * implementation for every other test file in the same `bun test` process and
+ * cannot be undone (re-registering the original module does not restore the
+ * binding). That made this module's own tests pass or fail purely on test-file
+ * enumeration order. See issue #467.
+ */
+export interface AvatarStore {
+  saveAvatarUpload(ownerId: string, file: UploadedFile): Promise<string>;
+  removeManagedAvatar(avatarUrl?: string, ownerId?: string): Promise<void>;
+}
+
+export const defaultAvatarStore: AvatarStore = {
+  saveAvatarUpload,
+  removeManagedAvatar,
+};

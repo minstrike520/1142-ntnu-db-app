@@ -2,7 +2,7 @@ import type { UploadedFile } from '../utils/fileUpload';
 import type { Room, RoomInvitePreview, RoomSummary } from '@shared/types';
 import { randomBytes } from 'crypto';
 import { isUserOnline } from '../realtime/presence';
-import { removeManagedAvatar, saveAvatarUpload } from '../utils/avatarUpload';
+import { defaultAvatarStore, type AvatarStore } from '../utils/avatarUpload';
 import type { IRoomRepository } from '../models/IRoomRepository';
 import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
 import type { IUserRepository } from '../models/IUserRepository';
@@ -31,6 +31,7 @@ export const makeRoomService = (
   // Used to notify users of events they cannot receive via room broadcast (e.g., being
   // approved into a group they haven't joined yet).
   emitToUser?: (userId: string, eventName: string, payload: unknown) => void,
+  avatarStore: AvatarStore = defaultAvatarStore,
 ) => {
   const ensureMember = async (roomId: string, userId: string) => {
     const existing = await roomMemberRepo.findMember(roomId, userId);
@@ -415,19 +416,19 @@ export const makeRoomService = (
         throw new ForbiddenError('Only owner or admin can update room avatar');
       }
 
-      const avatarUrl = await saveAvatarUpload(roomId, file);
+      const avatarUrl = await avatarStore.saveAvatarUpload(roomId, file);
 
       try {
         const updated = await repo.update(roomId, { avatarUrl });
         if (room.avatarUrl && room.avatarUrl !== avatarUrl) {
-          await removeManagedAvatar(room.avatarUrl);
+          await avatarStore.removeManagedAvatar(room.avatarUrl);
         }
         if (emitRoomEvent) {
           emitRoomEvent(roomId, 'room_update', { type: 'ROOM_AVATAR_UPDATED', data: { roomId, avatarUrl } });
         }
         return updated;
       } catch (error) {
-        await removeManagedAvatar(avatarUrl);
+        await avatarStore.removeManagedAvatar(avatarUrl);
         throw error;
       }
     },

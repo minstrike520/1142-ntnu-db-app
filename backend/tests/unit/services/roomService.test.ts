@@ -4,12 +4,6 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import type { IRoomRepository } from '../../../src/models/IRoomRepository';
 import type { IRoomMemberRepository } from '../../../src/models/IRoomMemberRepository';
 import type { Room, RoomMember } from '../../../../shared/types';
-import { saveAvatarUpload, removeManagedAvatar } from '../../../src/utils/avatarUpload';
-
-mock.module('../../../src/utils/avatarUpload', () => ({
-  saveAvatarUpload: mock(),
-  removeManagedAvatar: mock(),
-}));
 
 mock.module('../../../src/realtime/presence', () => ({
   isUserOnline: mock().mockReturnValue(false),
@@ -17,7 +11,6 @@ mock.module('../../../src/realtime/presence', () => ({
 
 afterAll(() => {
   mock.module('../../../src/realtime/presence', () => require('../../../src/realtime/presence?original'));
-  mock.module('../../../src/utils/avatarUpload', () => require('../../../src/utils/avatarUpload?original'));
 });
 
 type Mocked<T> = {
@@ -28,6 +21,10 @@ describe('roomService', () => {
   let mockRepo: Mocked<IRoomRepository>;
   let mockMemberRepo: Mocked<IRoomMemberRepository>;
   let roomService: ReturnType<typeof makeRoomService>;
+  // Injected instead of `mock.module('../../../src/utils/avatarUpload', ...)`:
+  // module mocks are process-global in Bun and cannot be undone, so stubbing
+  // the module here also stubbed it for avatarUpload.test.ts. See issue #467.
+  let avatarStore: any;
 
   const room: Room = {
     roomId: 'room-1',
@@ -66,7 +63,13 @@ describe('roomService', () => {
       remove: mock(),
       resolveMentions: mock(),
     };
-    roomService = makeRoomService(mockRepo, mockMemberRepo);
+    avatarStore = {
+      saveAvatarUpload: mock(),
+      removeManagedAvatar: mock(),
+    };
+    roomService = makeRoomService(
+      mockRepo, mockMemberRepo, undefined, undefined, undefined, undefined, undefined, avatarStore,
+    );
   });
 
   it('create validates input, trims name, and applies defaults', async () => {
@@ -415,10 +418,7 @@ describe('roomService', () => {
         originalname: 'avatar.png',
       } as any;
 
-      ((saveAvatarUpload as any) as Mock<any>).mockClear();
-      ((removeManagedAvatar as any) as Mock<any>).mockClear();
-      
-      ((saveAvatarUpload as any) as Mock<any>).mockResolvedValue('/uploads/avatars/new-avatar.png');
+      avatarStore.saveAvatarUpload.mockResolvedValue('/uploads/avatars/new-avatar.png');
     });
 
     it('updates room avatar successfully by owner', async () => {
@@ -432,7 +432,7 @@ describe('roomService', () => {
 
       expect(mockRepo.findById).toHaveBeenCalledWith('room-1');
       expect(mockMemberRepo.findMember).toHaveBeenCalledWith('room-1', 'user-1');
-      expect(saveAvatarUpload).toHaveBeenCalledWith('room-1', mockFile);
+      expect(avatarStore.saveAvatarUpload).toHaveBeenCalledWith('room-1', mockFile);
       expect(mockRepo.update).toHaveBeenCalledWith('room-1', { avatarUrl: '/uploads/avatars/new-avatar.png' });
       expect(result.avatarUrl).toBe('/uploads/avatars/new-avatar.png');
     });
@@ -474,7 +474,7 @@ describe('roomService', () => {
       mockRepo.update.mockRejectedValue(new Error('DB failure'));
 
       await expect(roomService.uploadAvatar('room-1', 'user-1', mockFile)).rejects.toThrow('DB failure');
-      expect(removeManagedAvatar).toHaveBeenCalledWith('/uploads/avatars/new-avatar.png');
+      expect(avatarStore.removeManagedAvatar).toHaveBeenCalledWith('/uploads/avatars/new-avatar.png');
     });
 
     it('deletes old avatar after successful update', async () => {
@@ -487,7 +487,7 @@ describe('roomService', () => {
 
       await roomService.uploadAvatar('room-1', 'user-1', mockFile);
 
-      expect(removeManagedAvatar).toHaveBeenCalledWith('/uploads/avatars/old-avatar.png');
+      expect(avatarStore.removeManagedAvatar).toHaveBeenCalledWith('/uploads/avatars/old-avatar.png');
     });
   });
 
@@ -810,8 +810,10 @@ describe('roomService', () => {
   describe('uploadAvatar with emitRoomEvent', () => {
     it('emits ROOM_AVATAR_UPDATED event when emitRoomEvent is provided', async () => {
       const emitRoomEvent = mock();
-      const serviceWithEmit = makeRoomService(mockRepo, mockMemberRepo, emitRoomEvent);
-      ((saveAvatarUpload as any) as Mock<any>).mockResolvedValue('/uploads/avatars/new.png');
+      const serviceWithEmit = makeRoomService(
+        mockRepo, mockMemberRepo, emitRoomEvent, undefined, undefined, undefined, undefined, avatarStore,
+      );
+      avatarStore.saveAvatarUpload.mockResolvedValue('/uploads/avatars/new.png');
       const updated = { ...room, avatarUrl: '/uploads/avatars/new.png' };
       mockRepo.findById.mockResolvedValue(room);
       mockMemberRepo.findMember.mockResolvedValue(ownerMember);
