@@ -5,13 +5,20 @@ CREATE SEQUENCE realtime_revision_seq AS BIGINT;
 ALTER TABLE messages
   ADD COLUMN revision BIGINT;
 
+-- PostgreSQL does not guarantee that a volatile function in a SELECT list is
+-- evaluated after that same SELECT's ORDER BY, so the sort is materialised in an
+-- inner subquery and nextval() is applied over the already-ordered rows. This
+-- keeps the backfilled revisions in chronological order.
 UPDATE messages AS m
 SET revision = ordered.revision
 FROM (
   SELECT message_id, nextval('realtime_revision_seq') AS revision
-  FROM messages
-  WHERE revision IS NULL
-  ORDER BY sent_at, message_id
+  FROM (
+    SELECT message_id
+    FROM messages
+    WHERE revision IS NULL
+    ORDER BY sent_at, message_id
+  ) AS chronological
 ) AS ordered
 WHERE m.message_id = ordered.message_id;
 
