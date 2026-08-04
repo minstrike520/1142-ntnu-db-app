@@ -35,7 +35,13 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
+      # The dev stack is reached directly on the published ports, with nothing in
+      # front to write X-Forwarded-For, so no hop is trusted here. Both names are
+      # pass-through only: set TRUST_PROXY_HOPS on the host if you put a proxy
+      # (Tailscale Serve, a local nginx) in front of this stack. Production does
+      # not read either — docker-compose.prod.yml pins its own value.
       - TRUST_PROXY=${TRUST_PROXY:-false}
+      - TRUST_PROXY_HOPS
       - CORS_ORIGINS=${CORS_ORIGINS}
       - ATTACHMENT_TYPE_RESTRICTION_ENABLED=${ATTACHMENT_TYPE_RESTRICTION_ENABLED:-false}
       - ATTACHMENT_ALLOWED_MIME_TYPES=${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}

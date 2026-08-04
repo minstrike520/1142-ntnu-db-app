@@ -11,6 +11,7 @@ describe('security middleware', () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalRateLimitDisabled = process.env.RATE_LIMIT_DISABLED;
   const originalTrustProxy = process.env.TRUST_PROXY;
+  const originalTrustProxyHops = process.env.TRUST_PROXY_HOPS;
 
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
@@ -23,6 +24,11 @@ describe('security middleware', () => {
       process.env.TRUST_PROXY = originalTrustProxy;
     } else {
       delete process.env.TRUST_PROXY;
+    }
+    if (originalTrustProxyHops !== undefined) {
+      process.env.TRUST_PROXY_HOPS = originalTrustProxyHops;
+    } else {
+      delete process.env.TRUST_PROXY_HOPS;
     }
   });
 
@@ -137,15 +143,34 @@ describe('security middleware', () => {
       expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '10.0.0.1' } })).status).toBe(429);
     });
 
-    it('uses only the first hop of a forwarded chain', async () => {
+    it('buckets on the hop our own proxy appended, not the head of the chain', async () => {
       process.env.NODE_ENV = 'production';
-      process.env.TRUST_PROXY = 'true';
+      process.env.TRUST_PROXY_HOPS = '1';
       delete process.env.RATE_LIMIT_DISABLED;
       const app = makeApp();
 
+      // 192.168.0.1 is what the one proxy we trust wrote; the two entries before
+      // it came from the caller.
       const headers = { 'x-forwarded-for': '10.0.0.9, 172.16.0.1, 192.168.0.1' };
       expect((await app.request('/api/ping', { headers })).status).toBe(200);
-      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '10.0.0.9' } })).status).toBe(429);
+      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '192.168.0.1' } })).status).toBe(429);
+    });
+
+    it('does not let a caller pad the chain to escape its own bucket', async () => {
+      // The regression that makes trusting the leftmost entry unsafe: one client
+      // could spend everyone else's budget, or dodge its own, just by choosing
+      // what to put in the header.
+      process.env.NODE_ENV = 'production';
+      process.env.TRUST_PROXY_HOPS = '1';
+      delete process.env.RATE_LIMIT_DISABLED;
+      const app = makeApp();
+
+      expect((await app.request('/api/ping', { headers: { 'x-forwarded-for': '198.51.100.4' } })).status).toBe(200);
+      // Same client as far as our proxy is concerned, however it dresses up the
+      // rest of the chain.
+      expect(
+        (await app.request('/api/ping', { headers: { 'x-forwarded-for': '203.0.113.7, 198.51.100.4' } })).status,
+      ).toBe(429);
     });
 
     it('ignores X-Forwarded-For when the proxy is not trusted', async () => {
