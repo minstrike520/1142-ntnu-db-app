@@ -6,23 +6,32 @@ packages:
 # where a compromised (or merely new) transitive dependency executes arbitrary
 # code on a developer machine and in CI. The previous
 # `dangerouslyAllowAllBuilds: true` granted that to every package in the graph;
-# only `sharp` ever needed it, so the grant is now an explicit allowlist and
-# adding a native dependency becomes a deliberate review step.
+# only `sharp` ever needed it, so the grant is now an explicit decision per
+# package and adding a native dependency becomes a deliberate review step.
 #
-# `sharp` — `install: node install/check.js || npm run build` resolves or builds
-# the libvips binding that avatar/attachment compression depends on.
-onlyBuiltDependencies:
-  - sharp
-
-# Acknowledged as skipped rather than left unlisted, so `pnpm install` stays
-# quiet and the decision is recorded instead of rediscovered.
+# `sharp: true` — its `install: node install/check.js || npm run build` resolves
+# or builds the libvips binding that avatar/attachment compression depends on.
+# On platforms with a matching `@img/sharp-*` prebuild the script only selects
+# the existing binary, but it must still be allowed to run for platforms without
+# one.
 #
-# `unrs-resolver` — transitive via eslint-import-resolver-typescript. Its
-# postinstall (`napi-postinstall`) only verifies that the platform's
+# `unrs-resolver: false` — denied rather than left unlisted, so `pnpm install`
+# stays quiet and the decision is recorded instead of rediscovered. It arrives
+# transitively via eslint-import-resolver-typescript, and its postinstall
+# (`napi-postinstall`) only verifies that the platform's
 # `@unrs/resolver-binding-*` package is present; the lockfile already resolves
 # that binding as an optional dependency, so the script has nothing to do.
-ignoredBuiltDependencies:
-  - unrs-resolver
+#
+# NOTE: this is `allowBuilds` (a name -> boolean map), not the pnpm 10
+# `onlyBuiltDependencies` / `ignoredBuiltDependencies` lists. pnpm 11 renamed
+# these and **silently ignores the old keys** — an install then still blocks
+# every build script and fails with ERR_PNPM_IGNORED_BUILDS, while the config
+# looks correct. `pnpm ignored-builds` prints what is actually in effect; it
+# should report no automatically-ignored builds and `unrs-resolver` under the
+# explicitly-ignored list.
+allowBuilds:
+  sharp: true
+  unrs-resolver: false
 
 # hono 4.12.34 is the fix for GHSA-8j4g-w8fx-2239 and is younger than the
 # default minimum release age. Waiting out the quarantine would leave the
