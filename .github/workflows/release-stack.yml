@@ -440,6 +440,13 @@ jobs:
           CORS_ORIGINS=http://localhost:3005
           NEXT_PUBLIC_API_URL=http://localhost:4005
           UPLOADS_MOUNT_SOURCE=app_uploads
+          # Number of reverse proxies you operate in front of the backend. This
+          # bundle publishes the backend port directly, so callers arrive as
+          # themselves and 0 is correct. Raise it per proxy you add: rate limiting
+          # then reads the client IP that many entries from the right of
+          # X-Forwarded-For. Too low behind a proxy puts every caller in one
+          # bucket; too high lets callers choose their own.
+          TRUST_PROXY_HOPS=0
           EOF
 
           jq -n \

@@ -75,7 +75,8 @@ cp .env.example .env
 | `DATABASE_URL` | PostgreSQL 連線 URL | `postgresql://chatuser:chatpassword@db:5432/chatdb` |
 | `JWT_SECRET` | 用於簽署 JWT 的密鑰鍵值 | `dev_secret_key` |
 | `RATE_LIMIT_DISABLED` | 關閉 API 請求速率限制（供測試使用） | `true`（生產環境請設為 `false` 或移除） |
-| `TRUST_PROXY` | 速率限制改以 `X-Forwarded-For` 的第一段作為來源 IP。僅在後端確實位於可信任的反向代理之後才可開啟 | `false` |
+| `TRUST_PROXY_HOPS` | 後端前方有幾層自行維運的反向代理。速率限制會取 `X-Forwarded-For` 由**右**數來第 n 段作為來源 IP，因此用戶端自行前綴的內容無法用來自選限流桶。開發堆疊為直連，留空即可；正式堆疊由 `docker-compose.prod.yml` 寫死為 `1`（cloudflared） | *(空，不信任任何代理)* |
+| `TRUST_PROXY` | 舊的布林開關，未設定 `TRUST_PROXY_HOPS` 時仍生效：`true` 等同 1 層。新設定請改用 `TRUST_PROXY_HOPS` | `false` |
 | `NEXT_PUBLIC_API_URL` | 瀏覽器端存取後端 API 的外部 URL | `http://localhost:4005` |
 | `ALLOWED_DEV_ORIGINS` | 允許進行開發連線的外部來源網域或 IP (如 Tailscale) | *(空)* |
 | `UPLOADS_MOUNT_SOURCE` | 附件上傳的儲存掛載路徑或 Docker Volume 名稱 | `app_uploads` |

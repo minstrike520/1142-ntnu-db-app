@@ -75,7 +75,8 @@ Here are the key environment parameters you can configure in `.env`:
 | `DATABASE_URL` | PostgreSQL connection URL | `postgresql://chatuser:chatpassword@db:5432/chatdb` |
 | `JWT_SECRET` | Secret key for signing JWT tokens | `dev_secret_key` |
 | `RATE_LIMIT_DISABLED` | Disables request rate limiting for testing | `true` (Set `false` or omit in production) |
-| `TRUST_PROXY` | Take the client IP for rate limiting from the first `X-Forwarded-For` entry. Only enable when the backend really sits behind a trusted reverse proxy | `false` |
+| `TRUST_PROXY_HOPS` | How many reverse proxies you operate sit in front of the backend. Rate limiting then reads the client IP that many entries from the **right** of `X-Forwarded-For`, so entries a caller prepends cannot select a bucket. Leave unset for the dev stack, which is reached directly; `docker-compose.prod.yml` pins `1` for cloudflared | *(Empty — trust nothing)* |
+| `TRUST_PROXY` | Legacy boolean, still honoured when `TRUST_PROXY_HOPS` is unset: `true` means one hop. Prefer `TRUST_PROXY_HOPS` | `false` |
 | `NEXT_PUBLIC_API_URL` | Browser-facing backend API URL | `http://localhost:4005` |
 | `ALLOWED_DEV_ORIGINS` | Allowed remote origins for dev (e.g., Tailscale IPs) | *(Empty)* |
 | `UPLOADS_MOUNT_SOURCE` | Storage path or Docker volume name for attachments | `app_uploads` |

@@ -88,6 +88,62 @@ For browser-facing frontend requests, set the API environment variable to:
 NEXT_PUBLIC_API_URL=http://localhost:4005
 ```
 
+### Production Ingress & Proxy Trust
+
+`docker-compose.prod.yml` publishes every host port on `127.0.0.1`, so the local
+walkthrough (`http://localhost:3005`) still works while the only route in from the
+network is the Cloudflare Tunnel. `cloudflared` reaches `frontend:3000` and
+`backend:4000` over the compose network, which does not involve published ports at
+all.
+
+Rate limiting buckets callers by IP, so it needs to know the caller's real address.
+Through a tunnel the peer address is always the `cloudflared` container, which
+would put every external user in one bucket — ten failed logins from anyone would
+lock out the whole service for 15 minutes. `TRUST_PROXY_HOPS` closes that:
+
+| Value | Meaning |
+|-------|---------|
+| unset / `0` | Trust nothing; use the TCP peer address. Correct for the dev stack and any deployment reached directly. |
+| `n` | `n` reverse proxies you operate sit in front. The client IP is read `n` entries from the **right** of `X-Forwarded-For`. |
+
+Reading from the right matters. `X-Forwarded-For` is append-only, so entries a
+caller sends arrive on the left and only the rightmost `n` were written by
+infrastructure you control. Trusting the leftmost entry instead lets any caller
+name its own bucket — dodging its own limit, or spending someone else's.
+
+`docker-compose.prod.yml` sets `TRUST_PROXY_HOPS=1` literally rather than through
+`${...}`, because Compose interpolates from the project `.env` and a value copied
+from `.env.example` would otherwise silently override it. Add a hop for each extra
+proxy you place in front, editing the compose file where the topology is declared.
+
+To verify a deployment buckets on real client addresses:
+
+```bash
+# 1. Nothing but the tunnel may reach the backend. From another machine:
+curl -sS --max-time 5 http://<host>:4005/api/v1/auth/login   # must fail to connect
+curl -sS --max-time 5 http://<host>:5435                     # must fail to connect
+
+# 2. Through the tunnel, exhaust the auth limiter from one client.
+for i in $(seq 1 11); do
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<tunnel-host>/api/v1/auth/login \
+    -H 'Content-Type: application/json' -d '{"email":"nobody@example.com","password":"wrong"}'
+done
+# Expect 401s, then 429 once the window is spent.
+
+# 3. A second client (different network, e.g. phone on cellular) must still get
+#    401 rather than 429 — separate buckets.
+
+# 4. A forged header must not create a new bucket. From the already-limited
+#    client, still 429:
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<tunnel-host>/api/v1/auth/login \
+  -H 'X-Forwarded-For: 203.0.113.7' \
+  -H 'Content-Type: application/json' -d '{"email":"nobody@example.com","password":"wrong"}'
+```
+
+If step 3 returns 429, the hop count is too low; if step 4 returns 401, it is too
+high. Note that `RATE_LIMIT_DISABLED=true` skips the limiter entirely, so unset it
+before testing.
+
 ### Environment Rules
 1. **Frontend prefix**: Any environment variable that must be readable on the browser-side of Next.js must be prefixed with `NEXT_PUBLIC_`.
 2. **Production injection**: Production should not depend on a checked-in `.env` file. Inject settings through your hosting platform configuration instead (e.g. Vercel, AWS Secrets Manager).
