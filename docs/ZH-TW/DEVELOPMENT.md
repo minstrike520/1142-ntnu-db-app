@@ -76,6 +76,7 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 | **前端** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js 前端網頁應用程式 |
 | **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API 與 Socket.IO 伺服器 |
 | **資料庫** | `localhost:5435` | 5432 | PostgreSQL 18 實例 |
+| **Redis** | `localhost:6385` | 6379 | 供即時狀態使用的 Redis 8 實例。因為沒有設定密碼，只綁定在 `127.0.0.1`。後端要到 #472 才會讀取 |
 
 對於瀏覽器端的前端請求，請將 API 環境變數設定為：
 ```env
@@ -373,6 +374,21 @@ describe('userRepository', () => {
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
+* **backend 起不來，且 `docker compose ps` 顯示 `redis` unhealthy 或已結束**：
+  `backend` 會等 `redis` 通過 healthcheck 才啟動，因此 Redis 起不來也會連帶擋住
+  `migrate:up`。最常見的原因是主機連接埠被占用：請在 `docker compose logs redis`
+  中查看是否有 `port is already allocated`，並釋放 `127.0.0.1:6385`，
+  或直接修改 `docker-compose.yml` 中的對應設定。
+* **確認 backend 真的連得到 Redis**：backend 映像檔內沒有 `redis-cli`，其 shell 也不是
+  bash，所以無法使用 `/dev/tcp`。但容器內有 Node，可用以下指令驗證 `REDIS_URL`
+  確實有傳進容器且能解析：
+  ```bash
+  docker compose exec backend node -e "const u=new URL(process.env.REDIS_URL);require('net').createConnection(u.port||6379,u.hostname).on('connect',()=>{console.log('ok');process.exit(0)}).on('error',e=>{console.error(e.message);process.exit(1)})"
+  ```
+* **Redis 啟動時出現 memory overcommit 或 transparent hugepage 警告**：屬預期行為，
+  可以忽略。這些警告針對的是背景存檔所需的 `fork()`，而本專案已停用持久化
+  （`--save "" --appendonly no`）；且 `vm.overcommit_memory` 並非 namespaced 設定，
+  本來就無法在單一容器內調整。
 
 ---
 
