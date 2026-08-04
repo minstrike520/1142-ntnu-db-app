@@ -1,0 +1,49 @@
+name: CI Backend
+
+on:
+  workflow_call:
+    inputs:
+      run-build:
+        description: Run the TypeScript production build job
+        # No default on purpose: a caller that forgets to pass this should fail
+        # loudly rather than silently degrade into never building.
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  # backend's `lint` script is `eslint src && tsc --noEmit`, so it already
+  # covers typechecking — there is deliberately no separate typecheck job here,
+  # unlike the frontend lane.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-backend
+          bun: 'true'
+      - run: pnpm --filter near-chat-backend lint
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-backend
+          bun: 'true'
+      - run: pnpm --filter near-chat-backend test:unit
+
+  build:
+    if: inputs.run-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-backend
+          bun: 'true'
+      - run: pnpm --filter near-chat-backend build

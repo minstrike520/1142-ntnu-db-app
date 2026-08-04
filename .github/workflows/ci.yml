@@ -1,32 +1,50 @@
 name: CI
 
+# The filename (ci.yml) and the display name (CI) are both load-bearing:
+# release-stack.yml looks this workflow up by filename, release-please.yml
+# triggers off `workflows: ['CI']`. Neither may change.
+
 on:
   push:
     branches: [main]
     # Every main commit needs a completed run so release-please.yml can safely
-    # act on that exact commit. The existing paths-filter still skips expensive
-    # frontend/backend jobs when only documentation or metadata changed.
+    # act on that exact commit. The detect job below still skips expensive
+    # lanes when only documentation or metadata changed.
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - 'README.md'
-      - 'README.zh-TW.md'
-      - '.github/ISSUE_TEMPLATE/**'
-      - 'LICENSE'
-      - 'AGENTS.md'
+    # Deliberately no paths-ignore. `required-checks` is the single required
+    # status check, and a workflow skipped by a path filter never reports at
+    # all — the check would sit Pending forever and docs-only PRs could never
+    # merge. Jobs skipped by an `if` inside a workflow do report, so letting
+    # detect skip every lane is the only safe way to make docs-only cheap.
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Only supersede in-flight PR runs. Cancelling on main would leave a main
+  # commit without a successful run, which is exactly what release-please.yml
+  # waits on via workflow_run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
-  changes:
+  detect:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # dorny/paths-filter resolves a pull request's changed files through the
+      # REST API. With an explicit top-level `permissions` block, anything not
+      # listed is dropped, so this has to be granted or path detection fails on
+      # every PR.
+      pull-requests: read
     outputs:
-      frontend: ${{ steps.filter.outputs.frontend }}
-      backend: ${{ steps.filter.outputs.backend }}
+      frontend-required: ${{ steps.plan.outputs.frontend-required }}
+      backend-required: ${{ steps.plan.outputs.backend-required }}
+      database-required: ${{ steps.plan.outputs.database-required }}
+      security-required: ${{ steps.plan.outputs.security-required }}
+      run-build: ${{ steps.plan.outputs.run-build }}
     steps:
       - uses: actions/checkout@v7
       # This repo is a single-root-lockfile pnpm workspace. Running
@@ -51,6 +69,10 @@ jobs:
           # typecheck, tests, builds and security-scan, allowing the downstream
           # release workflow to publish a dependency or CVE-override change
           # without any package-level verification.
+          #
+          # There is deliberately no separate `database` filter: the database
+          # lane is backend's integration verification and reuses the backend
+          # filter. Two near-identical path lists would only drift apart.
           filters: |
             frontend:
               - 'frontend/**'
@@ -62,6 +84,7 @@ jobs:
               - '.dockerignore'
               - 'docker-compose*.yml'
               - '.github/workflows/**'
+              - '.github/actions/**'
             backend:
               - 'backend/**'
               - 'shared/**'
@@ -72,245 +95,165 @@ jobs:
               - '.dockerignore'
               - 'docker-compose*.yml'
               - '.github/workflows/**'
+              - '.github/actions/**'
+            security:
+              - '**/package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.cve-lite/**'
+              - '.github/workflows/**'
+              - '.github/actions/**'
 
-  frontend-lint:
-    needs: changes
-    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile --filter near-chat-frontend...
-      - run: pnpm --filter near-chat-frontend lint
-
-  frontend-typecheck:
-    needs: changes
-    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile --filter near-chat-frontend...
-      - run: pnpm --filter near-chat-frontend exec tsc --noEmit
-
-  frontend-test:
-    needs: changes
-    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile --filter near-chat-frontend...
-      - run: pnpm --filter near-chat-frontend test
-
-  frontend-build:
-    needs: changes
-    if: (needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile --filter near-chat-frontend...
-      - run: pnpm --filter near-chat-frontend build
-
-  backend-build:
-    needs: changes
-    if: (needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: 'pnpm'
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-      - run: pnpm install --frozen-lockfile --filter near-chat-backend...
-      - run: pnpm --filter near-chat-backend build
-
-  unit-tests:
-    needs: changes
-    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: 'pnpm'
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-      - run: pnpm install --frozen-lockfile --filter near-chat-backend...
-      - run: pnpm --filter near-chat-backend test:unit
-
-  integration-tests:
-    needs: changes
-    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18-alpine
+      # Single source of truth for "does this lane have to run". Both the lane
+      # `if:` conditions and the required-checks gate read these outputs, so the
+      # execution decision cannot drift between the two. Adding a condition here
+      # automatically keeps the gate honest.
+      - name: Plan which lanes must run
+        id: plan
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ntnu_test
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5433/ntnu_test
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: 'pnpm'
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-      - run: pnpm install --frozen-lockfile --filter near-chat-backend...
-      - run: DATABASE_URL=$DATABASE_URL_TEST pnpm --filter near-chat-backend migrate:up
-      - run: pnpm --filter near-chat-backend test:integration
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BASE_REF: ${{ github.base_ref }}
+          FRONTEND_CHANGED: ${{ steps.filter.outputs.frontend }}
+          BACKEND_CHANGED: ${{ steps.filter.outputs.backend }}
+          SECURITY_CHANGED: ${{ steps.filter.outputs.security }}
+        run: |
+          set -euo pipefail
 
-  e2e-tests:
-    needs: changes
-    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ntnu_test
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5433/ntnu_test
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: 'pnpm'
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-      - run: pnpm install --frozen-lockfile --filter near-chat-backend...
-      - run: DATABASE_URL=$DATABASE_URL_TEST pnpm --filter near-chat-backend migrate:up
-      - run: pnpm --filter near-chat-backend test:e2e
+          frontend_required=false
+          backend_required=false
+          database_required=false
+          security_required=false
+          run_build=false
 
-  security-scan:
-    needs: changes
-    if: (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.base_ref == 'main')
-    runs-on: ubuntu-latest
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$FRONTEND_CHANGED" == "true" ]]; then
+            frontend_required=true
+          fi
+
+          # The database lane verifies the same code the backend lane builds, so
+          # it follows the backend decision rather than a filter of its own.
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$BACKEND_CHANGED" == "true" ]]; then
+            backend_required=true
+            database_required=true
+          fi
+
+          # Preserves the pre-refactor guard on builds and the security scan.
+          # It is not "main only": it covers pushes to main, PRs based on main,
+          # and workflow_dispatch while on main, but not a dispatch from a
+          # feature branch.
+          if [[ "$REF" == "refs/heads/main" || "$BASE_REF" == "main" ]]; then
+            run_build=true
+
+            # frontend/backend are kept here on purpose. The scan has always run
+            # on any frontend or backend source change; narrowing it to the
+            # dependency-only `security` filter would quietly shrink coverage.
+            # That filter is purely additive (it adds .cve-lite/**).
+            if [[ "$EVENT_NAME" == "workflow_dispatch" || \
+                  "$FRONTEND_CHANGED" == "true" || \
+                  "$BACKEND_CHANGED" == "true" || \
+                  "$SECURITY_CHANGED" == "true" ]]; then
+              security_required=true
+            fi
+          fi
+
+          {
+            echo "frontend-required=$frontend_required"
+            echo "backend-required=$backend_required"
+            echo "database-required=$database_required"
+            echo "security-required=$security_required"
+            echo "run-build=$run_build"
+          } >> "$GITHUB_OUTPUT"
+
+  frontend:
+    needs: detect
+    if: needs.detect.outputs.frontend-required == 'true'
+    # Job outputs are always strings, but run-build is declared `type: boolean`.
+    # fromJSON does the conversion; passing the raw string is a type error.
+    uses: ./.github/workflows/ci-frontend.yml
+    with:
+      run-build: ${{ fromJSON(needs.detect.outputs.run-build) }}
+
+  backend:
+    needs: detect
+    if: needs.detect.outputs.backend-required == 'true'
+    uses: ./.github/workflows/ci-backend.yml
+    with:
+      run-build: ${{ fromJSON(needs.detect.outputs.run-build) }}
+
+  database:
+    needs: detect
+    if: needs.detect.outputs.database-required == 'true'
+    uses: ./.github/workflows/ci-database.yml
+
+  security:
+    needs: detect
+    if: needs.detect.outputs.security-required == 'true'
+    # A job-level permissions block replaces the top-level one rather than
+    # adding to it, so contents:read has to be repeated or checkout fails. A
+    # called workflow cannot grant itself anything the caller withheld.
     permissions:
       contents: read
       security-events: write
+    uses: ./.github/workflows/ci-security.yml
+
+  # The single required status check. Branch protection and release-stack.yml
+  # both key off this one name, so internal jobs can be renamed, split or added
+  # without touching either.
+  required-checks:
+    name: required-checks
+    if: always()
+    needs: [detect, frontend, backend, database, security]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      # Scans the whole workspace from the repo root. `./backend` and
-      # `./frontend` no longer contain a lockfile — there is exactly one root
-      # pnpm-lock.yaml covering every importer — so the previous per-package
-      # scans would have found nothing to read and could have passed silently,
-      # losing CVE coverage without ever turning the build red.
-      # Invoked directly rather than via OWASP/cve-lite-cli@v1: the action
-      # exposes no `ratchet` input, and `--ratchet` is what keeps the two
-      # unfixable findings in .cve-lite/baseline.json from blocking `release`
-      # without disarming `--fail-on high` for everything else. The baseline
-      # pins name+version, so a bump to either package re-reports it.
-      #
-      # Rejected alternative: the action's `only-used: true`. It suppresses any
-      # package the source never imports, which would permanently hide
-      # runtime-only transitive deps — sharp among them — instead of the two
-      # findings we actually accepted.
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      # `--ratchet` with no baseline present exits 0 and writes one, even with
-      # findings at or above --fail-on. A runner always starts from a clean
-      # checkout, so if .cve-lite/baseline.json ever stops being tracked, every
-      # run would silently self-baseline and the gate would pass forever with
-      # nothing to show it had been disarmed. Fail loudly instead.
-      - name: Verify CVE baseline is tracked
+      - name: Verify every lane reached an acceptable state
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          DATABASE_RESULT: ${{ needs.database.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+          FRONTEND_REQUIRED: ${{ needs.detect.outputs.frontend-required }}
+          BACKEND_REQUIRED: ${{ needs.detect.outputs.backend-required }}
+          DATABASE_REQUIRED: ${{ needs.detect.outputs.database-required }}
+          SECURITY_REQUIRED: ${{ needs.detect.outputs.security-required }}
         run: |
-          if [ ! -f .cve-lite/baseline.json ]; then
-            echo "::error::.cve-lite/baseline.json is missing. --ratchet would" \
-                 "self-baseline and silently disable the security gate." \
-                 "Commit the baseline instead of letting CI regenerate it."
-            exit 1
-          fi
-      - name: Scan workspace dependencies for vulnerabilities
-        run: |
-          npm install --no-save --prefix "$RUNNER_TEMP/cve-lite" cve-lite-cli@1
-          "$RUNNER_TEMP/cve-lite/node_modules/.bin/cve-lite" . \
-            --all --verbose --fail-on high --ratchet --sarif --no-open
-      # `--ratchet` writes no SARIF at all when nothing exceeds the baseline —
-      # the common case on a green build. Falling through with no file would
-      # fail the `if: always()` upload below, and worse, leave the `workspace`
-      # category with no analysis on main until GitHub flags the configuration
-      # as erroring. So synthesise an empty-but-valid run: same tool driver
-      # name, zero results, which clears stale alerts and keeps the tool
-      # reporting.
-      - name: Rename workspace SARIF file
-        if: always()
-        run: |
-          if ls cve-lite-scan-*.sarif 1> /dev/null 2>&1; then
-            mv cve-lite-scan-*.sarif workspace.sarif
-          else
-            cat > workspace.sarif <<'SARIF'
-          {
-            "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
-            "version": "2.1.0",
-            "runs": [
-              {
-                "tool": {
-                  "driver": {
-                    "name": "CVE Lite CLI",
-                    "informationUri": "https://owasp.org/cve-lite-cli/",
-                    "rules": []
-                  }
-                },
-                "results": []
-              }
-            ]
+          set -uo pipefail
+
+          failed=false
+          fail() {
+            echo "::error::$1"
+            failed=true
           }
-          SARIF
-          fi
-      - name: Upload workspace scan to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: workspace.sarif
-          category: workspace
+
+          # A lane that was supposed to run must succeed. Accepting `skipped`
+          # unconditionally would let a mistyped output name or a broken `if`
+          # silently drop a whole lane and still go green. `cancelled` and
+          # `failure` are never acceptable for either kind of lane.
+          check_lane() { # name, result, required
+            if [[ "$3" == "true" ]]; then
+              [[ "$2" == "success" ]] || fail "$1 was required but finished as $2"
+            else
+              [[ "$2" == "success" || "$2" == "skipped" ]] || fail "$1 finished as $2"
+            fi
+          }
+
+          [[ "$DETECT_RESULT" == "success" ]] || fail "detect finished as $DETECT_RESULT"
+
+          check_lane frontend "$FRONTEND_RESULT" "$FRONTEND_REQUIRED"
+          check_lane backend "$BACKEND_RESULT" "$BACKEND_REQUIRED"
+          check_lane database "$DATABASE_RESULT" "$DATABASE_REQUIRED"
+          check_lane security "$SECURITY_RESULT" "$SECURITY_REQUIRED"
+
+          # Written before exiting, not after: a gate that fails is exactly when
+          # the full picture is most useful.
+          {
+            echo "| Lane | Required | Result |"
+            echo "| --- | --- | --- |"
+            echo "| detect | always | \`$DETECT_RESULT\` |"
+            echo "| frontend | \`$FRONTEND_REQUIRED\` | \`$FRONTEND_RESULT\` |"
+            echo "| backend | \`$BACKEND_REQUIRED\` | \`$BACKEND_RESULT\` |"
+            echo "| database | \`$DATABASE_REQUIRED\` | \`$DATABASE_RESULT\` |"
+            echo "| security | \`$SECURITY_REQUIRED\` | \`$SECURITY_RESULT\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [[ "$failed" == "false" ]]

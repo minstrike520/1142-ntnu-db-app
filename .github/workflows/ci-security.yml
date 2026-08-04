@@ -1,0 +1,96 @@
+name: CI Security
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    # Restated here even though the caller already grants exactly this: a called
+    # workflow can only keep or drop what the caller gave it, never add to it,
+    # so spelling it out keeps the security boundary readable in this file.
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      # Scans the whole workspace from the repo root. `./backend` and
+      # `./frontend` no longer contain a lockfile — there is exactly one root
+      # pnpm-lock.yaml covering every importer — so the previous per-package
+      # scans would have found nothing to read and could have passed silently,
+      # losing CVE coverage without ever turning the build red.
+      # Invoked directly rather than via OWASP/cve-lite-cli@v1: the action
+      # exposes no `ratchet` input. Ratchet keeps explicitly accepted baseline
+      # findings in .cve-lite/baseline.json from blocking `release` while still
+      # rejecting newly introduced high-severity findings. The baseline pins
+      # name+version, so a bump to either re-reports the finding.
+      #
+      # Rejected alternative: the action's `only-used: true`. It suppresses any
+      # package the source never imports, which would permanently hide
+      # runtime-only transitive deps — sharp among them — instead of the
+      # findings we actually accepted.
+      #
+      # No pnpm install here: the scan reads the root lockfile directly, so this
+      # job deliberately does not use the setup-workspace composite action.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # `--ratchet` with no baseline present exits 0 and writes one, even with
+      # findings at or above --fail-on. A runner always starts from a clean
+      # checkout, so if .cve-lite/baseline.json ever stops being tracked, every
+      # run would silently self-baseline and the gate would pass forever with
+      # nothing to show it had been disarmed. Fail loudly instead.
+      - name: Verify CVE baseline is tracked
+        run: |
+          if [ ! -f .cve-lite/baseline.json ]; then
+            echo "::error::.cve-lite/baseline.json is missing. --ratchet would" \
+                 "self-baseline and silently disable the security gate." \
+                 "Commit the baseline instead of letting CI regenerate it."
+            exit 1
+          fi
+      - name: Scan workspace dependencies for vulnerabilities
+        run: |
+          npm install --no-save --prefix "$RUNNER_TEMP/cve-lite" cve-lite-cli@1
+          "$RUNNER_TEMP/cve-lite/node_modules/.bin/cve-lite" . \
+            --all --verbose --fail-on high --ratchet --sarif --no-open
+      # `--ratchet` writes no SARIF at all when nothing exceeds the baseline —
+      # the common case on a green build. Falling through with no file would
+      # fail the `if: always()` upload below, and worse, leave the `workspace`
+      # category with no analysis on main until GitHub flags the configuration
+      # as erroring. So synthesise an empty-but-valid run: same tool driver
+      # name, zero results, which clears stale alerts and keeps the tool
+      # reporting.
+      - name: Rename workspace SARIF file
+        if: always()
+        run: |
+          if ls cve-lite-scan-*.sarif 1> /dev/null 2>&1; then
+            mv cve-lite-scan-*.sarif workspace.sarif
+          else
+            cat > workspace.sarif <<'SARIF'
+          {
+            "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [
+              {
+                "tool": {
+                  "driver": {
+                    "name": "CVE Lite CLI",
+                    "informationUri": "https://owasp.org/cve-lite-cli/",
+                    "rules": []
+                  }
+                },
+                "results": []
+              }
+            ]
+          }
+          SARIF
+          fi
+      - name: Upload workspace scan to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: workspace.sarif
+          category: workspace
