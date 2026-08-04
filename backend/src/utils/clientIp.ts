@@ -1,5 +1,6 @@
 import type { Context } from 'hono';
 import { getConnInfo } from '@hono/node-server/conninfo';
+import { env } from '../config/env';
 
 /**
  * How many proxies we operate sit between the client and this process.
@@ -10,22 +11,10 @@ import { getConnInfo } from '@hono/node-server/conninfo';
  * tells the two apart: with `n` trusted proxies, the client's real address is
  * the `n`-th entry from the right, and everything to its left is unverifiable.
  *
- * Configured via `TRUST_PROXY_HOPS`. The older boolean `TRUST_PROXY=true` still
- * works and means one hop — the common single-reverse-proxy deployment — so an
- * existing environment keeps working while no longer reading the spoofable end
- * of the chain.
+ * Configured via `TRUST_PROXY_HOPS`, resolved (along with the legacy boolean
+ * `TRUST_PROXY`) in `config/env.ts`.
  */
-export const trustedProxyHops = (): number => {
-  const configured = (process.env.TRUST_PROXY_HOPS ?? '').trim();
-
-  if (configured) {
-    const hops = Number(configured);
-    // A malformed value must not silently grant trust.
-    return Number.isInteger(hops) && hops >= 0 ? hops : 0;
-  }
-
-  return (process.env.TRUST_PROXY ?? '').trim().toLowerCase() === 'true' ? 1 : 0;
-};
+export const trustedProxyHops = (): number => env().trustedProxyHops;
 
 /**
  * Resolve the caller's IP, preferring the real TCP peer address.

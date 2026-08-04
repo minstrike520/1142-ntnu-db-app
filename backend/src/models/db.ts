@@ -1,13 +1,9 @@
 import { SQL } from "bun";
+import { env } from "../config/env";
 import { describeDatabaseTarget } from "../utils/describeDatabaseTarget";
 
-// DATABASE_URL_TEST may only win inside the test runner. The regular compose
-// stack also defines it (defaulting to the `db-test` host that only
-// docker-compose.test.yml starts), so preferring it unconditionally pointed a
-// plain `docker compose up` at a database that does not exist.
-const isTestEnv = process.env.NODE_ENV === "test";
-const connectionString =
-  (isTestEnv ? process.env.DATABASE_URL_TEST : undefined) || process.env.DATABASE_URL;
+// Which of DATABASE_URL / DATABASE_URL_TEST applies is resolved in config/env.ts.
+const { databaseUrl: connectionString, isTest: isTestEnv, nodeEnv } = env();
 
 // Fail fast on a misconfigured deployment rather than at the first query — but
 // not under the test runner: unit tests mock this module or never issue a query,
@@ -22,7 +18,7 @@ if (!connectionString && !isTestEnv) {
 
 // Log the target, never the connection string — it embeds the DB credentials.
 console.log(
-  `DB INIT: env=${process.env.NODE_ENV ?? "unknown"} target=${describeDatabaseTarget(connectionString)}`,
+  `DB INIT: env=${nodeEnv ?? "unknown"} target=${describeDatabaseTarget(connectionString)}`,
 );
 
 // Bun's SQL client connects lazily, so an unconfigured test run only fails if

@@ -1,4 +1,5 @@
 import db from "./models/db";
+import { assertStartupEnv, EnvConfigError } from "./config/env";
 import { createConfig } from "./bootstrap/config";
 import { createRepositories } from "./bootstrap/repositories";
 import { createServices } from "./bootstrap/services";
@@ -43,6 +44,16 @@ const io: ChatServer = pendingIo;
 const app = server;
 
 if (require.main === module) {
+  // Only the real entrypoint validates: importing the app (as the E2E suite
+  // does) must not decide whether this environment is fit to serve traffic.
+  try {
+    assertStartupEnv();
+  } catch (error) {
+    if (!(error instanceof EnvConfigError)) throw error;
+    console.error(error.message);
+    process.exit(1);
+  }
+
   startJobs({ repositories, services });
   void startServer({ httpServer: server, config });
 }

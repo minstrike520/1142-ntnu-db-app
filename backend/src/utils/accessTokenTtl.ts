@@ -1,3 +1,9 @@
+/**
+ * Duration parsing for `JWT_EXPIRES_IN`.
+ *
+ * Kept as a standalone leaf so `config/env.ts` can import it without a cycle;
+ * the resolved lifetime is `env().accessTokenTtlSeconds`.
+ */
 export const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 
 const UNIT_SECONDS: Record<string, number> = {
@@ -26,6 +32,3 @@ export const parseDurationSeconds = (
   const seconds = Math.floor(Number(match[1]) * UNIT_SECONDS[match[2] ?? 's']);
   return Number.isFinite(seconds) && seconds > 0 ? seconds : fallbackSeconds;
 };
-
-export const getAccessTokenTtlSeconds = (): number =>
-  parseDurationSeconds(process.env.JWT_EXPIRES_IN, DEFAULT_ACCESS_TOKEN_TTL_SECONDS);

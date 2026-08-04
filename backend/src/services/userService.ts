@@ -24,7 +24,7 @@ import {
   type UpdateMeInput,
   type UpdateSettingsInput,
 } from '../routes/userSchemas';
-import { getRefreshTokenTtlMs } from '../utils/refreshTokenTtl';
+import { env } from '../config/env';
 
 import type { IRefreshTokenRepository } from '../models/IRefreshTokenRepository';
 
@@ -112,7 +112,7 @@ export const makeUserService = (
     await refreshTokenRepo.create({
       userId,
       tokenHash: jwt.hashToken(refreshToken),
-      expiresAt: new Date(Date.now() + getRefreshTokenTtlMs()),
+      expiresAt: new Date(Date.now() + env().refreshTokenTtlMs),
     });
     return refreshToken;
   };
@@ -433,7 +433,7 @@ export const makeUserService = (
       await refreshTokenRepo.rotate(tokenRecord.tokenId, {
         userId: user.userId,
         tokenHash: jwt.hashToken(newRefreshToken),
-        expiresAt: new Date(Date.now() + getRefreshTokenTtlMs()),
+        expiresAt: new Date(Date.now() + env().refreshTokenTtlMs),
       });
 
       return {
