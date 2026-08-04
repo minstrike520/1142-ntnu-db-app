@@ -33,11 +33,92 @@ export const sanitizeStoredFileName = (rawName: string): string => {
 };
 
 /**
- * Slack allowed between the declared Content-Length and the file's own size, to
- * cover multipart boundaries, part headers and other field values. Generous on
- * purpose: this check only exists to reject the clearly-too-large early.
+ * Slack allowed on top of the file's own size, to cover multipart boundaries,
+ * part headers and other field values. Generous on purpose: it only has to keep
+ * a legitimate at-the-limit upload from tripping the envelope check, because the
+ * authoritative per-file check still runs on the decoded `File`.
  */
 const MULTIPART_OVERHEAD_ALLOWANCE = 64 * 1024;
+
+/**
+ * Wrap a request body so it stops being read once `maxBytes` have gone past.
+ *
+ * This is what makes the upload cap real rather than advisory. Parsing the body
+ * first and checking `File.size` afterwards means the whole payload is received
+ * and decoded before it can be rejected, so any authenticated user can make the
+ * server buffer an arbitrarily large request; the `Content-Length` pre-check
+ * below does not close that off, since a client is free to under-declare the
+ * length or omit it entirely with `Transfer-Encoding: chunked`.
+ *
+ * Counting the bytes as they arrive is independent of anything the client
+ * declares. On the first chunk that crosses the limit the source is cancelled —
+ * which tears down the underlying request — and the error surfaces out of
+ * whichever parser is consuming this stream.
+ */
+const limitBodyStream = (
+  body: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): ReadableStream<Uint8Array> => {
+  const reader = body.getReader();
+  let received = 0;
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        controller.close();
+        return;
+      }
+
+      received += value.byteLength;
+      if (received > maxBytes) {
+        await reader.cancel('upload exceeded its size limit');
+        controller.error(new ValidationError('File size limit exceeded'));
+        return;
+      }
+
+      controller.enqueue(value);
+    },
+    async cancel(reason) {
+      await reader.cancel(reason);
+    },
+  });
+};
+
+/**
+ * Decode the request's form body, reading at most `maxBytes` from the wire.
+ *
+ * `Response.formData()` is used in place of Hono's `c.req.parseBody()` because
+ * it can be pointed at our own limited stream; `parseBody()` always reads
+ * `c.req.raw` in full. The accepted content types are the same ones Hono parses
+ * (`multipart/form-data` and `application/x-www-form-urlencoded`), so a request
+ * that used to yield an empty body still ends up at the same `file is required`
+ * rejection below — as does a malformed multipart body, which the old path let
+ * escape as a 500.
+ */
+const parseFormBody = async (c: Context, maxBytes?: number): Promise<FormData> => {
+  const raw = c.req.raw;
+  const contentType = raw.headers.get('content-type') ?? '';
+  const body = raw.body;
+
+  if (!body) {
+    throw new ValidationError('file is required');
+  }
+
+  const stream = maxBytes ? limitBodyStream(body, maxBytes + MULTIPART_OVERHEAD_ALLOWANCE) : body;
+
+  try {
+    return await new Response(stream, { headers: { 'content-type': contentType } }).formData();
+  } catch (error) {
+    // Our own limit error has to keep its identity; anything else means the
+    // client sent a body this endpoint cannot read a file out of.
+    if (error instanceof ValidationError) {
+      throw error;
+    }
+    throw new ValidationError('file is required');
+  }
+};
 
 export interface ParseFileOptions {
   fieldName?: string;
@@ -54,10 +135,9 @@ export async function parseSingleFile(
 ): Promise<UploadedFile> {
   const fieldName = options.fieldName ?? 'file';
 
-  // Reject obviously oversized uploads before `parseBody()` buffers the whole
-  // request. This is a declared-size check only, so it is a cheap early exit
-  // rather than a real streaming limit; the authoritative check on the decoded
-  // file still runs below. Enforcing the cap at the stream level is issue #411.
+  // Honest clients that declare an oversized upload are turned away without a
+  // single byte being read. This is only an optimisation — the declared length
+  // is client-controlled, so `limitBodyStream` is what actually enforces the cap.
   if (options.maxBytes) {
     const declaredLength = Number(c.req.header('content-length'));
     if (Number.isFinite(declaredLength) && declaredLength > options.maxBytes + MULTIPART_OVERHEAD_ALLOWANCE) {
@@ -65,8 +145,8 @@ export async function parseSingleFile(
     }
   }
 
-  const body = await c.req.parseBody();
-  const file = body[fieldName];
+  const body = await parseFormBody(c, options.maxBytes);
+  const file = body.get(fieldName);
 
   if (!file || typeof file === 'string') {
     throw new ValidationError('file is required');
