@@ -10,7 +10,8 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 
 | File | Description |
 |------|-------------|
-| [src/index.ts](src/index.ts) | Composition Root: Instantiates database pool, repositories, services, Hono routes, Socket.IO handlers, and launches the HTTP server |
+| [src/index.ts](src/index.ts) | Composition Root: calls the `src/bootstrap/` factories in dependency order and launches the HTTP server. Holds wiring only — no construction logic of its own |
+| [src/bootstrap/](src/bootstrap/) | One factory per assembly stage: `config`, `repositories`, `services`, `httpApp`, `realtime`, `jobs`, `start` |
 | [src/models/db.ts](src/models/db.ts) | Exports the shared `pg.Pool` instance initialized from the `DATABASE_URL` environment variable |
 | [migrations/](migrations/) | PostgreSQL migration files written in raw SQL managed by `node-pg-migrate` |
 | [package.json](package.json) | NPM scripts (`pnpm run dev` for `bun --watch`, `pnpm run test`) and dependencies |

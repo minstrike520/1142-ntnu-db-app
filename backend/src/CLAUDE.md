@@ -10,6 +10,7 @@ This directory contains the TypeScript source code for the backend service built
 
 | Directory | Layer & Role | Code Standards & Guidelines |
 |-----------|--------------|----------------------------|
+| [bootstrap/](bootstrap/) | **Assembly Layer** | One factory per stage of startup — `config`, `repositories`, `services`, `httpApp`, `realtime`, `jobs`, `start` — called in dependency order by [index.ts](index.ts). Wiring only: no business rules, no SQL, no route handlers. Services are built before Socket.IO exists, so they receive a `getIo` accessor rather than the server itself; see the comment in `bootstrap/services.ts` before changing that order. |
 | [routes/](routes/) | **Routing Layer** | Defines Hono HTTP endpoints, mounts validation middleware via `zValidator`, extracts auth context (`c.get('user')`), and delegates to the Service layer. Also holds the Zod schemas validating each route's payloads (e.g. `userSchemas.ts`, `roomSchemas.ts`, `folderSchemas.ts`, `messageSchemas.ts`). |
 | [services/](services/) | **Business Logic Layer** | Domain orchestration and permission checking. Throws `AppError` subclasses. |
 | [models/](models/) | **Data Access Layer** | Executes raw SQL statements, and holds the shared `pg.Pool` in `db.ts`. Repositories must conform to corresponding interfaces (e.g., `IRoomRepository.ts`) to allow mock testing. |
@@ -20,7 +21,7 @@ This directory contains the TypeScript source code for the backend service built
 ## AI Agent Guidelines
 
 ### 1. Interface-Driven Design
-- Repositories utilize interface declarations (e.g., `IMessageRepository`) which are instantiated in the composition root [index.ts](index.ts).
+- Repositories utilize interface declarations (e.g., `IMessageRepository`) which are instantiated in [bootstrap/repositories.ts](bootstrap/repositories.ts) and handed to services by [bootstrap/services.ts](bootstrap/services.ts).
 - This structure enables unit tests to inject mocked repositories via Bun test, checking services in isolation. Always write unit tests by mocking interfaces.
 
 ### 2. JWT & Socket Authorization
