@@ -1,0 +1,52 @@
+name: CI Frontend
+
+on:
+  workflow_call:
+    inputs:
+      run-build:
+        description: Run the Next.js production build job
+        # No default on purpose: a caller that forgets to pass this should fail
+        # loudly rather than silently degrade into never building.
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-frontend
+      - run: pnpm --filter near-chat-frontend lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-frontend
+      - run: pnpm --filter near-chat-frontend typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-frontend
+      - run: pnpm --filter near-chat-frontend test
+
+  build:
+    if: inputs.run-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-frontend
+      - run: pnpm --filter near-chat-frontend build
