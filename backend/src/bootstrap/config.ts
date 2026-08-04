@@ -13,7 +13,7 @@ export interface AppConfig {
   corsOrigins: string[];
 }
 
-export const createConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig => {
-  const { port, corsOrigins } = env(source);
+export const createConfig = (): AppConfig => {
+  const { port, corsOrigins } = env();
   return { port, corsOrigins };
 };
