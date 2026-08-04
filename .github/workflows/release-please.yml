@@ -62,7 +62,7 @@ jobs:
 
       - name: 建立或更新 Release PR，或完成 GitHub Release
         if: steps.guard.outputs.should_run == 'true'
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
           token: ${{ steps.release-app.outputs.token }}
           target-branch: main

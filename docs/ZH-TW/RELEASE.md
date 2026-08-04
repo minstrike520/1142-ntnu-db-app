@@ -29,7 +29,7 @@ PR 一律以 squash merge 合併，因此進入 `main` 的 commit 就是 **PR �
 vX.Y.Z push → release-stack.yml → 映像、attestation、bundle
 ```
 
-1. **`ci.yml` — Gate。** 每個 `main` commit 都會產生完整結束的 CI run；純文件變更仍由既有 path filter 跳過昂貴的應用 jobs。程式變更必須通過 frontend lint／typecheck／test／build、backend build／unit／integration／E2E，以及 dependency security jobs。CI 不持有發布 credential，也不發布內容。
+1. **`ci.yml` — Gate。** 每個 `main` commit 都會產生完整結束的 CI run。單一 `detect` job 決定哪些 lane 必須執行，純文件變更因此會跳過昂貴的 lane；程式變更必須通過 frontend lane（lint／typecheck／test／build）、backend lane（lint／unit／build）、database lane（對 Postgres 執行 integration 與 E2E），以及 dependency security lane。這些 lane 都是 reusable workflow，最後由單一彙總 job `required-checks` 把結果收斂成 branch protection 與發布流程唯一依賴的 status check。CI 不持有發布 credential，也不發布內容。
 2. **`release-please.yml` — 審查邊界。** `main` 的同一個 commit 通過 CI 後，Release Please 依 `release-please-config.json` 與 `.release-please-manifest.json` 建立或更新一份 Release PR。該 PR 提出版本號、更新 `CHANGELOG.md`，並同步 root、backend、frontend 三份 `package.json` 的 `version`。PR 尚未合併時不建立 tag。
 3. **合併 Release PR。** 維護者先審查預計版本、英文 changelog 結構、manifest 與三份 package 版本。合併後再次通過 CI，Release Please 才建立對應的 `vX.Y.Z` tag 與 GitHub Release；tag 指向的 commit 已包含所有受審查的版本資產。
 4. **`release-stack.yml` — Stack。** App 產生的 tag push 會啟動此 workflow，建置並推送四個不可變 GHCR 參照、簽署兩份 provenance attestation、附加含完整 diff 連結的英文 Stack 區段，再上傳 `near-chat-stack-vX.Y.Z.tar.gz`。
@@ -46,7 +46,7 @@ Repository 的「Allow GitHub Actions to create and approve pull requests」只�
 
 ### 仍然強制的條件
 
-Tag 以 Release Please 為準。若 tag 不完全符合 `vX.Y.Z`、數字版本不等於三份 `package.json`、tag commit 不在 `main` 歷史上，或該 exact commit 沒有成功的 main CI run，`release-stack.yml` 都會拒絕發布。必要的 frontend、backend、test 與 security jobs 必須成功或由 path filter 略過。
+Tag 以 Release Please 為準。若 tag 不完全符合 `vX.Y.Z`、數字版本不等於三份 `package.json`、tag commit 不在 `main` 歷史上，或該 exact commit 的 main CI run 中沒有成功的 `required-checks` job，`release-stack.yml` 都會拒絕發布。lane 層級的判斷收在 `required-checks` 內部：`detect` 標記為必要的 lane 必須成功，確實不需要執行的 lane 才可以是 skipped，任何 failed 或 cancelled 的 lane 都會讓 gate 失敗。因此發布流程不再指名任何個別 lane，lane 可以改名、拆分或新增而不必動到它。
 
 ### 手動入口
 

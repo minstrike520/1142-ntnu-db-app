@@ -1,0 +1,44 @@
+name: CI Database
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # integration and e2e share one job on purpose: they need identical Postgres
+  # setup, and running them as separate jobs meant installing dependencies and
+  # migrating the schema twice for no added signal. backend's own `test` script
+  # already runs unit, integration and e2e sequentially against a single
+  # database, so this is an existing supported path rather than a new one.
+  database-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ntnu_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # node-pg-migrate reads DATABASE_URL; the test helpers read
+      # DATABASE_URL_TEST (tests/helpers/testPool.ts throws without it). Both
+      # are needed — see the explicit DATABASE_URL on the migrate step below.
+      DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5433/ntnu_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-backend
+          bun: 'true'
+      - run: DATABASE_URL=$DATABASE_URL_TEST pnpm --filter near-chat-backend migrate:up
+      - run: pnpm --filter near-chat-backend test:integration
+      - run: pnpm --filter near-chat-backend test:e2e
