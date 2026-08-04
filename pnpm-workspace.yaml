@@ -4,6 +4,12 @@ packages:
 
 dangerouslyAllowAllBuilds: true
 
+# hono 4.12.34 is the fix for GHSA-8j4g-w8fx-2239 and is younger than the
+# default minimum release age. Waiting out the quarantine would leave the
+# advisory unpatched and `security-scan` red, so this one version is excluded.
+minimumReleaseAgeExclude:
+  - hono@4.12.34
+
 # pnpm honours `overrides` only at the workspace root. These were previously
 # split across frontend/pnpm-workspace.yaml and backend/pnpm-workspace.yaml;
 # consolidating to a single root lockfile requires merging them here, or the
@@ -16,14 +22,24 @@ dangerouslyAllowAllBuilds: true
 # `^7.3.5` does not match 8.x, so hoisting that pin would force a major
 # downgrade of the frontend toolchain rather than raise a security floor.
 overrides:
-  postcss: ">=8.5.10"       # was frontend/; resolves 8.5.14, already satisfied
-  ws: "^8.21.0"             # was in both, identical; resolves 8.21.0
-  "@babel/core": "^7.29.7"  # was ^7.29.6 in frontend/, weaker than the ^7.29.7
-                            # already declared in frontend/package.json
-  form-data: "^4.0.6"       # was backend/
-  # GHSA-3jxr-9vmj-r5cp / GHSA-mh99-v99m-4gvg. Scoped to the 5.x line via the
-  # `pkg@range` selector: `minimatch@10` (node-pg-migrate -> glob) pulls 5.0.6,
-  # while eslint 9 -> minimatch@3 still pulls 1.1.15, whose v1-line fix is
-  # 1.1.16 — an unscoped pin would force that consumer onto an incompatible
-  # major. The 1.1.15 path stays open on purpose; see the eslint 10 note below.
-  "brace-expansion@>=5": "5.0.8"
+  postcss: ">=8.5.23"
+    # GHSA-fxqj-rqcc-2cmp affects <=8.5.22; the previous
+    # ">=8.5.10" floor resolved 8.5.19 and was flagged
+  ws: "^8.21.0" # was in both, identical; resolves 8.21.0
+  "@babel/core": "^7.29.7"
+    # was ^7.29.6 in frontend/, weaker than the ^7.29.7
+    # already declared in frontend/package.json
+  form-data: "^4.0.6" # was backend/
+  socket.io-parser: "^4.2.7"
+    # GHSA-2m8v-j782-fhvr affects >=4.0.0 <4.2.7.
+    # Transitive via socket.io (backend) and
+    # socket.io-client (both packages); neither
+    # parent has released a bump yet, so pin here.
+  # brace-expansion is reached through two incompatible major lines and each
+  # needs its own floor — an unscoped pin would force one consumer onto the
+  # other's major. Both lines carry GHSA-rgw5-rvv9-x895; the 1.x line also
+  # carries GHSA-3jxr-9vmj-r5cp and GHSA-mh99-v99m-4gvg.
+  #   1.x: eslint 9 -> minimatch@3, fixed in 1.1.18
+  #   5.x: node-pg-migrate -> glob -> minimatch@10, fixed in 5.0.9
+  "brace-expansion@<2": "^1.1.18"
+  "brace-expansion@>=5": "^5.0.9"

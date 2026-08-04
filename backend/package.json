@@ -28,7 +28,7 @@
     "config": "^4.4.2",
     "dotenv": "^17.4.2",
     "dotenv-expand": "^13.0.0",
-    "hono": "^4.12.32",
+    "hono": "^4.12.34",
     "hono-rate-limiter": "^0.5.3",
     "node-pg-migrate": "^9.0.0",
     "pg": "^8.22.0",
