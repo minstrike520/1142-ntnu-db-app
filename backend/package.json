@@ -32,13 +32,13 @@
     "hono-rate-limiter": "^0.5.3",
     "node-pg-migrate": "^9.0.0",
     "pg": "^8.22.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "socket.io": "^4.8.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "@types/pg": "^8.20.0",
+    "@types/pg": "^8.20.2",
     "@types/supertest": "^7.2.1",
     "@typescript-eslint/eslint-plugin": "^8.65.0",
     "@typescript-eslint/parser": "^8.65.0",
