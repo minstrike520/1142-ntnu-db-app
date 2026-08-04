@@ -368,7 +368,7 @@ jobs:
 
       - name: 建立 backend image provenance
         if: steps.registry.outputs.build_required == 'true'
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}
           subject-digest: ${{ steps.resolved.outputs.backend_digest }}
@@ -377,7 +377,7 @@ jobs:
 
       - name: 建立 frontend image provenance
         if: steps.registry.outputs.build_required == 'true'
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}
           subject-digest: ${{ steps.resolved.outputs.frontend_digest }}
