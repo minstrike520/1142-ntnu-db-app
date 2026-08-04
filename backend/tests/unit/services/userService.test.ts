@@ -1,5 +1,5 @@
 import type { UploadedFile } from '../../../src/utils/fileUpload';
-import { describe, it, expect, beforeEach, afterAll, mock, type Mock } from 'bun:test';
+import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 
 import { ConflictError, NotFoundError, ValidationError } from '../../../src/utils/AppError';
 import type { IEmergencyContactRepository } from '../../../src/models/IEmergencyContactRepository';
@@ -7,19 +7,13 @@ import type { IUserRepository } from '../../../src/models/IUserRepository';
 import { makeUserService } from '../../../src/services/userService';
 import { loginSchema, registerSchema } from '../../../src/routes/userSchemas';
 import type { User } from '../../../../shared/types';
-import { saveAvatarUpload, removeManagedAvatar } from '../../../src/utils/avatarUpload';
-
-mock.module('../../../src/utils/avatarUpload', () => ({
-  saveAvatarUpload: mock(),
-  removeManagedAvatar: mock().mockResolvedValue(undefined),
-}));
-
-afterAll(() => {
-  mock.module('../../../src/utils/avatarUpload', () => require('../../../src/utils/avatarUpload?original'));
-});
 
 describe('userService', () => {
   let mockRepo: any;
+  // Injected instead of `mock.module('../../../src/utils/avatarUpload', ...)`:
+  // module mocks are process-global in Bun and cannot be undone, so stubbing
+  // the module here also stubbed it for avatarUpload.test.ts. See issue #467.
+  let avatarStore: any;
   let emergencyContactRepo: any;
   let mockRefreshTokenRepo: any;
   let mockJwt: { signToken: Mock<any>; generateRefreshToken: Mock<any>; hashToken: Mock<any> };
@@ -93,12 +87,19 @@ describe('userService', () => {
     mockJwt.generateRefreshToken.mockReturnValue('fake-refresh-token');
     mockJwt.hashToken.mockImplementation((t: string) => `hashed-${t}`);
     notifyEmergencyContact = mock();
+    avatarStore = {
+      saveAvatarUpload: mock(),
+      removeManagedAvatar: mock().mockResolvedValue(undefined),
+    };
     userService = makeUserService(
       mockRepo,
       emergencyContactRepo,
       mockRefreshTokenRepo,
       mockJwt,
-      notifyEmergencyContact
+      notifyEmergencyContact,
+      undefined,
+      undefined,
+      avatarStore
     );
   });
 
@@ -719,36 +720,30 @@ describe('userService', () => {
   describe('uploadAvatar', () => {
     const fakeFile = { originalname: 'avatar.png', buffer: Buffer.from('data') } as UploadedFile;
 
-    beforeEach(() => {
-      ((saveAvatarUpload as any) as Mock<any>).mockClear();
-      ((removeManagedAvatar as any) as Mock<any>).mockClear();
-      ((removeManagedAvatar as any) as Mock<any>).mockResolvedValue(undefined);
-    });
-
     it('throws NotFoundError when user does not exist', async () => {
       mockRepo.findById.mockResolvedValue(null);
       await expect(userService.uploadAvatar('u1', fakeFile)).rejects.toThrow(NotFoundError);
-      expect(saveAvatarUpload).not.toHaveBeenCalled();
+      expect(avatarStore.saveAvatarUpload).not.toHaveBeenCalled();
     });
 
     it('does not remove previous avatar when user had no avatarUrl', async () => {
       const user = { ...baseUser(), avatarUrl: undefined };
       const newUrl = '/uploads/avatars/u1-new.png';
       mockRepo.findById.mockResolvedValue(user);
-      ((saveAvatarUpload as any) as Mock<any>).mockResolvedValue(newUrl);
+      avatarStore.saveAvatarUpload.mockResolvedValue(newUrl);
       mockRepo.update.mockResolvedValue({ ...user, avatarUrl: newUrl });
       await userService.uploadAvatar('u1', fakeFile);
-      expect(removeManagedAvatar).not.toHaveBeenCalledWith(undefined, 'u1');
+      expect(avatarStore.removeManagedAvatar).not.toHaveBeenCalledWith(undefined, 'u1');
     });
 
     it('removes newly uploaded avatar and rethrows when repo.update fails', async () => {
       const user = { ...baseUser(), avatarUrl: '/old-avatar.png' };
       const newUrl = '/uploads/avatars/u1-new.png';
       mockRepo.findById.mockResolvedValue(user);
-      ((saveAvatarUpload as any) as Mock<any>).mockResolvedValue(newUrl);
+      avatarStore.saveAvatarUpload.mockResolvedValue(newUrl);
       mockRepo.update.mockRejectedValue(new Error('DB failure'));
       await expect(userService.uploadAvatar('u1', fakeFile)).rejects.toThrow('DB failure');
-      expect(removeManagedAvatar).toHaveBeenCalledWith(newUrl, 'u1');
+      expect(avatarStore.removeManagedAvatar).toHaveBeenCalledWith(newUrl, 'u1');
     });
   });
 
@@ -828,22 +823,16 @@ describe('userService', () => {
   describe('uploadAvatar with onUserUpdated and old avatar removal', () => {
     const fakeFile = { originalname: 'avatar.png', buffer: Buffer.from('data') } as UploadedFile;
 
-    beforeEach(() => {
-      ((saveAvatarUpload as any) as Mock<any>).mockClear();
-      ((removeManagedAvatar as any) as Mock<any>).mockClear();
-      ((removeManagedAvatar as any) as Mock<any>).mockResolvedValue(undefined);
-    });
-
     it('calls onUserUpdated callback on successful upload', async () => {
       const onUserUpdated = mock();
       const serviceWithCb = makeUserService(
         mockRepo, emergencyContactRepo, mockRefreshTokenRepo, mockJwt,
-        undefined, undefined, onUserUpdated,
+        undefined, undefined, onUserUpdated, avatarStore,
       );
       const user = { ...baseUser(), avatarUrl: undefined };
       const newUrl = '/uploads/avatars/u1-new.png';
       mockRepo.findById.mockResolvedValue(user);
-      ((saveAvatarUpload as any) as Mock<any>).mockResolvedValue(newUrl);
+      avatarStore.saveAvatarUpload.mockResolvedValue(newUrl);
       mockRepo.update.mockResolvedValue({ ...user, avatarUrl: newUrl });
       await serviceWithCb.uploadAvatar('u1', fakeFile);
       expect(onUserUpdated).toHaveBeenCalledWith('u1', expect.objectContaining({ avatarUrl: newUrl }));
@@ -854,10 +843,10 @@ describe('userService', () => {
       const newUrl = '/uploads/avatars/new.png';
       const user = { ...baseUser(), avatarUrl: oldUrl };
       mockRepo.findById.mockResolvedValue(user);
-      ((saveAvatarUpload as any) as Mock<any>).mockResolvedValue(newUrl);
+      avatarStore.saveAvatarUpload.mockResolvedValue(newUrl);
       mockRepo.update.mockResolvedValue({ ...user, avatarUrl: newUrl });
       await userService.uploadAvatar('u1', fakeFile);
-      expect(removeManagedAvatar).toHaveBeenCalledWith(oldUrl, 'u1');
+      expect(avatarStore.removeManagedAvatar).toHaveBeenCalledWith(oldUrl, 'u1');
     });
   });
 

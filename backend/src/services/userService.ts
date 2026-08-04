@@ -16,7 +16,7 @@ import type {
 } from '../../../shared/types';
 
 import { ConflictError, NotFoundError, ValidationError } from '../utils/AppError';
-import { removeManagedAvatar, saveAvatarUpload } from '../utils/avatarUpload';
+import { defaultAvatarStore, type AvatarStore } from '../utils/avatarUpload';
 import {
   updateMeSchema,
   updateSettingsSchema,
@@ -81,6 +81,7 @@ export const makeUserService = (
   notifyEmergencyContact?: (contactId: string, payload: { userId: string; message: string }) => void | Promise<void>,
   friendRepo?: { getFriends(userId: string): Promise<FriendResponse[]> },
   onUserUpdated?: (userId: string, data: { name?: string; avatarUrl?: string }) => void | Promise<void>,
+  avatarStore: AvatarStore = defaultAvatarStore,
 ) => {
   const notifyContacts = async (userId: string, fallbackMessage: string): Promise<EmergencyAlertResult> => {
     const user = await repo.findById(userId);
@@ -247,7 +248,7 @@ export const makeUserService = (
         throw new NotFoundError('user', userId);
       }
 
-      const avatarUrl = await saveAvatarUpload(userId, file);
+      const avatarUrl = await avatarStore.saveAvatarUpload(userId, file);
 
       try {
         const updated = await repo.update(userId, { avatarUrl });
@@ -256,11 +257,11 @@ export const makeUserService = (
           onUserUpdated(userId, { name: profile.name, avatarUrl: profile.avatarUrl });
         }
         if (currentUser.avatarUrl && currentUser.avatarUrl !== avatarUrl) {
-          await removeManagedAvatar(currentUser.avatarUrl, userId);
+          await avatarStore.removeManagedAvatar(currentUser.avatarUrl, userId);
         }
         return profile;
       } catch (error) {
-        await removeManagedAvatar(avatarUrl, userId);
+        await avatarStore.removeManagedAvatar(avatarUrl, userId);
         throw error;
       }
     },
