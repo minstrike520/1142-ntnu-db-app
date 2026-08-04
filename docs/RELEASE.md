@@ -29,7 +29,7 @@ Release PR review and merge → CI → release-please.yml → vX.Y.Z + GitHub Re
 vX.Y.Z push → release-stack.yml → images + attestations + bundle
 ```
 
-1. **`ci.yml` — the gate.** Every `main` commit produces a completed CI run. Existing path filters skip expensive application jobs for documentation-only commits; code changes must pass frontend lint/typecheck/test/build, backend build/unit/integration/E2E, and dependency security jobs. CI has no release credentials and publishes nothing.
+1. **`ci.yml` — the gate.** Every `main` commit produces a completed CI run. A single `detect` job decides which lanes must run, so documentation-only commits skip the expensive ones; code changes must pass the frontend lane (lint/typecheck/test/build), the backend lane (lint/unit/build), the database lane (integration and E2E against Postgres), and the dependency security lane. Those lanes are reusable workflows, and one aggregate job — `required-checks` — collapses their outcomes into the single status check that branch protection and the release workflow rely on. CI has no release credentials and publishes nothing.
 2. **`release-please.yml` — the review boundary.** After the exact `main` commit passes CI, Release Please parses its Conventional Commits. It creates or updates one Release PR using `release-please-config.json` and `.release-please-manifest.json`. The PR proposes the version, updates `CHANGELOG.md`, and synchronizes `version` in the root, backend, and frontend `package.json` files. No tag is created while this PR remains open.
 3. **Merge the Release PR.** A maintainer checks the proposed version, English changelog structure, and all four version files before merging. After that merge passes CI, Release Please creates the matching `vX.Y.Z` tag and GitHub Release. The tag points to the reviewed commit containing the three synchronized package versions, manifest version, and changelog.
 4. **`release-stack.yml` — the stack.** The App-generated tag push starts this workflow. It builds and pushes four immutable GHCR references, signs both provenance attestations, appends an English Stack section with a full diff link to the GitHub Release, and uploads `near-chat-stack-vX.Y.Z.tar.gz`.
@@ -46,7 +46,7 @@ If `main` advances after a CI run completes, the older Release Please run exits 
 
 ### What is still enforced
 
-Release Please is the source of truth for tags. `release-stack.yml` refuses to publish unless the tag matches `vX.Y.Z` exactly, its numeric version equals all three `package.json` versions, the tag commit is in `main` history, and that exact commit has a successful main CI run whose required frontend, backend, test, and security jobs succeeded or were skipped by the path filter.
+Release Please is the source of truth for tags. `release-stack.yml` refuses to publish unless the tag matches `vX.Y.Z` exactly, its numeric version equals all three `package.json` versions, the tag commit is in `main` history, and that exact commit has a successful main CI run containing a successful `required-checks` job. `required-checks` is where lane-level judgement lives: a lane that `detect` marked as required must have succeeded, a lane that was legitimately not required may be skipped, and any failed or cancelled lane fails the gate. The release workflow therefore names no individual lane, so lanes can be renamed, split, or added without touching it.
 
 ### Manual entry points
 
