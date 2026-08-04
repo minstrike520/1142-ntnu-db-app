@@ -179,4 +179,137 @@ describe('parseSingleFile size limits', () => {
 
     expect(res.status).toBe(200);
   });
+
+  describe('stream-level enforcement', () => {
+    const BOUNDARY = '----streamtest';
+    const CHUNK_BYTES = 64 * 1024;
+    const WOULD_BE_TOTAL = 64 * 1024 * 1024;
+
+    /**
+     * A multipart body that keeps producing until it is cancelled, reporting how
+     * much of it the server actually pulled.
+     *
+     * The point of these tests is not the status code — the pre-existing cases
+     * above already cover that — but that the server stops reading. A limit
+     * applied after `parseBody()` returns the same 400 while still having taken
+     * the whole payload into memory.
+     */
+    const endlessUpload = () => {
+      const counter = { produced: 0 };
+      const chunk = new Uint8Array(CHUNK_BYTES).fill(0x78);
+      const head =
+        `--${BOUNDARY}\r\n` +
+        'Content-Disposition: form-data; name="file"; filename="big.bin"\r\n' +
+        'Content-Type: application/octet-stream\r\n\r\n';
+
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(head));
+        },
+        pull(controller) {
+          if (counter.produced >= WOULD_BE_TOTAL) {
+            controller.enqueue(new TextEncoder().encode(`\r\n--${BOUNDARY}--\r\n`));
+            controller.close();
+            return;
+          }
+          counter.produced += chunk.byteLength;
+          controller.enqueue(chunk);
+        },
+      });
+
+      return { body, counter };
+    };
+
+    const post = (app: Hono, headers: Record<string, string>, body: ReadableStream<Uint8Array>) =>
+      app.request('/upload', {
+        method: 'POST',
+        headers: { 'content-type': `multipart/form-data; boundary=${BOUNDARY}`, ...headers },
+        body,
+        // Required to send a stream as a request body.
+        duplex: 'half',
+      } as RequestInit);
+
+    it('aborts an oversized body instead of receiving all of it', async () => {
+      const maxBytes = 1024;
+      const { body, counter } = endlessUpload();
+
+      const res = await post(makeApp(maxBytes), {}, body);
+
+      expect(res.status).toBe(400);
+      expect((await res.json() as { message?: string }).message).toBe('File size limit exceeded');
+      // Bounded by the cap plus the overhead allowance and one in-flight chunk,
+      // and nowhere near what the client was willing to send.
+      expect(counter.produced).toBeLessThan(maxBytes + 64 * 1024 + 2 * CHUNK_BYTES);
+      expect(counter.produced).toBeLessThan(WOULD_BE_TOTAL);
+    });
+
+    it('cannot be bypassed by omitting Content-Length', async () => {
+      // No declared length at all, as with `Transfer-Encoding: chunked`, so the
+      // cheap pre-check has nothing to act on.
+      const { body, counter } = endlessUpload();
+
+      const res = await post(makeApp(1024), {}, body);
+
+      expect(res.status).toBe(400);
+      expect(counter.produced).toBeLessThan(WOULD_BE_TOTAL);
+    });
+
+    it('cannot be bypassed by under-declaring Content-Length', async () => {
+      // A forged length that sails through the pre-check; only the byte counter
+      // in the stream stops this.
+      const { body, counter } = endlessUpload();
+
+      const res = await post(makeApp(1024), { 'content-length': '32' }, body);
+
+      expect(res.status).toBe(400);
+      expect((await res.json() as { message?: string }).message).toBe('File size limit exceeded');
+      expect(counter.produced).toBeLessThan(WOULD_BE_TOTAL);
+    });
+
+    it('leaves an unlimited caller unrestricted', async () => {
+      // `maxBytes` is per route; a caller that sets none must keep working.
+      const app = new Hono();
+      app.onError(errorHandler);
+      app.post('/upload', async (c) => c.json({ size: (await parseSingleFile(c)).size }));
+
+      const form = new FormData();
+      form.append('file', new File(['x'.repeat(200_000)], 'blob.bin', { type: 'application/octet-stream' }));
+      const res = await app.request('/upload', { method: 'POST', body: form });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ size: 200_000 });
+    });
+  });
+
+  describe('non-file bodies', () => {
+    it('rejects a JSON body as a missing file rather than failing to parse', async () => {
+      const res = await makeApp(1024).request('/upload', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ file: 'not-a-file' }),
+      });
+
+      expect(res.status).toBe(400);
+      expect((await res.json() as { message?: string }).message).toBe('file is required');
+    });
+
+    it('rejects a form field that is not a file', async () => {
+      const form = new FormData();
+      form.append('file', 'just a string');
+      const res = await makeApp(1024).request('/upload', { method: 'POST', body: form });
+
+      expect(res.status).toBe(400);
+      expect((await res.json() as { message?: string }).message).toBe('file is required');
+    });
+
+    it('rejects a malformed multipart body with a client error, not a 500', async () => {
+      const res = await makeApp(1024).request('/upload', {
+        method: 'POST',
+        headers: { 'content-type': 'multipart/form-data; boundary=----nope' },
+        body: 'this is not multipart at all',
+      });
+
+      expect(res.status).toBe(400);
+    });
+  });
 });
