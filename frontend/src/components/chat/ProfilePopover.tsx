@@ -179,7 +179,7 @@ export default function ProfilePopover({
       ref={popoverRef}
       onClick={(e) => e.stopPropagation()}
       style={style}
-      className={`${positionClasses[position]} ${className || ""} z-[100] w-[240px] bg-surface-card/95 border border-border-primary rounded-sm shadow-xl p-4 text-left select-none text-foreground backdrop-blur-md transition-all duration-150`}
+      className={`${positionClasses[position]} ${className || ""} z-[100] w-[240px] bg-surface-card border border-border-primary rounded-sm shadow-xl p-4 text-left select-none text-foreground backdrop-blur-md transition-all duration-150`}
     >
       <div className="flex justify-between items-start mb-2">
         <span className="text-[9px] font-bold text-text-muted uppercase tracking-widest">

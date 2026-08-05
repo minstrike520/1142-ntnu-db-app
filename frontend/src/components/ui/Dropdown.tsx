@@ -40,7 +40,7 @@ export function Dropdown({ trigger, items, align = "right", className }: Dropdow
       {isOpen && (
         <div
           className={cn(
-            "absolute z-30 mt-1 w-44 bg-surface-card border border-border-primary rounded-sm shadow-md",
+            "absolute z-50 mt-1 w-44 bg-surface-card border border-border-primary rounded-sm shadow-md",
             align === "right" ? "right-0" : "left-0",
             className
           )}
@@ -97,7 +97,7 @@ function DropdownRow({ item, setIsOpen }: { item: DropdownItem; setIsOpen: (open
 
       {hasSubMenu && isSubOpen && !item.disabled && (
         <div
-          className="absolute right-full top-0 mr-1 w-40 bg-surface-card border border-border-primary rounded-sm shadow-lg flex flex-col divide-y divide-border-secondary z-40"
+          className="absolute right-full top-0 mr-1 w-40 bg-surface-card border border-border-primary rounded-sm shadow-lg flex flex-col divide-y divide-border-secondary z-50"
         >
           {item.subMenuItems!.map((subItem, sIdx) => (
             <button

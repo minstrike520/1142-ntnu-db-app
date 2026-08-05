@@ -746,7 +746,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings, rightPanel }: Ch
   return (
     <div className="flex-1 flex flex-col bg-background h-full overflow-hidden">
       {/* Chat Panel Header */}
-      <div className="h-14 border-b border-border-primary px-3 md:px-6 flex items-center justify-between select-none shrink-0 bg-surface-card z-10 gap-2">
+      <div className="h-14 border-b border-border-primary px-3 md:px-6 flex items-center justify-between select-none shrink-0 bg-surface-card z-30 gap-2">
         <div className="flex items-center gap-1 md:gap-3 min-w-0">
         <button
           type="button"
@@ -1115,7 +1115,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings, rightPanel }: Ch
             onClick={() => setShowRightPanel(false)}
             aria-hidden
           />
-          <div className="absolute inset-y-0 right-0 z-40 flex h-full lg:relative lg:z-20 max-lg:animate-slide-in-right">
+          <div className="absolute inset-y-0 right-0 z-40 flex h-full lg:relative lg:z-10 max-lg:animate-slide-in-right">
             {rightPanel}
           </div>
         </>
