@@ -14,7 +14,7 @@ describe("opening and switching rooms", () => {
     await mountChatApp("/chat/room-1");
 
     expect(screen.getAllByText("Message 40 in room-1").length).toBeGreaterThan(0);
-    expect(screen.getByText("Members (8)")).toBeTruthy();
+    expect(document.querySelector(".members-panel-root")).toBeTruthy();
     expect(screen.getByText("Group Chat • 8 members")).toBeTruthy();
   });
 
@@ -168,14 +168,14 @@ describe("right panel", () => {
   test("toggles the members panel off and on", async () => {
     const app = await mountChatApp("/chat/room-1");
 
-    expect(screen.getByText("Members (8)")).toBeTruthy();
+    expect(document.querySelector(".members-panel-root")).toBeTruthy();
 
     fireEvent.click(screen.getByTitle("Hide Info Panel"));
     await app.settle();
-    expect(screen.queryByText("Members (8)")).toBeNull();
+    expect(document.querySelector(".members-panel-root")).toBeNull();
 
     fireEvent.click(screen.getByTitle("Show Info Panel"));
     await app.settle();
-    expect(screen.getByText("Members (8)")).toBeTruthy();
+    expect(document.querySelector(".members-panel-root")).toBeTruthy();
   });
 });

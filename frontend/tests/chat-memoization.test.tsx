@@ -184,12 +184,12 @@ describe("ChatContext value stability", () => {
     fireEvent.click(screen.getByTitle("Hide Info Panel"));
     await app.settle();
 
-    expect(screen.queryByText("Members (8)")).toBeNull();
+    expect(document.querySelector(".members-panel-root")).toBeNull();
     expect(seen.at(-1)!).toBe(before);
 
     fireEvent.click(screen.getByTitle("Show Info Panel"));
     await app.settle();
-    expect(screen.getByText("Members (8)")).toBeTruthy();
+    expect(document.querySelector(".members-panel-root")).toBeTruthy();
   });
 
   test("switching the UI language still reaches translation consumers", async () => {
@@ -209,7 +209,7 @@ describe("ChatContext value stability", () => {
     await app.settle();
 
     expect(screen.getByText("發送")).toBeTruthy();
-    expect(screen.getByText("成員列表 (8)")).toBeTruthy();
+    expect(screen.getByText("群組聊天室 • 8 位成員")).toBeTruthy();
   });
 
   test("getReadAvatarsForMessage tracks the latest read state", async () => {

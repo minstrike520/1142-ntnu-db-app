@@ -241,10 +241,24 @@ const MessageRow = React.memo(function MessageRow({
   );
 });
 
-const getMentionDraft = (value: string, cursorPosition: number): MentionDraft | null => {
-  const beforeCursor = value.slice(0, cursorPosition);
-  const match = beforeCursor.match(/(?:^|\s)@([^\s@]*)$/);
+interface ChatroomProps {
+  roomId: string;
+  onOpenGroupSettings?: () => void;
+  rightPanel?: React.ReactNode;
+}
 
+interface MentionDraft {
+  start: number;
+  end: number;
+  query: string;
+}
+
+const getMentionDraft = (
+  text: string,
+  cursorPosition: number
+): MentionDraft | null => {
+  const beforeCursor = text.slice(0, cursorPosition);
+  const match = beforeCursor.match(/(?:^|\s)@([^\s]*)$/);
   if (!match) return null;
 
   const start = beforeCursor.lastIndexOf("@");
@@ -257,7 +271,7 @@ const getMentionDraft = (value: string, cursorPosition: number): MentionDraft | 
   };
 };
 
-export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps) {
+export default function Chatroom({ roomId, onOpenGroupSettings, rightPanel }: ChatroomProps) {
   const router = useRouter();
   const {
     rooms,
@@ -854,8 +868,12 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
         </div>
       </div>
 
-      {/* Search Bar */}
-      {isSearchOpen && (
+      {/* Main Content Area below Header */}
+      <div className="relative flex-1 flex h-full overflow-hidden">
+        {/* Chat Area */}
+        <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+          {/* Search Bar */}
+          {isSearchOpen && (
         <div className="border-b border-border-primary bg-surface-card px-3 md:px-6 py-2 flex items-center gap-2 shrink-0">
           <SearchIcon aria-hidden="true" className="h-4 w-4 text-text-muted shrink-0" />
           <input
@@ -1086,6 +1104,23 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
           </div>
         )}
       </div>
+      </div>
+
+      {/* Right Panel Drawer / Side Panel */}
+      {showRightPanel && rightPanel && (
+        <>
+          {/* Below lg the panel floats over the conversation as a drawer. */}
+          <div
+            className="fixed inset-0 z-30 bg-black/50 lg:hidden animate-fade-in"
+            onClick={() => setShowRightPanel(false)}
+            aria-hidden
+          />
+          <div className="absolute inset-y-0 right-0 z-40 flex h-full lg:relative lg:z-20 max-lg:animate-slide-in-right">
+            {rightPanel}
+          </div>
+        </>
+      )}
+    </div>
 
       <Modal
         isOpen={isModifyNickOpen}

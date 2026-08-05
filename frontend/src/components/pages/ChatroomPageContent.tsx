@@ -77,10 +77,10 @@ export default function ChatroomPageContent() {
 
   const rightPanel =
     activeRoom.type === "group" && activeRoom.members ? (
-      <RoomMembersPanel room={activeRoom} members={activeRoom.members} />
+      <RoomMembersPanel room={activeRoom} members={activeRoom.members} hideHeader={true} />
     ) : activeRoom.type === "msg" ? (
       <div className="w-[280px] max-w-[85vw] lg:w-[240px] shrink-0 border-l border-border-primary bg-surface-card h-full">
-        <FriendInfoPanel userId={otherMember?.userId} friendName={activeRoom.name} />
+        <FriendInfoPanel userId={otherMember?.userId} friendName={activeRoom.name} hideHeader={true} />
       </div>
     ) : null;
 
@@ -92,21 +92,8 @@ export default function ChatroomPageContent() {
         <Chatroom
           roomId={activeRoom.id}
           onOpenGroupSettings={activeRoom.type === "group" ? () => setShowSettings(true) : undefined}
+          rightPanel={rightPanel}
         />
-      )}
-
-      {showRightPanel && rightPanel && (
-        <>
-          {/* Below lg the panel floats over the conversation as a drawer. */}
-          <div
-            className="fixed inset-0 z-30 bg-black/50 lg:hidden animate-fade-in"
-            onClick={() => setShowRightPanel(false)}
-            aria-hidden
-          />
-          <div className="absolute inset-y-0 right-0 z-40 flex h-full lg:relative lg:z-20 max-lg:animate-slide-in-right">
-            {rightPanel}
-          </div>
-        </>
       )}
     </div>
   );

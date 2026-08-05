@@ -7,7 +7,14 @@ import ProfilePopover from "./ProfilePopover";
 import { useTranslation } from "@/hooks/useTranslation";
 import { resolveAssetUrl } from "@/lib/assets";
 
-export default function RoomMembersPanel({ members }: { room: ChatRoom; members: Member[] }) {
+export default function RoomMembersPanel({
+  members,
+  hideHeader = false,
+}: {
+  room: ChatRoom;
+  members: Member[];
+  hideHeader?: boolean;
+}) {
   const { activeProfilePopover, setActiveProfilePopover } = useProfilePopover();
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const [popoverTop, setPopoverTop] = useState<number>(0);
@@ -21,11 +28,13 @@ export default function RoomMembersPanel({ members }: { room: ChatRoom; members:
 
   return (
     <div className="members-panel-root w-[280px] max-w-[85vw] lg:w-[240px] shrink-0 border-l border-border-primary bg-surface-card flex flex-col h-full select-none relative">
-      <div className="h-14 border-b border-border-primary px-4 flex items-center select-none shrink-0 bg-surface-muted">
-        <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest block">
-          {t("chatroom.membersList", { count: members.length })}
-        </span>
-      </div>
+      {!hideHeader && (
+        <div className="h-14 border-b border-border-primary px-4 flex items-center select-none shrink-0 bg-surface-muted">
+          <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest block">
+            {t("chatroom.membersList", { count: members.length })}
+          </span>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto divide-y divide-border-secondary/30">
         {members.map((member, index) => {
