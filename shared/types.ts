@@ -208,7 +208,6 @@ export interface ServerToClientEvents {
   read_update:      (payload: { roomId: string; userId: string; messageId: string }) => void;
   room_update:      (payload: { type: string; roomId: string; data: any }) => void;
   friend_request:   (payload: FriendRequest) => void;
-  emergency_alert:  (payload: { userId: string; message: string }) => void;
   error:            (payload: ApiError) => void;
   user_status:      (payload: { userId: string; status: 'online' | 'offline' }) => void;
 }

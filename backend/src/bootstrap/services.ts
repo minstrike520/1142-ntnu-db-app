@@ -8,6 +8,7 @@ import { makeMessageService } from '../services/messageService';
 import { makeFolderService } from '../services/folderService';
 import { makeAttachmentService } from '../services/attachmentService';
 import { makeFriendService } from '../services/friendService';
+import { makeEmergencyNotifier } from '../services/emergencyNotifier';
 
 export interface Services {
   user: ReturnType<typeof makeUserService>;
@@ -52,29 +53,27 @@ export const createServices = ({ repositories, getIo }: CreateServicesDeps): Ser
     repositories.emergencyContacts,
     repositories.refreshTokens,
     { signToken, generateRefreshToken, hashToken },
-    async (contactId, payload) => {
-      let room = await repositories.rooms.findPrivateRoomByMembers(payload.userId, contactId);
-      if (!room) {
-        try {
-          const result = await roomService.createPrivate(payload.userId, contactId, true);
-          room = result.room;
-        } catch (err) {
-          console.error('Failed to auto-create private room for emergency contact:', err);
-        }
-      }
-
-      if (room) {
-        try {
-          const message = await messageService.sendMessage(payload.userId, room.roomId, payload.message);
-          getIo().to(`room_${room.roomId}`).emit('new_message', message);
-        } catch (err) {
-          console.error('Failed to auto-send emergency message:', err);
-          getIo().to(`user_${contactId}`).emit('emergency_alert', payload);
-        }
-      } else {
-        getIo().to(`user_${contactId}`).emit('emergency_alert', payload);
-      }
-    },
+    // The delivery rules live in `makeEmergencyNotifier`, not here — bootstrap
+    // wires, it does not decide. Every service reference below is reached
+    // through a closure so that `roomService` and `messageService`, declared
+    // further down, are resolved when an alert fires rather than now.
+    makeEmergencyNotifier({
+      userRepo: repositories.users,
+      socialRepo: repositories.friends,
+      roomService: {
+        createPrivate: (creatorId, targetUserId, bypassFriendCheck) =>
+          roomService.createPrivate(creatorId, targetUserId, bypassFriendCheck),
+      },
+      messageService: {
+        sendMessage: (userId, roomId, content) => messageService.sendMessage(userId, roomId, content),
+      },
+      emitNewMessage: (roomId, message) => {
+        getIo().to(`room_${roomId}`).emit('new_message', message);
+      },
+      notifyRoomJoined: (userId, roomId) => {
+        getIo().to(`user_${userId}`).emit('room_update', { type: 'ROOM_JOINED', roomId, data: {} });
+      },
+    }),
     repositories.friends,
     async (userId, data) => {
       try {

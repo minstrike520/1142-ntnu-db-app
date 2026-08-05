@@ -53,6 +53,7 @@ describe('userService', () => {
       upsert: mock(),
       delete: mock(),
       recordAlertIfNew: mock(),
+      releaseAlert: mock().mockResolvedValue(undefined),
     };
     mockRefreshTokenRepo = {
       create: mock(),
@@ -496,6 +497,114 @@ describe('userService', () => {
         userId: 'u1',
         message: 'inactive',
       });
+    });
+
+    const contactsFor = (...contactIds: string[]) =>
+      contactIds.map((contactId) => ({
+        userId: 'u1',
+        contactId,
+        message: 'inactive',
+        createdAt: new Date(),
+      }));
+
+    it('reports DELIVERY_FAILED and gives the marker back when no alert was stored', async () => {
+      mockRepo.findById.mockResolvedValue(inactiveUser);
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      emergencyContactRepo.findByUserId.mockResolvedValue(contactsFor('u2'));
+      notifyEmergencyContact.mockResolvedValue({
+        delivered: false,
+        retryable: true,
+        code: 'PERSIST_FAILED',
+      });
+
+      const result = await userService.checkInactivity('u1', new Date('2026-01-04T00:00:00.000Z'));
+
+      expect(result).toEqual({
+        alerted: false,
+        recipients: [],
+        failedRecipients: ['u2'],
+        reason: 'DELIVERY_FAILED',
+      });
+      expect(emergencyContactRepo.releaseAlert).toHaveBeenCalledWith('u1', inactiveUser.lastActivity);
+    });
+
+    it('treats a thrown notifier as a retryable failure', async () => {
+      mockRepo.findById.mockResolvedValue(inactiveUser);
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      emergencyContactRepo.findByUserId.mockResolvedValue(contactsFor('u2'));
+      notifyEmergencyContact.mockRejectedValue(new Error('database is down'));
+
+      const result = await userService.checkInactivity('u1', new Date('2026-01-04T00:00:00.000Z'));
+
+      expect(result.alerted).toBe(false);
+      expect(result.failedRecipients).toEqual(['u2']);
+      expect(emergencyContactRepo.releaseAlert).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the marker when every failure is permanent, so it is not retried forever', async () => {
+      mockRepo.findById.mockResolvedValue(inactiveUser);
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      emergencyContactRepo.findByUserId.mockResolvedValue(contactsFor('u2'));
+      notifyEmergencyContact.mockResolvedValue({
+        delivered: false,
+        retryable: false,
+        code: 'CONTACT_BLOCKED',
+      });
+
+      const result = await userService.checkInactivity('u1', new Date('2026-01-04T00:00:00.000Z'));
+
+      expect(result.reason).toBe('DELIVERY_FAILED');
+      expect(emergencyContactRepo.releaseAlert).not.toHaveBeenCalled();
+    });
+
+    it('keeps the marker on partial delivery and names the contacts that were missed', async () => {
+      mockRepo.findById.mockResolvedValue(inactiveUser);
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      emergencyContactRepo.findByUserId.mockResolvedValue(contactsFor('u2', 'u3'));
+      notifyEmergencyContact.mockImplementation(async (contactId: string) =>
+        contactId === 'u2'
+          ? { delivered: true }
+          : { delivered: false, retryable: true, code: 'PERSIST_FAILED' },
+      );
+
+      const result = await userService.checkInactivity('u1', new Date('2026-01-04T00:00:00.000Z'));
+
+      expect(result).toEqual({
+        alerted: true,
+        recipients: ['u2'],
+        failedRecipients: ['u3'],
+      });
+      // Retrying would write a second alert for u2, which already has one.
+      expect(emergencyContactRepo.releaseAlert).not.toHaveBeenCalled();
+    });
+
+    it('gives the marker back when the user has no contacts to alert', async () => {
+      mockRepo.findById.mockResolvedValue(inactiveUser);
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      emergencyContactRepo.findByUserId.mockResolvedValue([]);
+
+      const result = await userService.checkInactivity('u1', new Date('2026-01-04T00:00:00.000Z'));
+
+      expect(result).toEqual({ alerted: false, recipients: [], reason: 'NO_CONTACTS' });
+      // Otherwise adding a contact later could never alert for this window.
+      expect(emergencyContactRepo.releaseAlert).toHaveBeenCalledWith('u1', inactiveUser.lastActivity);
+    });
+
+    it('still returns the delivery result when releasing the marker fails', async () => {
+      mockRepo.findById.mockResolvedValue(inactiveUser);
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      emergencyContactRepo.findByUserId.mockResolvedValue(contactsFor('u2'));
+      notifyEmergencyContact.mockResolvedValue({
+        delivered: false,
+        retryable: true,
+        code: 'PERSIST_FAILED',
+      });
+      emergencyContactRepo.releaseAlert.mockRejectedValue(new Error('database is down'));
+
+      const result = await userService.checkInactivity('u1', new Date('2026-01-04T00:00:00.000Z'));
+
+      expect(result.reason).toBe('DELIVERY_FAILED');
+      expect(result.failedRecipients).toEqual(['u2']);
     });
 
     it('does not alert below the inactivity threshold', async () => {

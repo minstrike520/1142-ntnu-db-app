@@ -100,6 +100,7 @@ type UploadAttachmentResponse = Attachment;
 type EmergencyAlertResult = {
   alerted: boolean;
   recipients: string[];
+  failedRecipients?: string[];
   reason?: string;
 };
 

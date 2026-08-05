@@ -20,7 +20,12 @@ export function startInactivityJob(
             await userRepo.update(user.userId, { lastActivity: now });
             continue;
           }
-          await userService.checkInactivity(user.userId, now);
+          const result = await userService.checkInactivity(user.userId, now);
+          if (result?.failedRecipients?.length) {
+            console.error(
+              `Emergency alert for user ${user.userId} did not reach contacts: ${result.failedRecipients.join(', ')}`,
+            );
+          }
         } catch (err) {
           console.error(`Error checking inactivity for user ${user.userId}:`, err);
         }
