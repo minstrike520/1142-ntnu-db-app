@@ -47,6 +47,14 @@ export default function ChatroomPageContent() {
     }
   }, [activeRoom]);
 
+  // On mobile (< 1024px), automatically close the right panel when navigating to or switching chatrooms,
+  // so the drawer doesn't slide in over the main chat view by default.
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      setShowRightPanel(false);
+    }
+  }, [chatId, setShowRightPanel]);
+
   // Reset the settings view when switching rooms (adjust state during render).
   const [prevChatId, setPrevChatId] = useState(chatId);
   if (prevChatId !== chatId) {
@@ -95,7 +103,7 @@ export default function ChatroomPageContent() {
             onClick={() => setShowRightPanel(false)}
             aria-hidden
           />
-          <div className="absolute inset-y-0 right-0 z-40 flex h-full lg:relative lg:z-20 animate-slide-in-right lg:animate-none">
+          <div className="absolute inset-y-0 right-0 z-40 flex h-full lg:relative lg:z-20 max-lg:animate-slide-in-right">
             {rightPanel}
           </div>
         </>
