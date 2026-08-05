@@ -29,6 +29,10 @@ describe('Emergency alert Socket.IO E2E', () => {
   beforeEach(async () => {
     clients.forEach((socket) => socket.disconnect());
     clients = [];
+    // Disconnecting makes the server broadcast an offline status, which reads
+    // `friendships`. `resetDb` truncates it, and TRUNCATE needs a lock that
+    // conflicts with that read — starting it immediately deadlocks the pair.
+    await new Promise((res) => setTimeout(res, 150));
     await resetDb();
   });
 
@@ -129,7 +133,11 @@ describe('Emergency alert Socket.IO E2E', () => {
    * Registers two users, makes them friends, opens their private room and
    * configures the first as an inactive user alerting the second.
    */
-  const setUpAlertPair = async (suffix: string, message = 'Please check on me') => {
+  const setUpAlertPair = async (
+    suffix: string,
+    message = 'Please check on me',
+    opts: { blockBeforeConfiguring?: boolean } = {},
+  ) => {
     const userRes = await request(app).post('/api/v1/auth/register').send({
       name: 'Alert User',
       email: `alert-user-${suffix}@example.com`,
@@ -155,6 +163,17 @@ describe('Emergency alert Socket.IO E2E', () => {
       .set('Authorization', `Bearer ${userRes.body.token}`)
       .send({ type: 'private', targetUserId: contactRes.body.user.userId });
     expect([200, 201]).toContain(roomRes.status);
+
+    // `friendRepository.blockUser` deletes the emergency_contacts rows in both
+    // directions, so blocking after configuration would simply leave the user
+    // with no contacts. Blocking first is the reachable ordering: adding an
+    // emergency contact does not check blocks.
+    if (opts.blockBeforeConfiguring) {
+      await request(app)
+        .post('/api/v1/blocks')
+        .set('Authorization', `Bearer ${contactRes.body.token}`)
+        .send({ targetUserId: userRes.body.user.userId });
+    }
 
     await request(app)
       .post('/api/v1/users/me/emergency-contacts')
@@ -202,15 +221,14 @@ describe('Emergency alert Socket.IO E2E', () => {
   });
 
   it('reports an undeliverable alert instead of emitting a transient event', async () => {
-    const ctx = await setUpAlertPair('blocked', 'Blocked contact alert');
-
-    // Blocking marks the shared private room read-only, so the durable write
-    // cannot succeed. This used to fall back to a fire-and-forget
+    // The contact has blocked the user, who then configured them as an
+    // emergency contact anyway — `upsertEmergencyContact` does not check
+    // blocks. The alert must not be delivered, and must not silently reopen the
+    // read-only room. This used to fall back to a fire-and-forget
     // `emergency_alert` event that nothing recorded.
-    await request(app)
-      .post('/api/v1/blocks')
-      .set('Authorization', `Bearer ${ctx.contactToken}`)
-      .send({ targetUserId: ctx.user.userId });
+    const ctx = await setUpAlertPair('blocked', 'Blocked contact alert', {
+      blockBeforeConfiguring: true,
+    });
 
     const contactSocket = await connectClient(ctx.contactToken);
     contactSocket.emit('join_room', { roomId: ctx.roomId });
