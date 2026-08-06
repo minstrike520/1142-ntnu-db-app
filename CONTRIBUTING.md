@@ -73,8 +73,18 @@ To ensure consistent project communications:
 * **Raw SQL Database Access**: Prisma has been completely removed from this project. We access the database using raw SQL queries.
 * **Database Migrations**:
   - Do not run arbitrary SQL directly on the database to make schema changes.
-  - All schema modifications must be done by writing migrations under `backend/migrations/` using `node-pg-migrate`.
   - Refer to [docs/database-design.md](docs/database-design.md) for actual column structures, constraints, and relationships.
+* **Pre-launch schema changes** (current phase): the service has not been deployed
+  to any real environment, so there is no data to preserve. Schema changes are made
+  by editing the baseline definition in `backend/migrations/1716300000000_init.sql`
+  directly, and **no new migration files are added**. This keeps the schema readable
+  as a single definition rather than a baseline plus a stack of patches. Anyone with
+  an existing local volume must run `docker compose down -v` to pick up the change;
+  CI creates a fresh database on every run and is unaffected.
+* **After the first real deployment**: `init.sql` is frozen. From that point on,
+  every schema modification is an additive migration under `backend/migrations/`
+  using `node-pg-migrate`, and the baseline is never edited again. Whoever performs
+  the first deployment is responsible for flipping this rule in this document.
 * **Migration Commands** (Execute inside the backend container):
   - **Create migration**: `docker compose exec backend pnpm run migrate:create <name>`
   - **Run migrations**: `docker compose exec backend pnpm run migrate:up`
