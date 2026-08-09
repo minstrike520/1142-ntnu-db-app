@@ -49,6 +49,18 @@
 | `reply_to_id` | UUID | 被引用的訊息 ID | FK(`messages`), 刪除時設為 SET NULL |
 | `is_recalled` | BOOLEAN | 訊息是否已被收回 | NOT NULL, 預設值: FALSE |
 | `sent_at` | TIMESTAMPTZ | 發送時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
+| `message_seq` | BIGINT | 建立順序，建立時指派後永不改變，用於排序聊天室訊息串 | NOT NULL, UNIQUE, 由 trigger 指派 |
+| `change_seq` | BIGINT | 每次變更都前進，用於排序全域變更串流 | NOT NULL, UNIQUE, 由 trigger 指派 |
+| `revision` | INTEGER | 建立時為 1，每次成功變更後遞增；僅在單一訊息內有意義，不可跨訊息比較 | NOT NULL, 預設值: 1 |
+| `client_command_id` | UUID | 發送端提供的命令識別碼，用於讓重送的發送操作具冪等性 | UNIQUE (`sender_id`, `client_command_id`)，僅在非 NULL 時生效 |
+
+#### `message_sequence_counter` (序號計數器)
+`message_seq` 與 `change_seq` 背後的單列計數器。序號由 `next_message_seq()` **在寫入交易內** 發放，因此該列的鎖會持有至 COMMIT，發號順序即等於提交順序。此處不可改用 PostgreSQL sequence：`nextval()` 不受交易保護，先取號的交易可能在後取號的交易之後才提交，而游標已越過較大號碼的讀者將永久且靜默地跳過較小的號碼。詳見 [ADR-0003](../adr/0003-change-sequence-from-transactional-counter.md)。
+
+| 欄位名稱 | 類型 | 說明 | 條件約束 |
+| :--- | :--- | :--- | :--- |
+| `counter_id` | BOOLEAN | 將此表固定為單一列 | PK, 預設值: TRUE, CHECK (`counter_id`) |
+| `current_seq` | BIGINT | 目前已發放的最大號碼 | NOT NULL, 預設值: 0 |
 
 #### `attachments` (附件)
 | 欄位名稱 | 類型 | 說明 | 條件約束 |
@@ -73,8 +85,10 @@
 | `role` | VARCHAR(10) | 成員角色：'owner', 'admin', 'member', 'pending' | NOT NULL, 預設值: 'member', CHECK (role IN ('owner', 'admin', 'member', 'pending')) |
 | `nickname` | VARCHAR(255) | 成員在此聊天室的自訂暱稱 | |
 | `is_muted` | BOOLEAN | 成員在此聊天室是否被禁言 | NOT NULL, 預設值: FALSE |
-| `last_read_id` | UUID | 最後已讀的訊息 ID | FK(`messages`), 刪除時設為 SET NULL |
+| `last_read_id` | UUID | 最後已讀的訊息 ID，為 `last_read_seq` 的反正規化對應欄位 | FK(`messages`), 刪除時設為 SET NULL |
 | `join_time` | TIMESTAMPTZ | 加入聊天室時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
+| `join_seq` | BIGINT | Join Boundary：`message_seq` 小於或等於此值的訊息皆早於此成員加入 | NOT NULL, 預設值: 0 |
+| `last_read_seq` | BIGINT | Read Position，以 `message_seq` 表達，且只能向前移動 | NOT NULL, 預設值: 0 |
 
 #### `friendships` (好友關係)
 | 欄位名稱 | 類型 | 說明 | 條件約束 |

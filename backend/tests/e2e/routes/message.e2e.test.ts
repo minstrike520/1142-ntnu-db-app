@@ -96,8 +96,17 @@ describe('Message E2E', () => {
     const newUserId = newUserRes.body.user.userId;
     const memberRole = 'member';
     const joinTime = '2026-01-02T00:00:00.000Z';
+    // The Join Boundary is a sequence, so it is pinned to the room's newest
+    // message at join time — the same value RoomMemberRepository.add derives.
     await testPool`
-      INSERT INTO room_members (room_id, user_id, role, join_time) VALUES (${hiddenRoomId}, ${newUserId}, ${memberRole}, ${joinTime})
+      INSERT INTO room_members (room_id, user_id, role, join_time, join_seq)
+      VALUES (
+        ${hiddenRoomId},
+        ${newUserId},
+        ${memberRole},
+        ${joinTime},
+        COALESCE((SELECT MAX(message_seq) FROM messages WHERE room_id = ${hiddenRoomId}), 0)
+      )
     `;
 
     const afterContent = 'after join';

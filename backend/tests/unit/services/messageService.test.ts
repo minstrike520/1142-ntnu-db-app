@@ -33,6 +33,7 @@ describe('messageService', () => {
     role: 'member',
     isMuted: false,
     joinTime: new Date('2026-01-01T00:00:00.000Z'),
+    joinSeq: 42,
   };
 
   const message: Message = {
@@ -275,7 +276,7 @@ describe('messageService', () => {
     });
   });
 
-  it('listForRoom applies join time when room history is hidden', async () => {
+  it('listForRoom applies the Join Boundary when room history is hidden', async () => {
     const hiddenHistoryRoom = { ...room, viewHistory: false };
     roomRepo.findById.mockResolvedValue(hiddenHistoryRoom);
     roomMemberRepo.findMember.mockResolvedValue(member);
@@ -286,7 +287,7 @@ describe('messageService', () => {
     expect(messageRepo.findByRoom).toHaveBeenCalledWith('room-1', {
       beforeId: undefined,
       limit: 50,
-      after: member.joinTime,
+      afterSeq: member.joinSeq,
     });
   });
 

@@ -328,6 +328,8 @@ All errors return the following JSON structure:
   | `isMuted` | Boolean | Whether muted |
   | `lastReadId` | UUID \| null | Last read message ID |
   | `joinTime` | String | Join timestamp |
+  | `joinSeq` | Number | Join Boundary: messages at or below this `messageSeq` predate the membership |
+  | `lastReadSeq` | Number | Read Position, as a `messageSeq`. Only ever moves forward |
 - **Example**:
   ```json
   {
@@ -352,6 +354,9 @@ All errors return the following JSON structure:
   | `replyToId` | UUID \| null | ID of the replied parent message |
   | `isRecalled` | Boolean | Whether recalled |
   | `sentAt` | String | Sent timestamp |
+  | `messageSeq` | Number | Creation order, fixed at creation. Orders a room's thread |
+  | `changeSeq` | Number | Advances on every change to this message. Orders the global change stream |
+  | `revision` | Number | 1 at creation, incremented on each change. Per-message only — not comparable across messages |
   | `attachments` | Array | Array of `Attachment` objects |
   | `sender` | Object \| null | Sender `PublicUser` data, null if deleted |
   | `mentions` | Array | Array of mentioned user IDs |

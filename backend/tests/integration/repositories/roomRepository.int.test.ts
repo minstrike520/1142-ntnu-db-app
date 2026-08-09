@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import { RoomRepository } from '../../../src/models/roomRepository';
+import { RoomMemberRepository } from '../../../src/models/roomMemberRepository';
 import { testPool } from '../../helpers/testPool';
 import { resetDb } from '../../helpers/resetDb';
 
 describe('RoomRepository (pg)', () => {
   const repo = new RoomRepository(testPool);
+  const memberRepo = new RoomMemberRepository(testPool);
 
   beforeEach(async () => {
     await resetDb();
@@ -121,10 +123,8 @@ describe('RoomRepository (pg)', () => {
     expect(rooms).toHaveLength(1);
     expect(rooms[0].unreadCount).toBe(1);
 
-    // 2. Alice updates last_read_id to Bob's message (unread count should be 0)
-    await testPool`
-      UPDATE room_members SET last_read_id = ${msg1Id} WHERE room_id = ${room.roomId} AND user_id = ${aliceId}
-    `;
+    // 2. Alice advances her Read Position to Bob's message (unread count should be 0)
+    await memberRepo.update(room.roomId, aliceId, { lastReadId: msg1Id });
     rooms = await repo.findByMember(aliceId);
     expect(rooms[0].unreadCount).toBe(0);
 
@@ -135,9 +135,7 @@ describe('RoomRepository (pg)', () => {
     `;
     const msg2Id = msg2Res[0].message_id;
 
-    await testPool`
-      UPDATE room_members SET last_read_id = ${msg2Id} WHERE room_id = ${room.roomId} AND user_id = ${aliceId}
-    `;
+    await memberRepo.update(room.roomId, aliceId, { lastReadId: msg2Id });
     rooms = await repo.findByMember(aliceId);
     expect(rooms[0].unreadCount).toBe(0);
   });

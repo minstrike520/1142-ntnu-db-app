@@ -49,6 +49,18 @@ This document defines the relational schema for the real-time group chat applica
 | `reply_to_id` | UUID | Replied message ID | FK(`messages`), SET NULL |
 | `is_recalled` | BOOLEAN | If message has been recalled | NOT NULL, DEFAULT FALSE |
 | `sent_at` | TIMESTAMPTZ | Sent timestamp | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+| `message_seq` | BIGINT | Creation order, assigned once and never changed. Orders a room's thread | NOT NULL, UNIQUE, assigned by trigger |
+| `change_seq` | BIGINT | Advances on every change. Orders the global change stream | NOT NULL, UNIQUE, assigned by trigger |
+| `revision` | INTEGER | 1 at creation, incremented on each change. Per-message only — not comparable across messages | NOT NULL, DEFAULT 1 |
+| `client_command_id` | UUID | Sender-supplied command identifier used to make a retried send idempotent | UNIQUE (`sender_id`, `client_command_id`) WHERE NOT NULL |
+
+#### `message_sequence_counter`
+Single-row allocator behind `message_seq` and `change_seq`. Numbers are drawn by `next_message_seq()` **inside the writing transaction**, so the row lock is held until COMMIT and allocation order equals commit order. A PostgreSQL sequence cannot be used here: `nextval()` is non-transactional, so a transaction drawing a lower number may commit after one drawing a higher number, and a reader whose cursor has passed the higher number would skip the lower one permanently and silently. See [ADR-0003](adr/0003-change-sequence-from-transactional-counter.md).
+
+| Column Name | Type | Description | Constraints |
+| :--- | :--- | :--- | :--- |
+| `counter_id` | BOOLEAN | Pins the table to a single row | PK, DEFAULT TRUE, CHECK (`counter_id`) |
+| `current_seq` | BIGINT | Highest number allocated so far | NOT NULL, DEFAULT 0 |
 
 #### `attachments`
 | Column Name | Type | Description | Constraints |
@@ -73,8 +85,10 @@ This document defines the relational schema for the real-time group chat applica
 | `role` | VARCHAR(10) | Member role (`owner`, `admin`, `member`, `pending`) | NOT NULL, DEFAULT 'member', CHECK (role IN ('owner', 'admin', 'member', 'pending')) |
 | `nickname` | VARCHAR(255) | Nickname in this room | |
 | `is_muted` | BOOLEAN | Muted status | NOT NULL, DEFAULT FALSE |
-| `last_read_id` | UUID | ID of last read message | FK(`messages`), SET NULL |
+| `last_read_id` | UUID | ID of last read message; denormalised companion to `last_read_seq` | FK(`messages`), SET NULL |
 | `join_time` | TIMESTAMPTZ | Join timestamp | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+| `join_seq` | BIGINT | Join Boundary: messages at or below this `message_seq` predate the membership | NOT NULL, DEFAULT 0 |
+| `last_read_seq` | BIGINT | Read Position, expressed as a `message_seq`. Only ever moves forward | NOT NULL, DEFAULT 0 |
 
 #### `friendships`
 | Column Name | Type | Description | Constraints |

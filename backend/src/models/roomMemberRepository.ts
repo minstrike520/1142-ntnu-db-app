@@ -11,6 +11,8 @@ export interface RoomMemberRow {
   is_muted: boolean;
   last_read_id?: string | null;
   join_time: Date;
+  join_seq?: string | number | null;
+  last_read_seq?: string | number | null;
 }
 
 function mapRowToRoomMember(row: RoomMemberRow): RoomMember {
@@ -22,6 +24,8 @@ function mapRowToRoomMember(row: RoomMemberRow): RoomMember {
     isMuted: row.is_muted,
     lastReadId: row.last_read_id ?? undefined,
     joinTime: row.join_time,
+    joinSeq: row.join_seq === null || row.join_seq === undefined ? undefined : Number(row.join_seq),
+    lastReadSeq: row.last_read_seq === null || row.last_read_seq === undefined ? undefined : Number(row.last_read_seq),
   };
 }
 
@@ -43,9 +47,16 @@ export class RoomMemberRepository implements IRoomMemberRepository {
   }
 
   async add(data: Pick<RoomMember, 'roomId' | 'userId' | 'role'>): Promise<RoomMember> {
+    // The Join Boundary is the room's newest message at the moment of joining, so
+    // a room that does not publish history can exclude everything before it.
     const rows = await this.sql<RoomMemberRow[]>`
-      INSERT INTO room_members (room_id, user_id, role)
-      VALUES (${data.roomId}, ${data.userId}, ${data.role})
+      INSERT INTO room_members (room_id, user_id, role, join_seq)
+      VALUES (
+        ${data.roomId},
+        ${data.userId},
+        ${data.role},
+        COALESCE((SELECT MAX(message_seq) FROM messages WHERE room_id = ${data.roomId}), 0)
+      )
       RETURNING *
     `;
     return mapRowToRoomMember(rows[0]);
@@ -59,14 +70,28 @@ export class RoomMemberRepository implements IRoomMemberRepository {
     const roleVal = data.role !== undefined ? data.role : this.sql`role`;
     const nickVal = data.nickname !== undefined ? data.nickname : this.sql`nickname`;
     const muteVal = data.isMuted !== undefined ? data.isMuted : this.sql`is_muted`;
-    const readVal = data.lastReadId !== undefined ? data.lastReadId : this.sql`last_read_id`;
+
+    // The Read Position only moves forward: a late-arriving or replayed request
+    // carrying an older message must not reopen messages the user has read.
+    // last_read_id is kept as a denormalised companion and advances in lockstep.
+    const readSeqVal = data.lastReadId !== undefined
+      ? this.sql`GREATEST(room_members.last_read_seq, COALESCE((SELECT message_seq FROM messages WHERE message_id = ${data.lastReadId}), 0))`
+      : this.sql`last_read_seq`;
+    const readIdVal = data.lastReadId !== undefined
+      ? this.sql`CASE
+            WHEN COALESCE((SELECT message_seq FROM messages WHERE message_id = ${data.lastReadId}), 0) > room_members.last_read_seq
+            THEN ${data.lastReadId}::uuid
+            ELSE room_members.last_read_id
+          END`
+      : this.sql`last_read_id`;
 
     const rows = await this.sql<RoomMemberRow[]>`
       UPDATE room_members SET
         role = ${roleVal},
         nickname = ${nickVal},
         is_muted = ${muteVal},
-        last_read_id = ${readVal}
+        last_read_seq = ${readSeqVal},
+        last_read_id = ${readIdVal}
       WHERE room_id = ${roomId} AND user_id = ${userId}
       RETURNING *
     `;

@@ -133,7 +133,7 @@ export const makeMessageService = (
       return messageRepo.findByRoom(parsed.data.roomId, {
         beforeId: parsed.data.beforeId,
         limit: parsed.data.limit,
-        after: room.viewHistory ? undefined : member.joinTime,
+        afterSeq: room.viewHistory ? undefined : member.joinSeq,
       });
     },
 

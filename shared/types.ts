@@ -126,6 +126,12 @@ export interface Message {
   isRecalled: boolean;
   sentAt: Date;
   attachments?: Attachment[];
+  /** Creation order, assigned once and never changed. Orders a room's thread. */
+  messageSeq?: number;
+  /** Advances on every change to this message. Orders the global change stream. */
+  changeSeq?: number;
+  /** 1 at creation, incremented on each successful change. Per-message only — not comparable across messages. */
+  revision?: number;
 }
 
 /** Message enriched with the sender's public profile (via JOIN). */
@@ -148,6 +154,10 @@ export interface RoomMember {
   isMuted: boolean;
   lastReadId?: string;
   joinTime: Date;
+  /** Join Boundary: messages at or below this sequence predate the membership. */
+  joinSeq?: number;
+  /** Read Position. Only ever moves forward. */
+  lastReadSeq?: number;
 }
 
 // ---------------------------------------------------------------------------

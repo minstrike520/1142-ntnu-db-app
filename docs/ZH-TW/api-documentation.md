@@ -328,6 +328,8 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
   | `isMuted` | 布林值 | 是否已被靜音 |
   | `lastReadId` | UUID \| null | 最後已讀的訊息唯一識別碼 |
   | `joinTime` | 字串 | 加入時間（時間格式） |
+  | `joinSeq` | 數字 | Join Boundary：`messageSeq` 小於或等於此值的訊息皆早於此成員加入 |
+  | `lastReadSeq` | 數字 | Read Position，以 `messageSeq` 表達，且只能向前移動 |
 - **範例**:
   ```json
   {
@@ -352,6 +354,9 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
   | `replyToId` | UUID \| null | 被引用的父訊息唯一識別碼 |
   | `isRecalled` | 布林值 | 訊息是否已被收回 |
   | `sentAt` | 字串 | 發送時間（時間格式） |
+  | `messageSeq` | 數字 | 建立順序，建立後固定不變，用於排序聊天室訊息串 |
+  | `changeSeq` | 數字 | 每次此訊息變更時前進，用於排序全域變更串流 |
+  | `revision` | 數字 | 建立時為 1，每次變更後遞增；僅在單一訊息內有意義，不可跨訊息比較 |
   | `attachments` | 陣列 | 附帶的 `Attachment` 陣列 |
   | `sender` | 物件 \| null | 發送者的 `PublicUser` 資料，若帳號已刪除則為 null |
   | `mentions` | 陣列 | 被提及的使用者 ID 陣列 |

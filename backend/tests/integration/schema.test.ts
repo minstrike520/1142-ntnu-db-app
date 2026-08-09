@@ -113,6 +113,62 @@ describe('Database Schema & Constraints', () => {
     });
   });
 
+  describe('messages table constraints', () => {
+    let userId: string;
+    let roomId: string;
+
+    beforeEach(async () => {
+      const userRes = await testPool`
+        INSERT INTO users (name, email, password_hash) VALUES ('Alice', 'alice@test.com', 'hash') RETURNING user_id
+      `;
+      userId = userRes[0].user_id;
+      const roomRes = await testPool`
+        INSERT INTO chat_rooms (type) VALUES ('group') RETURNING room_id
+      `;
+      roomId = roomRes[0].room_id;
+    });
+
+    it('should reject a second message reusing one sender\'s command identifier', async () => {
+      const commandId = '44444444-4444-4444-a444-444444444444';
+      const first = 'first attempt';
+      const second = 'retry';
+      await testPool`
+        INSERT INTO messages (room_id, sender_id, content, client_command_id)
+        VALUES (${roomId}, ${userId}, ${first}, ${commandId})
+      `;
+
+      let error: unknown = null;
+      try {
+        await testPool`
+          INSERT INTO messages (room_id, sender_id, content, client_command_id)
+          VALUES (${roomId}, ${userId}, ${second}, ${commandId})
+        `;
+      } catch (err) {
+        error = err;
+      }
+      expect(error).not.toBeNull();
+      expect(String(error)).toMatch(/unique constraint/i);
+    });
+
+    it('should allow many messages without a command identifier', async () => {
+      const content = 'no command id';
+      await testPool`
+        INSERT INTO messages (room_id, sender_id, content) VALUES (${roomId}, ${userId}, ${content})
+      `;
+      await testPool`
+        INSERT INTO messages (room_id, sender_id, content) VALUES (${roomId}, ${userId}, ${content})
+      `;
+
+      const rows = await testPool`
+        SELECT message_seq, change_seq, revision FROM messages WHERE room_id = ${roomId} ORDER BY message_seq
+      `;
+      expect(rows).toHaveLength(2);
+      expect(rows[0].revision).toBe(1);
+      expect(Number(rows[1].message_seq)).toBe(Number(rows[0].message_seq) + 1);
+      expect(Number(rows[0].change_seq)).toBe(Number(rows[0].message_seq));
+    });
+  });
+
   describe('Foreign Key Constraints and Cascades', () => {
     let userId: string;
     let roomId: string;
