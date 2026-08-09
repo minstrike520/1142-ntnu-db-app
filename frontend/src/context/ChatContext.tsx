@@ -53,6 +53,11 @@ import {
   listFriendRequests,
   listFriends,
   listMessages,
+  createMessage,
+  editMessage,
+  recallMessage as recallMessageApi,
+  markRoomRead as markRoomReadApi,
+  syncChanges,
   listRoomMembers,
   listRooms,
   logout,
@@ -76,7 +81,6 @@ import {
 } from "@/lib/api";
 import {
   createChatSocket,
-  joinRoom,
   onEmergencyAlert,
   onFriendRequest,
   onMessageRecalled,
@@ -87,11 +91,7 @@ import {
   onRoomUpdate,
   onUserStatus,
   onUserTyping,
-  recallMessage,
-  sendMessage,
-  sendReadReceipt,
   sendTyping,
-  updateMessage,
   type ChatSocket,
 } from "@/lib/socket";
 
@@ -137,6 +137,9 @@ export interface Message {
   replyToId?: string;
   isOutgoing?: boolean;
   isRecalled?: boolean;
+  messageSequence?: number;
+  changeSequence?: number;
+  revision?: number;
   replyTo?: {
     senderName: string;
     content: string;
@@ -488,6 +491,9 @@ const mapMessage = (message: MessageWithSender, currentUserId?: string): Message
   replyToId: message.replyToId,
   isOutgoing: Boolean(currentUserId && message.senderId === currentUserId),
   isRecalled: message.isRecalled,
+  messageSequence: message.messageSequence,
+  changeSequence: message.changeSequence,
+  revision: message.revision,
   replyTo: null,
   attachments: message.attachments?.map(mapAttachment) ?? [],
   mentions: message.mentions ?? [],
@@ -687,6 +693,10 @@ const findRequestedUser = (
 
 const sortMessages = (items: Message[]) =>
   [...items].sort((a, b) => {
+    if (a.messageSequence !== undefined && b.messageSequence !== undefined) {
+      const sequenceCompare = a.messageSequence - b.messageSequence;
+      if (sequenceCompare !== 0) return sequenceCompare;
+    }
     const sentAtCompare = new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime();
     if (sentAtCompare !== 0) return sentAtCompare;
     return a.id.localeCompare(b.id);
@@ -704,6 +714,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const tokenRef = useRef<string | null>(null);
   const activeRoomIdRef = useRef<string | null>(null);
   const notifyDesktopRef = useRef(true);
+  const syncCursorRef = useRef(0);
+  const syncingRef = useRef(false);
+  const bufferedRealtimeRef = useRef<Array<() => void>>([]);
 
   const [isMounted, setIsMounted] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -714,6 +727,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const messagesRef = useRef<Message[]>([]);
   const [groupReadStates, setGroupReadStates] = useState<Record<string, Record<string, string>>>({});
   const [activeRoomNicknames, setActiveRoomNicknames] = useState<Record<string, string>>({});
   const [uiLanguage, setUiLanguageState] = useState<UiLanguage>("zh-TW");
@@ -731,6 +745,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({});
   const [activeProfilePopover, setActiveProfilePopover] = useState<{ instanceId: string; userId: string } | null>(null);
   const typingTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const activeRoomId = useMemo(() => {
     const match = pathname.match(/^\/chat\/([^/]+)$/);
@@ -1055,23 +1073,97 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     roomsRef.current = rooms;
-    if (socketRef.current?.connected) {
-      rooms.forEach((room) => joinRoom(socketRef.current!, room.id));
-    }
   }, [rooms]);
 
   useEffect(() => {
     if (!token || !currentUserId) return;
 
+    const storedCursor = Number(sessionStorage.getItem(`near:syncCursor:${currentUserId}`) ?? 0);
+    syncCursorRef.current = Number.isSafeInteger(storedCursor) && storedCursor >= 0 ? storedCursor : 0;
+    bufferedRealtimeRef.current = [];
+    let disposed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const socket = createChatSocket(token);
     socketRef.current = socket;
 
-    const joinKnownRooms = () => {
-      roomsRef.current.forEach((room) => joinRoom(socket, room.id));
+    const enqueueRealtime = (task: () => void) => {
+      if (syncingRef.current) bufferedRealtimeRef.current.push(task);
+      else task();
     };
 
-    const cleanupNewMessage = onNewMessage(socket, (payload) => {
+    const advanceCursor = (changeSequence?: number) => {
+      if (changeSequence === undefined) return;
+      syncCursorRef.current = Math.max(syncCursorRef.current, changeSequence);
+      sessionStorage.setItem(`near:syncCursor:${currentUserId}`, String(syncCursorRef.current));
+    };
+
+    const applySyncChanges = (changes: import('@shared/types').MessageChange[]) => {
+      setMessages((current) => {
+        let next = current;
+        for (const change of changes) {
+          const incoming = mapMessage(change.message, currentUserId);
+          const message = change.message.isRecalled
+            ? { ...incoming, content: '', attachments: [] }
+            : incoming;
+          const existing = next.find((item) => item.id === message.id);
+          if (existing && (existing.changeSequence ?? 0) >= change.changeSequence) continue;
+          next = [...next.filter((item) => item.id !== message.id), message];
+          advanceCursor(change.changeSequence);
+        }
+        return hydrateReplyTargets(sortMessages(next));
+      });
+    };
+
+    const synchronize = async () => {
+      syncingRef.current = true;
+      let synchronized = false;
+      try {
+        let hasMore = true;
+        while (hasMore) {
+          const response = await syncChanges(token, syncCursorRef.current, 250);
+          applySyncChanges(response.changes);
+          if (response.nextCursor > syncCursorRef.current) {
+            syncCursorRef.current = response.nextCursor;
+            sessionStorage.setItem(`near:syncCursor:${currentUserId}`, String(syncCursorRef.current));
+          }
+          hasMore = response.hasMore && response.changes.length > 0;
+        }
+        synchronized = true;
+      } catch (error) {
+        console.error('Realtime sync failed; reconnecting before applying buffered events:', error);
+      } finally {
+        if (disposed) return;
+        if (synchronized) {
+          syncingRef.current = false;
+          const buffered = bufferedRealtimeRef.current.splice(0);
+          buffered.forEach((task) => task());
+        } else {
+          // Do not advance the cursor from live events when the initial sync
+          // failed: doing so could skip older durable changes on the retry.
+          bufferedRealtimeRef.current = [];
+          if (!disposed) {
+            socket.disconnect();
+            retryTimer = setTimeout(() => {
+              retryTimer = undefined;
+              if (!disposed) socket.connect();
+            }, 1_000);
+          }
+          syncingRef.current = false;
+        }
+      }
+    };
+
+    const cleanupNewMessage = onNewMessage(socket, (payload) => enqueueRealtime(() => {
       const incoming = mapMessage(payload, currentUserId);
+      const existingMessage = messagesRef.current.find((message) => message.id === incoming.id);
+      if (
+        existingMessage &&
+        (existingMessage.changeSequence ?? 0) >= (incoming.changeSequence ?? 0)
+      ) {
+        advanceCursor(incoming.changeSequence);
+        return;
+      }
+      advanceCursor(incoming.changeSequence);
       const incomingRoom = roomsRef.current.find((room) => room.id === incoming.roomId);
 
       if (
@@ -1133,19 +1225,42 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             : room,
         ),
       );
-    });
-    const cleanupRecall = onMessageRecalled(socket, ({ messageId }) => {
+    }));
+    const cleanupRecall = onMessageRecalled(socket, (payload) => enqueueRealtime(() => {
+      advanceCursor(payload.changeSequence);
       setMessages((current) =>
         hydrateReplyTargets(
           current.map((message) =>
-            message.id === messageId
-              ? { ...message, isRecalled: true, content: "", attachments: [] }
+            message.id === payload.messageId &&
+            (payload.changeSequence === undefined || (message.changeSequence ?? 0) < payload.changeSequence)
+              ? {
+                  ...message,
+                  isRecalled: true,
+                  content: "",
+                  attachments: [],
+                  messageSequence: payload.messageSequence ?? message.messageSequence,
+                  changeSequence: payload.changeSequence ?? message.changeSequence,
+                  revision: payload.revision ?? message.revision,
+                }
               : message,
           ),
         ),
       );
-    });
-    const cleanupUpdate = onMessageUpdated(socket, (updatedMessage) => {
+    }));
+    const cleanupUpdate = onMessageUpdated(socket, (updatedMessage) => enqueueRealtime(() => {
+      if (
+        updatedMessage.changeSequence !== undefined &&
+        updatedMessage.changeSequence <= Math.max(
+          0,
+          ...messagesRef.current
+            .filter((message) => message.id === updatedMessage.messageId)
+            .map((message) => message.changeSequence ?? 0),
+        )
+      ) {
+        advanceCursor(updatedMessage.changeSequence);
+        return;
+      }
+      advanceCursor(updatedMessage.changeSequence);
       setMessages((current) =>
         hydrateReplyTargets(
           current.map((message) =>
@@ -1155,8 +1270,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           ),
         ),
       );
-    });
-    const cleanupRead = onReadUpdate(socket, ({ roomId, userId, messageId }) => {
+    }));
+    const cleanupRead = onReadUpdate(socket, ({ roomId, userId, messageId }) => enqueueRealtime(() => {
       setGroupReadStates((current) => ({
         ...current,
         [roomId]: {
@@ -1190,7 +1305,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           return roomChanged ? nextRoom : room;
         }),
       );
-    });
+    }));
     const cleanupTyping = onUserTyping(socket, ({ roomId, userId, isTyping }) => {
       const typingRoom = roomsRef.current.find(r => r.id === roomId);
       const typingMember = typingRoom?.members?.find(m => m.userId === userId);
@@ -1360,10 +1475,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    socket.on("connect", joinKnownRooms);
+    socket.on("connect", () => {
+      void synchronize();
+    });
     socket.connect();
 
     return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
       cleanupNewMessage();
       cleanupRecall();
       cleanupUpdate();
@@ -1374,7 +1493,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       cleanupEmergencyAlert();
       cleanupUserStatus();
       cleanupRoomUpdate();
-      socket.off("connect", joinKnownRooms);
+      socket.off("connect");
       socket.disconnect();
       if (socketRef.current === socket) {
         socketRef.current = null;
@@ -1401,13 +1520,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   };
 
   const handleSendMessage = (roomId: string, content: string, replyTarget: Message | null) => {
-    if (!content.trim() || !socketRef.current) return;
+    if (!content.trim() || !token) return;
 
-    sendMessage(socketRef.current, {
-      roomId,
+    void createMessage(token, roomId, {
       content,
-      replyTo: replyTarget?.id,
-    });
+      replyToId: replyTarget?.id,
+    }).catch((error) => console.error('Failed to send message:', error));
   };
 
   const handleTyping = (roomId: string, isTyping: boolean) => {
@@ -1420,7 +1538,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     files: File[],
     options?: { content?: string; replyTarget?: Message | null },
   ) => {
-    if (!token || !socketRef.current) return;
+    if (!token) return;
     const uploadedResults = await Promise.all(
       files.map((file) => uploadAttachment(token, file))
     );
@@ -1428,22 +1546,36 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     const content = options?.content?.trim() ?? "";
 
-    sendMessage(socketRef.current, {
-      roomId,
+    void createMessage(token, roomId, {
       content,
-      replyTo: options?.replyTarget?.id,
+      replyToId: options?.replyTarget?.id,
       attachmentIds,
-    });
+    }).catch((error) => console.error('Failed to send attachment message:', error));
   };
 
   const handleRecallMessage = (msgId: string) => {
-    if (!socketRef.current) return;
-    recallMessage(socketRef.current, msgId);
+    if (!token) return;
+    const message = messagesRef.current.find((item) => item.id === msgId);
+    if (!message) return;
+    void recallMessageApi(
+      token,
+      message.roomId,
+      msgId,
+      message.revision ?? 1,
+    ).catch((error) => console.error('Failed to recall message:', error));
   };
 
   const handleUpdateMessage = (roomId: string, messageId: string, content: string) => {
-    if (!socketRef.current) return;
-    updateMessage(socketRef.current, { roomId, messageId, content });
+    if (!token) return;
+    const message = messagesRef.current.find((item) => item.id === messageId);
+    if (!message) return;
+    void editMessage(
+      token,
+      roomId,
+      messageId,
+      content,
+      message.revision ?? 1,
+    ).catch((error) => console.error('Failed to edit message:', error));
   };
 
   const handleUpdateProfile = async (profile: ProfileInput) => {
@@ -2003,7 +2135,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const prevActiveRoomIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!socketRef.current || !activeRoomId || !currentUserId) return;
+    if (!token || !activeRoomId || !currentUserId) return;
 
     // Skip on room entry — Chatroom calls markRoomAsRead once the user scrolls to the bottom
     if (prevActiveRoomIdRef.current !== activeRoomId) {
@@ -2025,10 +2157,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     if (currentLastReadId === latestIncoming.id) return;
 
-    sendReadReceipt(socketRef.current, {
-      roomId: activeRoomId,
-      messageId: latestIncoming.id,
-    });
+    void markRoomReadApi(token, activeRoomId, latestIncoming.id).catch((error) =>
+      console.error("Failed to persist read position:", error),
+    );
 
     setGroupReadStates((current) => ({
       ...current,
@@ -2037,13 +2168,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         [currentUserId]: latestIncoming.id,
       },
     }));
-  }, [activeRoomId, currentUserId, groupReadStates, messages]);
+  }, [activeRoomId, currentUserId, groupReadStates, messages, token]);
 
   // Stable function for Chatroom to call when the user has scrolled to the bottom
   const markRoomAsReadRef = useRef<((roomId: string) => void) | null>(null);
   useLayoutEffect(() => {
     markRoomAsReadRef.current = (roomId: string) => {
-      if (!socketRef.current || !currentUserId) return;
+      if (!token || !currentUserId) return;
       const room = roomsRef.current.find((r) => r.id === roomId);
       if (!room) return;
       const roomMessages = sortMessages(messages.filter((m) => m.roomId === roomId));
@@ -2054,7 +2185,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         room.members?.find((m) => m.userId === currentUserId)?.lastReadId ??
         null;
       if (currentLastReadId === latestIncoming.id) return;
-      sendReadReceipt(socketRef.current, { roomId, messageId: latestIncoming.id });
+      void markRoomReadApi(token, roomId, latestIncoming.id).catch((error) =>
+        console.error("Failed to persist read position:", error),
+      );
       setGroupReadStates((current) => ({
         ...current,
         [roomId]: { ...(current[roomId] ?? {}), [currentUserId]: latestIncoming.id },

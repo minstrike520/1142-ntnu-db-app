@@ -40,6 +40,9 @@ function mapRowToRoomSummary(row: RoomRow & {
   latest_sender_id?: string | null;
   latest_content?: string | null;
   latest_sent_at?: Date | null;
+  latest_message_sequence?: number | string | null;
+  latest_change_sequence?: number | string | null;
+  latest_revision?: number | null;
 }): RoomSummary {
   const summary: RoomSummary = {
     ...mapRowToRoom(row),
@@ -65,10 +68,15 @@ export interface MemberRoomRow extends RoomRow {
   join_time: Date;
   last_read_id?: string | null;
   last_read_sent_at?: Date | null;
+  join_boundary: number | string;
+  read_position: number | string;
   latest_message_id?: string | null;
   latest_sender_id?: string | null;
   latest_content?: string | null;
   latest_sent_at?: Date | null;
+  latest_message_sequence?: number | string | null;
+  latest_change_sequence?: number | string | null;
+  latest_revision?: number | null;
   role: string;
 }
 
@@ -112,12 +120,17 @@ export class RoomRepository implements IRoomRepository {
         cr.*,
         rm.join_time,
         rm.last_read_id,
+        rm.join_boundary,
+        rm.read_position,
         rm.role,
         last_read.sent_at AS last_read_sent_at,
         latest.message_id AS latest_message_id,
         latest.sender_id AS latest_sender_id,
         latest.content AS latest_content,
         latest.sent_at AS latest_sent_at
+        , latest.message_sequence AS latest_message_sequence
+        , latest.change_sequence AS latest_change_sequence
+        , latest.revision AS latest_revision
       FROM chat_rooms cr
       JOIN room_members rm ON rm.room_id = cr.room_id
       LEFT JOIN messages last_read ON last_read.message_id = rm.last_read_id
@@ -146,8 +159,15 @@ export class RoomRepository implements IRoomRepository {
           JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = ${userId}
           LEFT JOIN messages last_read ON last_read.message_id = rm.last_read_id
           WHERE m.room_id = ANY(${pgRoomIds}::uuid[])
-            AND (last_read.sent_at IS NULL OR m.sent_at > last_read.sent_at)
-            AND (cr.view_history = true OR m.sent_at >= rm.join_time)
+            AND (
+              m.message_sequence > rm.read_position
+              OR (m.message_sequence = 0 AND (last_read.sent_at IS NULL OR m.sent_at > last_read.sent_at))
+            )
+            AND (
+              cr.view_history = true
+              OR m.message_sequence > rm.join_boundary
+              OR (m.message_sequence = 0 AND m.sent_at >= rm.join_time)
+            )
         )
         SELECT room_id, COUNT(*)::int AS unread_count
         FROM filtered_unread_messages
@@ -175,7 +195,11 @@ export class RoomRepository implements IRoomRepository {
 
     const summaries = roomRows.map((room) => {
       const latestVisible =
-        room.latest_sent_at && (room.view_history || room.latest_sent_at >= room.join_time)
+        room.latest_sent_at && (
+          room.view_history
+          || Number(room.latest_message_sequence ?? 0) > Number(room.join_boundary ?? 0)
+          || (Number(room.latest_message_sequence ?? 0) === 0 && room.latest_sent_at >= room.join_time)
+        )
           ? {
               messageId: room.latest_message_id ?? null,
               senderId: room.latest_sender_id ?? null,
@@ -190,6 +214,9 @@ export class RoomRepository implements IRoomRepository {
         latest_sender_id: latestVisible?.senderId ?? null,
         latest_content: latestVisible?.content ?? null,
         latest_sent_at: latestVisible?.sentAt ?? null,
+        latest_message_sequence: latestVisible ? room.latest_message_sequence : null,
+        latest_change_sequence: latestVisible ? room.latest_change_sequence : null,
+        latest_revision: latestVisible ? room.latest_revision : null,
         unread_count: unreadCount,
         other_member_id: otherMemberByRoom.get(room.room_id) ?? null,
       });

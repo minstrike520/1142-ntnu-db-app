@@ -10,37 +10,11 @@ export const createChatSocket = (token: string): ChatSocket =>
     auth: { token },
   });
 
-export const joinRoom = (socket: ChatSocket, roomId: string): void => {
-  socket.emit('join_room', { roomId });
-};
-
-export const leaveRoom = (socket: ChatSocket, roomId: string): void => {
-  socket.emit('leave_room', { roomId });
-};
-
-export const sendMessage = (
-  socket: ChatSocket,
-  payload: Parameters<ClientToServerEvents['send_message']>[0],
-): void => {
-  socket.emit('send_message', payload);
-};
-
-export const recallMessage = (socket: ChatSocket, messageId: string): void => {
-  socket.emit('recall_message', { messageId });
-};
-
 export const sendTyping = (
   socket: ChatSocket,
   payload: Parameters<ClientToServerEvents['typing']>[0],
 ): void => {
   socket.emit('typing', payload);
-};
-
-export const sendReadReceipt = (
-  socket: ChatSocket,
-  payload: Parameters<ClientToServerEvents['read_receipt']>[0],
-): void => {
-  socket.emit('read_receipt', payload);
 };
 
 export const onNewMessage = (
@@ -113,13 +87,6 @@ export const onRoomUpdate = (
 ): (() => void) => {
   socket.on('room_update', handler);
   return () => socket.off('room_update', handler);
-};
-
-export const updateMessage = (
-  socket: ChatSocket,
-  payload: Parameters<ClientToServerEvents['update_message']>[0],
-): void => {
-  socket.emit('update_message', payload);
 };
 
 export const onMessageUpdated = (

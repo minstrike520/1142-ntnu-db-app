@@ -8,6 +8,7 @@ import { describe, expect, test } from "vitest";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { mountChatApp } from "./harness";
 import { ME_ID, makeMessage, messageId } from "./fixtures";
+import { __getApiCallLog } from "./mocks/api";
 
 describe("opening and switching rooms", () => {
   test("shows the active room's messages and members panel", async () => {
@@ -70,16 +71,17 @@ describe("receiving and sending messages", () => {
     expect(screen.getAllByText("1", { exact: true }).length).toBeGreaterThan(0);
   });
 
-  test("sends a message over the socket and renders the server echo", async () => {
+  test("sends a durable message over REST and renders the server echo", async () => {
     const app = await mountChatApp("/chat/room-1");
     const textarea = screen.getByPlaceholderText<HTMLTextAreaElement>("Type a message...");
 
     fireEvent.change(textarea, { target: { value: "Hello there" } });
     fireEvent.click(screen.getByText("Send"));
 
-    const sends = app.socket().emitted.filter((e) => e.event === "send_message");
+    const sends = __getApiCallLog("createMessage");
     expect(sends).toHaveLength(1);
-    expect(sends[0].payload).toMatchObject({ roomId: "room-1", content: "Hello there" });
+    expect(sends[0].args[0]).toBe("room-1");
+    expect(sends[0].args[1]).toMatchObject({ content: "Hello there" });
     expect(textarea.value).toBe("");
 
     act(() => {

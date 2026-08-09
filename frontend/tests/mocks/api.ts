@@ -185,6 +185,65 @@ export const listMessages = async (
   return [...log].slice(-limit).reverse();
 };
 
+export const createMessage = async (
+  _token: string,
+  roomId: string,
+  data: { content: string; replyToId?: string; attachmentIds?: string[] },
+): Promise<MessageWithSender> => {
+  apiCallLog.push({ fn: "createMessage", args: [roomId, data] });
+  return {
+    ...(messagesByRoom[roomId]?.at(-1) ?? messagesByRoom["room-1"]?.at(-1)),
+    messageId: "message-created",
+    roomId,
+    senderId: myProfile.userId,
+    content: data.content,
+    isRecalled: false,
+    sentAt: new Date(),
+    sender: { userId: myProfile.userId, name: myProfile.name },
+  } as MessageWithSender;
+};
+
+export const editMessage = async (
+  _token: string,
+  roomId: string,
+  messageId: string,
+  content: string,
+  revision: number,
+): Promise<MessageWithSender> => {
+  apiCallLog.push({ fn: "editMessage", args: [roomId, messageId, content, revision] });
+  const existing = (messagesByRoom[roomId] ?? []).find((message) => message.messageId === messageId);
+  return { ...(existing ?? messagesByRoom["room-1"]![0]), content, revision: revision + 1 };
+};
+
+export const recallMessage = async (
+  _token: string,
+  roomId: string,
+  messageId: string,
+  revision: number,
+): Promise<MessageWithSender> => {
+  apiCallLog.push({ fn: "recallMessage", args: [roomId, messageId, revision] });
+  const existing = (messagesByRoom[roomId] ?? []).find((message) => message.messageId === messageId);
+  return { ...(existing ?? messagesByRoom["room-1"]![0]), isRecalled: true, revision: revision + 1 };
+};
+
+export const markRoomRead = async (
+  _token: string,
+  roomId: string,
+  messageId: string,
+): Promise<RoomMember> => {
+  apiCallLog.push({ fn: "markRoomRead", args: [roomId, messageId] });
+  return { ...membersByRoom[roomId]![0], lastReadId: messageId };
+};
+
+export const syncChanges = async (
+  _token: string,
+  cursor: number,
+): Promise<{ changes: []; nextCursor: number; hasMore: false }> => ({
+  changes: [],
+  nextCursor: cursor,
+  hasMore: false,
+});
+
 export const listFolders = async (): Promise<Folder[]> => folders;
 
 export const createFolder = async (_token: string, name: string): Promise<Folder> => ({

@@ -88,6 +88,34 @@ For browser-facing frontend requests, set the API environment variable to:
 NEXT_PUBLIC_API_URL=http://localhost:4005
 ```
 
+### Realtime runtime and smoke checks
+
+The backend production listener is a single `Bun.serve` instance. Hono handles
+REST requests and `@socket.io/bun-engine` handles `/socket.io/`; the old Node
+HTTP adapter is used only by the supertest compatibility harness. Socket.IO
+uses a 25-second ping interval and a 20-second ping timeout, so Bun's
+`idleTimeout` must stay above that window.
+
+Durable message commands use REST and require an `Idempotency-Key`; edit and
+recall also require `If-Match`. After connecting, clients call `/api/v1/sync`
+with their last cursor. A minimal local smoke test is:
+
+```bash
+curl -sS http://localhost:4005/api/v1/health
+# Register/login, then create a room and send a message with the same key twice:
+curl -sS -X POST http://localhost:4005/api/v1/rooms/<roomId>/messages \
+  -H "Authorization: Bearer <token>" \
+  -H "Idempotency-Key: smoke-create-1" \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"smoke"}'
+curl -sS "http://localhost:4005/api/v1/sync?cursor=0&limit=100" \
+  -H "Authorization: Bearer <token>"
+```
+
+`MAX_SESSIONS_PER_USER`, `PRESENCE_GRACE_MS`, and `TYPING_TTL_MS` control local
+session, presence-reconnect, and typing-indication limits. Multi-node presence,
+global rate limits, and cross-node change fan-out remain outside this service.
+
 ### Production Ingress & Proxy Trust
 
 `docker-compose.prod.yml` publishes every host port on `127.0.0.1`, so the local

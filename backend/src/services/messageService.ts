@@ -29,6 +29,7 @@ export const makeMessageService = (
   messageRepo: IMessageRepository,
   roomRepo: IRoomRepository,
   roomMemberRepo: IRoomMemberRepository,
+  publish?: (roomId: string, event: 'new_message' | 'message_updated' | 'message_recalled' | 'read_update', payload: unknown) => void,
 ) => {
   const assertRoomMembership = async (userId: string, roomId: string) => {
     const room = await roomRepo.findById(roomId);
@@ -52,7 +53,7 @@ export const makeMessageService = (
       userId: string,
       roomId: string,
       content: string,
-      opts: { replyToId?: string; attachmentIds?: string[] } = {},
+      opts: { replyToId?: string; attachmentIds?: string[]; commandId?: string } = {},
     ): Promise<MessageWithSender> {
       const parsed = sendMessageSchema.safeParse({
         roomId,
@@ -108,9 +109,17 @@ export const makeMessageService = (
       if (parsed.data.attachmentIds && parsed.data.attachmentIds.length > 0) {
         messageData.attachmentIds = parsed.data.attachmentIds;
       }
+      if (opts.commandId) {
+        messageData.commandId = opts.commandId;
+      }
 
       const message = await messageRepo.create(messageData);
-      await roomMemberRepo.update(parsed.data.roomId, userId, { lastReadId: message.messageId });
+      if (roomMemberRepo.markRead) {
+        await roomMemberRepo.markRead(parsed.data.roomId, userId, message.messageId);
+      } else {
+        await roomMemberRepo.update(parsed.data.roomId, userId, { lastReadId: message.messageId });
+      }
+      publish?.(parsed.data.roomId, 'new_message', message);
       return message;
     },
 
@@ -141,6 +150,7 @@ export const makeMessageService = (
       userId: string,
       roomId: string,
       messageId: string,
+      opts: { expectedRevision?: number; commandId?: string } = {},
     ): Promise<MessageWithSender> {
       const parsed = recallMessageSchema.safeParse({ roomId, messageId });
       if (!parsed.success) {
@@ -167,7 +177,16 @@ export const makeMessageService = (
         }
       }
 
-      return messageRepo.markRecalled(parsed.data.messageId);
+      const recalled = opts.expectedRevision !== undefined || opts.commandId !== undefined
+        ? await messageRepo.markRecalled(parsed.data.messageId, opts.expectedRevision, opts.commandId, userId)
+        : await messageRepo.markRecalled(parsed.data.messageId);
+      publish?.(parsed.data.roomId, 'message_recalled', {
+        messageId: recalled.messageId,
+        messageSequence: recalled.messageSequence,
+        changeSequence: recalled.changeSequence,
+        revision: recalled.revision,
+      });
+      return recalled;
     },
 
     async updateMessage(
@@ -175,6 +194,7 @@ export const makeMessageService = (
       roomId: string,
       messageId: string,
       content: string,
+      opts: { expectedRevision?: number; commandId?: string } = {},
     ): Promise<MessageWithSender> {
       const parsed = sendMessageSchema.safeParse({ roomId, content });
       if (!parsed.success) {
@@ -225,7 +245,45 @@ export const makeMessageService = (
         new Set([...directMentionedUserIds, ...everyoneMentionedUserIds]),
       );
 
-      return messageRepo.update(messageId, parsed.data.content, mentionedUserIds);
+      const updated = opts.expectedRevision !== undefined || opts.commandId !== undefined
+        ? await messageRepo.update(messageId, parsed.data.content, mentionedUserIds, opts.expectedRevision, opts.commandId, userId)
+        : await messageRepo.update(messageId, parsed.data.content, mentionedUserIds);
+      publish?.(roomId, 'message_updated', updated);
+      return updated;
+    },
+
+    async markRead(userId: string, roomId: string, messageId: string, commandId?: string) {
+      const { room, member } = await assertRoomMembership(userId, roomId);
+      const message = await messageRepo.findById(messageId);
+      if (!message || message.roomId !== roomId) {
+        throw new NotFoundError('message', messageId);
+      }
+      const sequence = message.messageSequence ?? 0;
+      const visible = room.viewHistory
+        || (sequence > 0 && sequence > (member.joinBoundary ?? 0))
+        || (sequence === 0 && message.sentAt >= member.joinTime);
+      if (!visible) throw new ForbiddenError('Message is outside the room visibility boundary');
+      if (roomMemberRepo.markRead) {
+        const member = await roomMemberRepo.markRead(roomId, userId, messageId, commandId);
+        publish?.(roomId, 'read_update', {
+          roomId,
+          userId,
+          messageId,
+          readPosition: member.readPosition,
+        });
+        return member;
+      }
+
+      const updatedMember = await roomMemberRepo.update(roomId, userId, { lastReadId: messageId });
+      publish?.(roomId, 'read_update', { roomId, userId, messageId });
+      return updatedMember;
+    },
+
+    async sync(userId: string, cursor: number, limit: number) {
+      if (!messageRepo.findChangesForUser) {
+        throw new ValidationError('Realtime sync is not available');
+      }
+      return messageRepo.findChangesForUser(userId, cursor, limit);
     },
   };
 };

@@ -82,6 +82,33 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 NEXT_PUBLIC_API_URL=http://localhost:4005
 ```
 
+### 即時通訊 runtime 與 smoke check
+
+後端 production listener 是單一 `Bun.serve`。Hono 處理 REST，
+`@socket.io/bun-engine` 處理 `/socket.io/`；舊 Node HTTP adapter 只供
+supertest 相容測試使用。Socket.IO ping interval 為 25 秒、ping timeout 為
+20 秒，因此 Bun `idleTimeout` 必須大於此視窗。
+
+持久化訊息命令走 REST 並必須帶 `Idempotency-Key`；編輯與收回另需
+`If-Match`。連線後客戶端以最後 cursor 呼叫 `/api/v1/sync`。最小本機
+smoke check：
+
+```bash
+curl -sS http://localhost:4005/api/v1/health
+# 完成註冊／登入並建立聊天室後，使用相同 key 重送訊息：
+curl -sS -X POST http://localhost:4005/api/v1/rooms/<roomId>/messages \
+  -H "Authorization: Bearer <token>" \
+  -H "Idempotency-Key: smoke-create-1" \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"smoke"}'
+curl -sS "http://localhost:4005/api/v1/sync?cursor=0&limit=100" \
+  -H "Authorization: Bearer <token>"
+```
+
+`MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS` 分別控制單機
+session、presence 重連寬限與 typing indication TTL。多節點 presence、全域
+限流與跨節點 change fan-out 仍不在本服務範圍內。
+
 ### 正式環境入口拓撲與代理信任
 
 `docker-compose.prod.yml` 的所有主機連接埠都綁定在 `127.0.0.1`，因此文件記載的本機

@@ -39,6 +39,11 @@
 | | `PATCH` | [`/rooms/:id/members/:userId`](#patch-roomsidmembersuserid) | 需驗證 | 審核成員加入或修改成員權限與暱稱 |
 | | `DELETE` | [`/rooms/:id/members/:userId`](#delete-roomsidmembersuserid) | 需驗證 | 踢出成員（需擁有者或管理員） |
 | **訊息與附件** | `GET` | [`/rooms/:roomId/messages`](#get-roomsroomidmessages) | 需驗證 | 取得聊天室歷史訊息（分頁） |
+| | `POST` | [`/rooms/:roomId/messages`](#post-roomsroomidmessages) | 需驗證 | 建立具持久性的訊息命令 |
+| | `PATCH` | [`/rooms/:roomId/messages/:messageId`](#patch-roomsroomidmessagesmessageid) | 需驗證 | 以 optimistic concurrency 編輯訊息 |
+| | `POST` | [`/rooms/:roomId/messages/:messageId/recall`](#post-roomsroomidmessagesmessageidrecall) | 需驗證 | 以 optimistic concurrency 收回訊息 |
+| | `PUT` | [`/rooms/:roomId/read-position`](#put-roomsroomidread-position) | 需驗證 | 推進成員已讀位置 |
+| **復原** | `GET` | [`/sync`](#get-sync) | 需驗證 | 依 cursor 復原持久化訊息變更 |
 | | `POST` | [`/attachments`](#post-attachments) | 需驗證 | 上傳附件檔案 |
 | | `GET` | [`/attachments/:id`](#get-attachmentsid) | 需驗證 | 下載附件檔案 |
 | **資料夾分類** | `GET` | [`/folders`](#get-folders) | 需驗證 | 取得資料夾列表 |
@@ -52,14 +57,13 @@
 
 ### Socket.io 即時通訊
 
+Socket.IO 是伺服器到客戶端的事件傳輸層。持久化命令統一走 REST，讓
+驗證、`Idempotency-Key`、`If-Match`、交易與重試使用同一份契約。socket
+建立連線時，伺服器會依目前有效的 `room_members` 自動建立聊天室訂閱。
+
 | 類型 | 事件名稱 | 驗證要求 | 說明 |
 | :--- | :--- | :--- | :--- |
-| **客戶端發送** | `join_room` | 連線需驗證 | 訂閱特定聊天室的訊息推播 |
-| | `leave_room` | 連線需驗證 | 取消訂閱聊天室的訊息推播 |
-| | `send_message` | 連線需驗證 | 發送聊天訊息（可帶附件與引用） |
-| | `recall_message` | 連線需驗證 | 收回訊息（僅限原發送者） |
 | | `typing` | 連線需驗證 | 廣播輸入狀態給房間內其他使用者 |
-| | `read_receipt` | 連線需驗證 | 更新已讀游標至指定訊息 |
 | **伺服器推送** | `new_message` | 連線需驗證 | 收到新訊息通知（含提及訊息） |
 | | `message_recalled` | 連線需驗證 | 訊息已被原發送者收回 |
 | | `user_typing` | 連線需驗證 | 其他成員正在輸入中之狀態 |
@@ -1191,6 +1195,36 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 
 ---
 
+#### `POST /rooms/:roomId/messages`
+- **說明**: 建立一筆持久化訊息及其 `created` Message Change。
+- **標頭**: 必須提供重試時保持不變的 `Idempotency-Key`。
+- **請求主體**: `{ "content": "Hello", "replyToId": null, "attachmentIds": [] }`。
+- **回應**: `201 Created`，回傳含 `messageSequence`、`changeSequence`、`revision` 的 `MessageWithSender`。
+- **重試規則**: 同一發送者重送相同 key 會回傳原訊息，不會再分配序號。
+
+#### `PATCH /rooms/:roomId/messages/:messageId`
+- **說明**: 編輯訊息。
+- **標頭**: 必須提供 `Idempotency-Key` 與包含預期整數 `revision` 的 `If-Match`。
+- **回應**: `200 OK`，回傳更新後且 revision 增加的訊息。
+- **衝突**: revision 過期時回傳 `409 CONFLICT`。
+
+#### `POST /rooms/:roomId/messages/:messageId/recall`
+- **說明**: 收回訊息。
+- **標頭**: 必須提供 `Idempotency-Key` 與 `If-Match`。
+- **回應**: `200 OK`，回傳收回後的訊息投影。
+
+#### `PUT /rooms/:roomId/read-position`
+- **說明**: 將呼叫者的持久化已讀位置推進至指定訊息。
+- **標頭**: 必須提供 `Idempotency-Key`。
+- **請求主體**: `{ "messageId": "..." }`。
+- **回應**: `200 OK`，已讀位置只會向前推進。
+
+#### `GET /sync`
+- **說明**: 依 cursor 復原目前使用者可見的持久化 Message Change。
+- **查詢參數**: `cursor`（非負整數，預設 `0`）與 `limit`（1–500，預設 `100`）。
+- **回應**: `{ "changes": [...], "nextCursor": 42, "hasMore": false }`；每筆變更含 `changeSequence`、`messageSequence`、`revision`、`changeType` 與 `message`。
+- **可見性**: 每次請求都重新檢查成員資格；隱藏歷史的聊天室會排除 Join Boundary 以前的變更。
+
 #### `POST /attachments`
 - **說明**: 上傳檔案附件。
 - **驗證與權限**: 需驗證。
@@ -1395,28 +1429,24 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 
 - **URL**: 與 REST API 相同主機（預設埠為 `4000`）
 - **Namespace**: `/`
-- **驗證**: 連線時需帶上 `auth_token` Cookie 或 `Authorization: Bearer <token>` Header
-- **個人頻道**: 連線後，伺服器會自動將 socket 加入 `user_<userId>` 頻道。針對個人的事件（例如好友請求通知、入群批准）會透過此頻道推送，客戶端無需額外操作。
+- **驗證**: 連線時需在 Socket.IO `auth.token` handshake 欄位帶上 access token。
+- **訂閱**: 連線後伺服器會加入 `user_<userId>`，並加入 `room_members` 中所有非 pending 聊天室；撤銷成員資格時會移除該使用者的所有 session。
+- **復原**: 每次連線與 token refresh 後呼叫 `GET /sync`。不使用 `connectionStateRecovery`，Sync Cursor 是唯一復原路徑。
 
 ### 客戶端發送事件
 
 | 事件名稱 | Payload | 說明 |
 | :--- | :--- | :--- |
-| `join_room` | `{ roomId: string }` | 訂閱特定聊天室的訊息推播（需為成員） |
-| `leave_room` | `{ roomId: string }` | 取消訂閱 |
-| `send_message` | `{ roomId: string, content: string, replyTo?: string, attachmentIds?: string[] }` | 發送訊息；`replyTo` 為引用的訊息 ID；`attachmentIds` 為待綁定附件 ID 陣列。備註：`content` 僅在至少提供一個附件 ID 時可為空字串；否則 `content` 不可為空。 |
-| `recall_message` | `{ messageId: string }` | 收回訊息（僅限原發送者） |
 | `typing` | `{ roomId: string, isTyping: boolean }` | 廣播輸入中狀態 |
-| `read_receipt` | `{ roomId: string, messageId: string }` | 更新已讀游標至指定訊息 |
 
 ### 伺服器發送事件
 
 | 事件名稱 | Payload 型別 | 說明 |
 | :--- | :--- | :--- |
 | `new_message` | `MessageWithSender` | 收到新訊息（提及機制亦透過此事件通知） |
-| `message_recalled` | `{ messageId: string }` | 訊息被收回 |
+| `message_recalled` | `{ messageId: string, messageSequence: number, changeSequence: number, revision: number }` | 訊息被收回 |
 | `user_typing` | `{ roomId: string, userId: string, isTyping: boolean }` | 其他成員的輸入狀態 |
-| `read_update` | `{ roomId: string, userId: string, messageId: string }` | 其他成員的已讀游標更新 |
+| `read_update` | `{ roomId: string, userId: string, messageId: string, readPosition?: number }` | 其他成員的已讀游標更新 |
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | 房間或成員狀態變更。`type` 欄位決定子類型，詳見 [`room_update` 子類型](#room_update-子類型)。 |
 | `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected', createdAt: string }` | 好友請求狀態變更通知。**收件方**（新邀請）與**發送方**（被接受／拒絕）都會收到此事件。客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
 | `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。 |
@@ -1458,4 +1488,4 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 | :--- | :--- | :--- | :--- |
 | `ROOM_JOINED` | `{}` | 使用者以邀請碼加入**或**待審成員被核准 | 僅限加入 / 被核准的使用者 |
 
-> **客戶端處理建議**：收到 `ROOM_JOINED` 後，客戶端應呼叫 `GET /rooms` 重新整理房間列表，並對新出現的房間呼叫 `join_room` 以開始接收其推播事件。
+> **客戶端處理建議**：收到 `ROOM_JOINED` 後，客戶端應呼叫 `GET /rooms` 重新整理房間列表；下一次 socket 連線會依持久化成員資格自動建立訂閱，不需呼叫 `join_room`。

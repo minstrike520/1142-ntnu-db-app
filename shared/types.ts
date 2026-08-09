@@ -125,6 +125,12 @@ export interface Message {
   replyToId?: string;
   isRecalled: boolean;
   sentAt: Date;
+  /** Monotonic room-visible order assigned once when the message is created. */
+  messageSequence?: number;
+  /** Monotonic global recovery order assigned for every message change. */
+  changeSequence?: number;
+  /** Optimistic-concurrency version of the message. */
+  revision?: number;
   attachments?: Attachment[];
 }
 
@@ -148,6 +154,26 @@ export interface RoomMember {
   isMuted: boolean;
   lastReadId?: string;
   joinTime: Date;
+  /** Highest message sequence visible at the moment membership became active. */
+  joinBoundary?: number;
+  /** Highest message sequence acknowledged by this member. */
+  readPosition?: number;
+}
+
+export type MessageChangeType = 'created' | 'edited' | 'recalled';
+
+export interface MessageChange {
+  changeSequence: number;
+  messageSequence: number;
+  revision: number;
+  changeType: MessageChangeType;
+  message: MessageWithSender;
+}
+
+export interface SyncResponse {
+  changes: MessageChange[];
+  nextCursor: number;
+  hasMore: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -202,10 +228,10 @@ export interface ClientToServerEvents {
 
 export interface ServerToClientEvents {
   new_message:      (payload: MessageWithSender) => void;
-  message_recalled: (payload: { messageId: string }) => void;
+  message_recalled: (payload: { messageId: string; messageSequence?: number; changeSequence?: number; revision?: number }) => void;
   message_updated:  (payload: MessageWithSender) => void;
   user_typing:      (payload: { roomId: string; userId: string; isTyping: boolean }) => void;
-  read_update:      (payload: { roomId: string; userId: string; messageId: string }) => void;
+  read_update:      (payload: { roomId: string; userId: string; messageId: string; readPosition?: number }) => void;
   room_update:      (payload: { type: string; roomId: string; data: any }) => void;
   friend_request:   (payload: FriendRequest) => void;
   emergency_alert:  (payload: { userId: string; message: string }) => void;

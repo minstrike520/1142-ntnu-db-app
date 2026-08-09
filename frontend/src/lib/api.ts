@@ -16,6 +16,7 @@ import type {
   SearchUserResult,
   UserProfile,
   UserSettings,
+  SyncResponse,
 } from '@shared/types';
 
 export const getApiBaseUrl = (): string => {
@@ -519,6 +520,99 @@ export const listMessages = (
 
   return requestJson<MessageWithSender[]>(`/rooms/${roomId}/messages${suffix}`, {}, { token });
 };
+
+export const newIdempotencyKey = (): string => {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+export const createMessage = (
+  token: string,
+  roomId: string,
+  data: { content: string; replyToId?: string; attachmentIds?: string[] },
+  commandId = newIdempotencyKey(),
+): Promise<MessageWithSender> =>
+  requestJson<MessageWithSender>(
+    `/rooms/${roomId}/messages`,
+    {
+      method: 'POST',
+      ...withJsonBody(data),
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': commandId,
+      },
+    },
+    { token },
+  );
+
+export const editMessage = (
+  token: string,
+  roomId: string,
+  messageId: string,
+  content: string,
+  revision: number,
+  commandId = newIdempotencyKey(),
+): Promise<MessageWithSender> =>
+  requestJson<MessageWithSender>(
+    `/rooms/${roomId}/messages/${messageId}`,
+    {
+      method: 'PATCH',
+      ...withJsonBody({ content }),
+      headers: {
+        'Content-Type': 'application/json',
+        'If-Match': String(revision),
+        'Idempotency-Key': commandId,
+      },
+    },
+    { token },
+  );
+
+export const recallMessage = (
+  token: string,
+  roomId: string,
+  messageId: string,
+  revision: number,
+  commandId = newIdempotencyKey(),
+): Promise<MessageWithSender> =>
+  requestJson<MessageWithSender>(
+    `/rooms/${roomId}/messages/${messageId}/recall`,
+    {
+      method: 'POST',
+      ...withJsonBody({}),
+      headers: {
+        'Content-Type': 'application/json',
+        'If-Match': String(revision),
+        'Idempotency-Key': commandId,
+      },
+    },
+    { token },
+  );
+
+export const markRoomRead = (
+  token: string,
+  roomId: string,
+  messageId: string,
+  commandId = newIdempotencyKey(),
+): Promise<RoomMember> =>
+  requestJson<RoomMember>(
+    `/rooms/${roomId}/read-position`,
+    {
+      method: 'PUT',
+      ...withJsonBody({ messageId }),
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': commandId,
+      },
+    },
+    { token },
+  );
+
+export const syncChanges = (
+  token: string,
+  cursor: number,
+  limit = 100,
+): Promise<SyncResponse> =>
+  requestJson<SyncResponse>(`/sync?cursor=${cursor}&limit=${limit}`, {}, { token });
 
 export const listFolders = (token: string): Promise<ApiFolder[]> =>
   requestJson<ApiFolder[]>('/folders', {}, { token });

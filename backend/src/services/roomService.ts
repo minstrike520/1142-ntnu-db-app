@@ -32,6 +32,8 @@ export const makeRoomService = (
   // approved into a group they haven't joined yet).
   emitToUser?: (userId: string, eventName: string, payload: unknown) => void,
   avatarStore: AvatarStore = defaultAvatarStore,
+  onMembershipRevoked?: (userId: string, roomId: string) => void,
+  onMembershipGranted?: (userId: string, roomId: string) => void,
 ) => {
   const ensureMember = async (roomId: string, userId: string) => {
     const existing = await roomMemberRepo.findMember(roomId, userId);
@@ -55,6 +57,7 @@ export const makeRoomService = (
 
       const room = await repo.create({ ...parsed.data, inviteCode });
       await roomMemberRepo.add({ roomId: room.roomId, userId: creatorId, role: 'owner' });
+      onMembershipGranted?.(creatorId, room.roomId);
       return room;
     },
 
@@ -116,6 +119,8 @@ export const makeRoomService = (
       });
       await ensureMember(room.roomId, creatorId);
       await ensureMember(room.roomId, targetUserId);
+      onMembershipGranted?.(creatorId, room.roomId);
+      onMembershipGranted?.(targetUserId, room.roomId);
       if (emitToUser) {
         emitToUser(creatorId, 'room_update', { type: 'ROOM_JOINED', roomId: room.roomId, data: {} });
         emitToUser(targetUserId, 'room_update', { type: 'ROOM_JOINED', roomId: room.roomId, data: {} });
@@ -203,6 +208,7 @@ export const makeRoomService = (
       }
 
       if (role === 'member') {
+        onMembershipGranted?.(userId, room.roomId);
         // Notify existing room members that someone new joined.
         if (emitRoomEvent) {
           emitRoomEvent(room.roomId, 'room_update', { type: 'MEMBER_JOINED', data: { userId } });
@@ -239,6 +245,7 @@ export const makeRoomService = (
         throw new ForbiddenError('Owner cannot leave room. Transfer ownership first.');
       }
       await roomMemberRepo.remove(roomId, userId);
+      onMembershipRevoked?.(userId, roomId);
 
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_LEFT', data: { userId } });
@@ -293,7 +300,9 @@ export const makeRoomService = (
         throw new ForbiddenError('Only the owner can delete the group');
       }
 
+      const members = (await roomMemberRepo.findByRoom(roomId)) ?? [];
       await repo.delete(roomId);
+      for (const member of members) onMembershipRevoked?.(member.userId, roomId);
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'ROOM_DELETED', data: { roomId } });
       }
@@ -312,6 +321,7 @@ export const makeRoomService = (
       if (target.role !== 'pending') throw new ValidationError('Member is not pending approval');
 
       await roomMemberRepo.update(roomId, targetUserId, { role: 'member' });
+      onMembershipGranted?.(targetUserId, roomId);
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_APPROVED', data: { userId: targetUserId } });
       }
@@ -362,6 +372,11 @@ export const makeRoomService = (
       }
 
       await roomMemberRepo.update(roomId, targetUserId, data as Parameters<typeof roomMemberRepo.update>[2]);
+      if (target.role === 'pending' && data.role && data.role !== 'pending') {
+        onMembershipGranted?.(targetUserId, roomId);
+      } else if (target.role !== 'pending' && data.role === 'pending') {
+        onMembershipRevoked?.(targetUserId, roomId);
+      }
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_UPDATED', data: { userId: targetUserId, ...data as Record<string, unknown> } });
       }
@@ -387,6 +402,7 @@ export const makeRoomService = (
       }
 
       await roomMemberRepo.remove(roomId, targetUserId);
+      onMembershipRevoked?.(targetUserId, roomId);
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_KICKED', data: { userId: targetUserId } });
       }

@@ -5,6 +5,12 @@ import { validate } from '../middlewares/validator';
 import { ValidationError } from '../utils/AppError';
 
 export interface MessageService {
+  sendMessage?(
+    userId: string,
+    roomId: string,
+    content: string,
+    opts?: { replyToId?: string; attachmentIds?: string[]; commandId?: string }
+  ): Promise<MessageWithSender>;
   listForRoom(
     userId: string,
     roomId: string,
@@ -14,9 +20,39 @@ export interface MessageService {
     userId: string,
     roomId: string,
     messageId: string,
-    content: string
+    content: string,
+    opts?: { expectedRevision?: number; commandId?: string }
   ): Promise<MessageWithSender>;
+  recallMessage?(
+    userId: string,
+    roomId: string,
+    messageId: string,
+    opts?: { expectedRevision?: number; commandId?: string }
+  ): Promise<MessageWithSender>;
+  markRead?(
+    userId: string,
+    roomId: string,
+    messageId: string,
+    commandId?: string
+  ): Promise<unknown>;
 }
+
+const requiredCommandId = (c: { req: { header(name: string): string | undefined } }): string => {
+  const commandId = c.req.header('Idempotency-Key')?.trim();
+  if (!commandId) throw new ValidationError('Idempotency-Key header is required');
+  if (commandId.length > 255) throw new ValidationError('Idempotency-Key is too long');
+  return commandId;
+};
+
+const parseRevision = (value: string | undefined): number => {
+  if (!value) throw new ValidationError('If-Match header is required');
+  const match = value.match(/^(?:W\/)?"?(\d+)"?$/);
+  const revision = match ? Number(match[1]) : NaN;
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new ValidationError('If-Match must contain a positive message revision');
+  }
+  return revision;
+};
 
 export const listMessagesQuerySchema = z.object({
   before_id: z.string().optional(),
@@ -44,6 +80,21 @@ export const makeMessageRoutes = (service: MessageService) => {
     return c.json(messages, 200);
   });
 
+  app.post('/:roomId/messages', async (c) => {
+    if (!service.sendMessage) return c.body(null, 404);
+    const userId = c.get('user').userId;
+    const roomId = c.req.param('roomId');
+    const body = await c.req.json().catch(() => ({}));
+    if (typeof body.content !== 'string') throw new ValidationError('content must be a string');
+    const commandId = requiredCommandId(c);
+    const message = await service.sendMessage(userId, roomId, body.content, {
+      replyToId: typeof body.replyToId === 'string' ? body.replyToId : undefined,
+      attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds : undefined,
+      commandId,
+    });
+    return c.json(message, 201);
+  });
+
   app.patch('/:roomId/messages/:messageId', async (c) => {
     const userId = c.get('user').userId;
     const roomId = c.req.param('roomId');
@@ -55,10 +106,36 @@ export const makeMessageRoutes = (service: MessageService) => {
     }
 
     if (service.updateMessage) {
-      const updated = await service.updateMessage(userId, roomId, messageId, body.content);
+      const updated = await service.updateMessage(userId, roomId, messageId, body.content, {
+        expectedRevision: parseRevision(c.req.header('If-Match')),
+        commandId: requiredCommandId(c),
+      });
       return c.json(updated, 200);
     }
     return c.body(null, 204);
+  });
+
+  app.post('/:roomId/messages/:messageId/recall', async (c) => {
+    if (!service.recallMessage) return c.body(null, 404);
+    const userId = c.get('user').userId;
+    const recalled = await service.recallMessage(userId, c.req.param('roomId'), c.req.param('messageId'), {
+      expectedRevision: parseRevision(c.req.header('If-Match')),
+      commandId: requiredCommandId(c),
+    });
+    return c.json(recalled, 200);
+  });
+
+  app.put('/:roomId/read-position', async (c) => {
+    if (!service.markRead) return c.body(null, 404);
+    const body = await c.req.json().catch(() => ({}));
+    if (typeof body.messageId !== 'string') throw new ValidationError('messageId must be a string');
+    const member = await service.markRead(
+      c.get('user').userId,
+      c.req.param('roomId'),
+      body.messageId,
+      requiredCommandId(c),
+    );
+    return c.json(member, 200);
   });
 
   return app;

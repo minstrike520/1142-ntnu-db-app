@@ -1,5 +1,5 @@
 import type { ServerToClientEvents } from '@shared/types';
-import type { ChatServer } from '../realtime/authSocket';
+import type { RealtimePublisher } from '../realtime/publisher';
 import type { Repositories } from './repositories';
 import { signToken, generateRefreshToken, hashToken } from '../utils/jwt';
 import { makeUserService } from '../services/userService';
@@ -20,21 +20,7 @@ export interface Services {
 
 export interface CreateServicesDeps {
   repositories: Repositories;
-  /**
-   * Resolves the Socket.IO server at emit time rather than at construction.
-   *
-   * The wiring is genuinely circular: services need to emit through `io`, `io`
-   * is built on the HTTP server, the HTTP server serves the Hono app, and the
-   * routes on that app need the services. Previously every one of these lived
-   * in one module scope, so the emit callbacks simply closed over an `io` that
-   * was assigned further down the file. Splitting the wiring across modules
-   * removes that shared scope, and this accessor is what replaces it.
-   *
-   * Nothing here emits during construction, so by the time any of these
-   * callbacks run — on an HTTP request, a socket event or the inactivity timer
-   * — `io` exists.
-   */
-  getIo: () => ChatServer;
+  publisher: RealtimePublisher;
 }
 
 /**
@@ -46,7 +32,7 @@ export interface CreateServicesDeps {
  * not while this function runs, which is what lets `userService` be built
  * first — exactly as it was when this lived in `index.ts`.
  */
-export const createServices = ({ repositories, getIo }: CreateServicesDeps): Services => {
+export const createServices = ({ repositories, publisher }: CreateServicesDeps): Services => {
   const userService = makeUserService(
     repositories.users,
     repositories.emergencyContacts,
@@ -55,32 +41,19 @@ export const createServices = ({ repositories, getIo }: CreateServicesDeps): Ser
     async (contactId, payload) => {
       let room = await repositories.rooms.findPrivateRoomByMembers(payload.userId, contactId);
       if (!room) {
-        try {
-          const result = await roomService.createPrivate(payload.userId, contactId, true);
-          room = result.room;
-        } catch (err) {
-          console.error('Failed to auto-create private room for emergency contact:', err);
-        }
+        const result = await roomService.createPrivate(payload.userId, contactId, true);
+        room = result.room;
       }
 
-      if (room) {
-        try {
-          const message = await messageService.sendMessage(payload.userId, room.roomId, payload.message);
-          getIo().to(`room_${room.roomId}`).emit('new_message', message);
-        } catch (err) {
-          console.error('Failed to auto-send emergency message:', err);
-          getIo().to(`user_${contactId}`).emit('emergency_alert', payload);
-        }
-      } else {
-        getIo().to(`user_${contactId}`).emit('emergency_alert', payload);
-      }
+      await messageService.sendMessage(payload.userId, room.roomId, payload.message);
+      publisher.publishUserEvent(contactId, 'emergency_alert', payload);
     },
     repositories.friends,
     async (userId, data) => {
       try {
         const rooms = await repositories.rooms.findByMember(userId);
         for (const room of rooms) {
-          getIo().to(`room_${room.roomId}`).emit('room_update', {
+          publisher.publishRoomEvent(room.roomId, 'room_update', {
             type: 'USER_UPDATED',
             roomId: room.roomId,
             data: { userId, ...data },
@@ -98,16 +71,23 @@ export const createServices = ({ repositories, getIo }: CreateServicesDeps): Ser
     (roomId, eventName, payload) => {
       if (eventName === 'room_update') {
         const p = payload as { type: string; data: unknown };
-        getIo().to(`room_${roomId}`).emit('room_update', { ...p, roomId });
+        publisher.publishRoomEvent(roomId, 'room_update', { ...p, roomId });
       } else {
-        getIo().to(`room_${roomId}`).emit(eventName as keyof ServerToClientEvents, payload as never);
+        publisher.publishRoomEvent(roomId, eventName as keyof ServerToClientEvents, payload);
       }
     },
     repositories.friends,
     repositories.users,
     repositories.messages,
     (userId, eventName, payload) => {
-      getIo().to(`user_${userId}`).emit(eventName as keyof ServerToClientEvents, payload as never);
+      publisher.publishUserEvent(userId, eventName as keyof ServerToClientEvents, payload);
+    },
+    undefined,
+    (userId, roomId) => {
+      publisher.removeUserFromRoom(userId, roomId);
+    },
+    (userId, roomId) => {
+      publisher.addUserToRoom(userId, roomId);
     },
   );
 
@@ -115,6 +95,9 @@ export const createServices = ({ repositories, getIo }: CreateServicesDeps): Ser
     repositories.messages,
     repositories.rooms,
     repositories.roomMembers,
+    (roomId, eventName, payload) => {
+      publisher.publishRoomEvent(roomId, eventName, payload);
+    },
   );
 
   const folderService = makeFolderService(repositories.folders, repositories.roomMembers);
@@ -124,7 +107,7 @@ export const createServices = ({ repositories, getIo }: CreateServicesDeps): Ser
   const friendService = makeFriendService(
     repositories.friends,
     (userId, eventName, payload) => {
-      getIo().to(`user_${userId}`).emit(eventName as keyof ServerToClientEvents, payload as never);
+      publisher.publishUserEvent(userId, eventName as keyof ServerToClientEvents, payload);
     },
     {
       markPrivateReadOnly: roomService.markPrivateReadOnly,
