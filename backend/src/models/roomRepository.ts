@@ -2,6 +2,7 @@ import { SQL } from "bun";
 import defaultSql from "./db";
 import type { Room, RoomSummary, RoomMemberRole } from '@shared/types';
 import type { CreateRoomData, IRoomRepository, UpdateRoomData } from './IRoomRepository';
+import { ForbiddenError, NotFoundError, ValidationError } from '../utils/AppError';
 
 export interface RoomRow {
   room_id: string;
@@ -43,6 +44,7 @@ function mapRowToRoomSummary(row: RoomRow & {
   latest_message_sequence?: number | string | null;
   latest_change_sequence?: number | string | null;
   latest_revision?: number | null;
+  latest_is_recalled?: boolean | null;
 }): RoomSummary {
   const summary: RoomSummary = {
     ...mapRowToRoom(row),
@@ -56,8 +58,12 @@ function mapRowToRoomSummary(row: RoomRow & {
     summary.latestMessage = {
       messageId: row.latest_message_id,
       senderId: row.latest_sender_id ?? null,
-      content: row.latest_content!,
+      content: row.latest_is_recalled ? '' : row.latest_content!,
       sentAt: row.latest_sent_at!,
+      isRecalled: row.latest_is_recalled ?? false,
+      messageSequence: Number(row.latest_message_sequence ?? 0),
+      changeSequence: Number(row.latest_change_sequence ?? 0),
+      revision: Number(row.latest_revision ?? 1),
     };
   }
 
@@ -77,6 +83,7 @@ export interface MemberRoomRow extends RoomRow {
   latest_message_sequence?: number | string | null;
   latest_change_sequence?: number | string | null;
   latest_revision?: number | null;
+  latest_is_recalled?: boolean | null;
   role: string;
 }
 
@@ -114,6 +121,30 @@ export class RoomRepository implements IRoomRepository {
     return rows.length === 0 ? null : mapRowToRoom(rows[0]);
   }
 
+  async reopenPrivateRoomIfUnblocked(roomId: string, userA: string, userB: string): Promise<Room | null> {
+    const rows = await this.sql<RoomRow[]>`
+      UPDATE chat_rooms cr
+      SET is_readonly = false
+      WHERE cr.room_id = ${roomId}
+        AND cr.type = 'private'
+        AND EXISTS (
+          SELECT 1 FROM room_members rm
+          WHERE rm.room_id = cr.room_id AND rm.user_id = ${userA}
+        )
+        AND EXISTS (
+          SELECT 1 FROM room_members rm
+          WHERE rm.room_id = cr.room_id AND rm.user_id = ${userB}
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE (b.blocker_id = ${userA} AND b.blocked_id = ${userB})
+             OR (b.blocker_id = ${userB} AND b.blocked_id = ${userA})
+        )
+      RETURNING cr.*
+    `;
+    return rows.length === 0 ? null : mapRowToRoom(rows[0]);
+  }
+
   async findByMember(userId: string): Promise<RoomSummary[]> {
     const roomRows = await this.sql<MemberRoomRow[]>`
       SELECT
@@ -131,11 +162,27 @@ export class RoomRepository implements IRoomRepository {
         , latest.message_sequence AS latest_message_sequence
         , latest.change_sequence AS latest_change_sequence
         , latest.revision AS latest_revision
+        , latest_message.is_recalled AS latest_is_recalled
       FROM chat_rooms cr
       JOIN room_members rm ON rm.room_id = cr.room_id
       LEFT JOIN messages last_read ON last_read.message_id = rm.last_read_id
       LEFT JOIN room_last_message_view latest ON latest.room_id = cr.room_id
+      LEFT JOIN messages latest_message ON latest_message.message_id = latest.message_id
       WHERE rm.user_id = ${userId}
+        AND NOT (
+          cr.type = 'private'
+          AND EXISTS (
+            SELECT 1
+            FROM room_members other
+            JOIN blocks b ON (
+              (b.blocker_id = ${userId} AND b.blocked_id = other.user_id)
+              OR (b.blocker_id = other.user_id AND b.blocked_id = ${userId})
+            )
+            WHERE other.room_id = rm.room_id
+              AND other.user_id <> ${userId}
+              AND other.role <> 'pending'
+          )
+        )
     `;
 
     if (roomRows.length === 0) {
@@ -152,13 +199,14 @@ export class RoomRepository implements IRoomRepository {
             m.room_id,
             ROW_NUMBER() OVER (
               PARTITION BY m.room_id 
-              ORDER BY m.sent_at DESC
+              ORDER BY m.message_sequence DESC, m.sent_at DESC, m.message_id DESC
             ) as rn
           FROM messages m
           JOIN chat_rooms cr ON cr.room_id = m.room_id
           JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = ${userId}
           LEFT JOIN messages last_read ON last_read.message_id = rm.last_read_id
           WHERE m.room_id = ANY(${pgRoomIds}::uuid[])
+            AND rm.role <> 'pending'
             AND (
               m.message_sequence > rm.read_position
               OR (m.message_sequence = 0 AND (last_read.sent_at IS NULL OR m.sent_at > last_read.sent_at))
@@ -195,7 +243,7 @@ export class RoomRepository implements IRoomRepository {
 
     const summaries = roomRows.map((room) => {
       const latestVisible =
-        room.latest_sent_at && (
+        room.role !== 'pending' && room.latest_sent_at && (
           room.view_history
           || Number(room.latest_message_sequence ?? 0) > Number(room.join_boundary ?? 0)
           || (Number(room.latest_message_sequence ?? 0) === 0 && room.latest_sent_at >= room.join_time)
@@ -217,6 +265,7 @@ export class RoomRepository implements IRoomRepository {
         latest_message_sequence: latestVisible ? room.latest_message_sequence : null,
         latest_change_sequence: latestVisible ? room.latest_change_sequence : null,
         latest_revision: latestVisible ? room.latest_revision : null,
+        latest_is_recalled: latestVisible ? room.latest_is_recalled : null,
         unread_count: unreadCount,
         other_member_id: otherMemberByRoom.get(room.room_id) ?? null,
       });
@@ -265,6 +314,44 @@ export class RoomRepository implements IRoomRepository {
 
     if (rows.length === 0) throw new Error('Room not found');
     return mapRowToRoom(rows[0]);
+  }
+
+  async transferOwnership(roomId: string, callerId: string, targetUserId: string): Promise<void> {
+    await this.sql.begin(async (tx) => {
+      const rooms = await tx<{ type: Room['type'] }[]>`
+        SELECT type FROM chat_rooms WHERE room_id = ${roomId} FOR UPDATE
+      `;
+      if (rooms.length === 0) throw new NotFoundError('room', roomId);
+      if (rooms[0].type !== 'group') throw new ValidationError('Cannot transfer ownership of a private room');
+
+      const members = await tx<{ user_id: string; role: RoomMemberRole }[]>`
+        SELECT user_id, role
+        FROM room_members
+        WHERE room_id = ${roomId}
+          AND user_id IN (${callerId}, ${targetUserId})
+        FOR UPDATE
+      `;
+      const caller = members.find((member) => member.user_id === callerId);
+      const target = members.find((member) => member.user_id === targetUserId);
+      if (!caller || caller.role !== 'owner') {
+        throw new ForbiddenError('Only the owner can transfer ownership');
+      }
+      if (!target) throw new NotFoundError('member', targetUserId);
+      if (target.role === 'pending') {
+        throw new ValidationError('Cannot transfer ownership to a pending member');
+      }
+
+      await tx`
+        UPDATE room_members
+        SET role = CASE
+          WHEN user_id = ${callerId} THEN 'admin'
+          WHEN user_id = ${targetUserId} THEN 'owner'
+          ELSE role
+        END
+        WHERE room_id = ${roomId}
+          AND user_id IN (${callerId}, ${targetUserId})
+      `;
+    });
   }
 
   async delete(roomId: string): Promise<void> {

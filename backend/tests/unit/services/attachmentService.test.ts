@@ -84,13 +84,14 @@ const buildApngBuffer = async (): Promise<Buffer> => {
 };
 
 describe('AttachmentService', () => {
-  let attachmentRepo: { create: Mock<any>; findById: Mock<any> };
+  let attachmentRepo: { create: Mock<any>; findById: Mock<any>; findByIdForUser: Mock<any> };
   let service: ReturnType<typeof makeAttachmentService>;
 
   beforeEach(() => {
     attachmentRepo = {
       create: mock(),
       findById: mock(),
+      findByIdForUser: mock(),
     };
     service = makeAttachmentService(attachmentRepo as any);
   });
@@ -118,7 +119,7 @@ describe('AttachmentService', () => {
   });
 
   it('getAttachment returns null when the parent message has been recalled', async () => {
-    attachmentRepo.findById.mockResolvedValue({
+    attachmentRepo.findByIdForUser.mockResolvedValue({
       attachmentId: 'att-1',
       messageId: 'msg-1',
       uploadedBy: 'user-1',
@@ -129,7 +130,7 @@ describe('AttachmentService', () => {
       messageIsRecalled: true,
     });
 
-    await expect(service.getAttachment('att-1')).resolves.toBeNull();
+    await expect(service.getAttachment('user-1', 'att-1')).resolves.toBeNull();
   });
 
   it('getAttachment returns the attachment when the parent message has not been recalled', async () => {
@@ -143,9 +144,9 @@ describe('AttachmentService', () => {
       uploadedAt: new Date(),
       messageIsRecalled: false,
     };
-    attachmentRepo.findById.mockResolvedValue(attachment);
+    attachmentRepo.findByIdForUser.mockResolvedValue(attachment);
 
-    await expect(service.getAttachment('att-1')).resolves.toEqual(attachment);
+    await expect(service.getAttachment('user-1', 'att-1')).resolves.toEqual(attachment);
   });
 
   it('getAttachment returns the attachment when it is not yet linked to any message', async () => {
@@ -159,20 +160,20 @@ describe('AttachmentService', () => {
       uploadedAt: new Date(),
       messageIsRecalled: undefined,
     };
-    attachmentRepo.findById.mockResolvedValue(attachment);
+    attachmentRepo.findByIdForUser.mockResolvedValue(attachment);
 
-    await expect(service.getAttachment('att-1')).resolves.toEqual(attachment);
+    await expect(service.getAttachment('user-1', 'att-1')).resolves.toEqual(attachment);
   });
 
   it('getAttachment returns null when the attachment does not exist', async () => {
-    attachmentRepo.findById.mockResolvedValue(null);
+    attachmentRepo.findByIdForUser.mockResolvedValue(null);
 
-    await expect(service.getAttachment('missing')).resolves.toBeNull();
+    await expect(service.getAttachment('user-1', 'missing')).resolves.toBeNull();
   });
 });
 
 describe('AttachmentService image compression', () => {
-  let attachmentRepo: { create: Mock<any>; findById: Mock<any> };
+  let attachmentRepo: { create: Mock<any>; findById: Mock<any>; findByIdForUser: Mock<any> };
   let service: ReturnType<typeof makeAttachmentService>;
   const createdFiles: string[] = [];
 
@@ -186,6 +187,7 @@ describe('AttachmentService image compression', () => {
         uploaded_at: new Date('2026-01-01T00:00:00.000Z'),
       })),
       findById: mock(),
+      findByIdForUser: mock(),
     };
     service = makeAttachmentService(attachmentRepo as any);
   });

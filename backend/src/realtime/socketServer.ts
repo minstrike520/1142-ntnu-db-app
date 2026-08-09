@@ -1,17 +1,18 @@
 import type { FriendResponse } from '@shared/types';
-import { ForbiddenError, NotFoundError, ValidationError } from '../utils/AppError';
+import { ForbiddenError, ValidationError } from '../utils/AppError';
 import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
 import type { ChatServer } from './authSocket';
 import { trackUserConnection, trackUserDisconnection } from './presence';
 import { mapErrorToApiShape } from '../utils/mapError';
 
 interface SocketDeps {
-  /** @deprecated Durable commands are REST-only; retained for old test wiring. */
-  messageService?: unknown;
-  /** @deprecated Durable commands are REST-only; retained for old test wiring. */
-  messageRepository?: unknown;
-  roomMemberRepository: Pick<IRoomMemberRepository, 'findMember' | 'findByUser' | 'update'>;
+  roomMemberRepository: Pick<IRoomMemberRepository, 'findMember' | 'findByUser'>;
   friendRepository?: { getFriends(userId: string): Promise<FriendResponse[]> };
+  withRoomSubscriptionLock?: <T>(
+    userId: string,
+    roomId: string,
+    operation: () => Promise<T> | T,
+  ) => Promise<T>;
 }
 
 const maxSessionsPerUser = (): number => {
@@ -53,14 +54,21 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
 
   io.on('connection', (socket) => {
     const userId = socket.data.user.userId;
+    let disconnected = false;
     sessionCounts.set(userId, (sessionCounts.get(userId) ?? 0) + 1);
     socket.join(`user_${userId}`);
 
     const clearTypingTimers = () => {
       for (const [key, timer] of typingTimers) {
         if (key.startsWith(`${socket.id}:`)) {
+          const roomId = key.slice(socket.id.length + 1);
           clearTimeout(timer);
           typingTimers.delete(key);
+          socket.to(`room_${roomId}`).emit('user_typing', {
+            roomId,
+            userId,
+            isTyping: false,
+          });
         }
       }
     };
@@ -68,15 +76,42 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
     // Subscriptions are derived from durable membership at connection time.
     // A pending member is intentionally excluded, and room revocation later
     // removes all sessions through the publisher boundary.
-    if (deps.roomMemberRepository.findByUser) {
-      deps.roomMemberRepository.findByUser(userId)
+    const restoreSubscriptions = deps.roomMemberRepository.findByUser
+      ? deps.roomMemberRepository.findByUser(userId)
         .then((members) => Promise.all(
           members
             .filter((member) => member.role !== 'pending')
-            .map((member) => socket.join(`room_${member.roomId}`)),
+            .map(async (member) => {
+              const join = async () => {
+                // findByUser is only a candidate list. Re-check inside the
+                // same lock used by membership revocation so a stale query
+                // cannot re-add a socket after socketsLeave has completed.
+                const current = await deps.roomMemberRepository.findMember(member.roomId, userId);
+                if (!current || current.role === 'pending') return;
+                await Promise.resolve(socket.join(`room_${member.roomId}`));
+              };
+              if (deps.withRoomSubscriptionLock) {
+                await deps.withRoomSubscriptionLock(userId, member.roomId, join);
+              } else {
+                await join();
+              }
+            }),
         ))
-        .catch((error) => console.error('Failed to restore room subscriptions:', error));
-    }
+      : Promise.resolve();
+
+    // The client must not begin its durable sync until every initial room
+    // subscription has been derived. This closes the snapshot/subscribe gap:
+    // changes committed after sync starts are either received live or appear
+    // in the next sync, rather than falling between both paths.
+    void restoreSubscriptions.then(
+      () => socket.emit('realtime_ready'),
+      (error) => {
+        console.error('Failed to restore room subscriptions:', error);
+        if (typeof (socket as unknown as { disconnect?: (close?: boolean) => void }).disconnect === 'function') {
+          socket.disconnect(true);
+        }
+      },
+    );
 
     if (deps.friendRepository) {
       trackUserConnection(io, userId, socket.id, deps.friendRepository).catch((err) => {
@@ -85,6 +120,7 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
     }
 
     socket.on('disconnect', () => {
+      disconnected = true;
       clearTypingTimers();
       const count = (sessionCounts.get(userId) ?? 1) - 1;
       if (count > 0) sessionCounts.set(userId, count);
@@ -97,27 +133,21 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
       }
     });
 
-    // Kept as an idempotent membership check for older clients. It cannot
-    // expand authorization and is not used by the current frontend.
-    socket.on('join_room', async ({ roomId }) => {
+    socket.on('typing', async (payload) => {
       try {
-        const member = await deps.roomMemberRepository.findMember(roomId, userId);
-        if (!member || member.role === 'pending') {
-          throw new ForbiddenError('Not a member of this room');
+        if (disconnected) return;
+        if (
+          !payload
+          || typeof payload.roomId !== 'string'
+          || payload.roomId.length === 0
+          || payload.roomId.length > 128
+          || typeof payload.isTyping !== 'boolean'
+        ) {
+          throw new ValidationError('Invalid typing payload');
         }
-        socket.join(`room_${roomId}`);
-      } catch (err) {
-        socket.emit('error', mapErrorToApiShape(err));
-      }
-    });
-
-    socket.on('leave_room', ({ roomId }) => {
-      socket.leave(`room_${roomId}`);
-    });
-
-    socket.on('typing', async ({ roomId, isTyping }) => {
-      try {
+        const { roomId, isTyping } = payload;
         const member = await deps.roomMemberRepository.findMember(roomId, userId);
+        if (disconnected) return;
         if (!member || member.role === 'pending') {
           throw new ForbiddenError('Not a member of this room');
         }
@@ -130,6 +160,7 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
         if (isTyping) {
           typingTimers.set(key, setTimeout(() => {
             typingTimers.delete(key);
+            if (disconnected) return;
             socket.to(`room_${roomId}`).emit('user_typing', {
               roomId,
               userId,
@@ -144,70 +175,5 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
       }
     });
 
-    // Compatibility adapter for isolated legacy tests/embedded consumers that
-    // explicitly inject the old command services. The production composition
-    // root does not provide these dependencies, so its Socket.IO surface has
-    // no durable write listeners.
-    if (deps.messageService && deps.messageRepository) {
-      const legacyService = deps.messageService as {
-        sendMessage(userId: string, roomId: string, content: string, opts: { replyToId?: string; attachmentIds?: string[] }): Promise<unknown>;
-        recallMessage(userId: string, roomId: string, messageId: string): Promise<{ messageId: string }>;
-        updateMessage?(userId: string, roomId: string, messageId: string, content: string): Promise<unknown>;
-      };
-      const legacyRepository = deps.messageRepository as {
-        findById(messageId: string): Promise<{ roomId: string } | null>;
-      };
-
-      socket.on('send_message', async ({ roomId, content, replyTo, attachmentIds }) => {
-        try {
-          const message = await legacyService.sendMessage(userId, roomId, content, {
-            replyToId: replyTo,
-            attachmentIds,
-          });
-          io.to(`room_${roomId}`).emit('new_message', message as never);
-        } catch (err) {
-          socket.emit('error', mapErrorToApiShape(err));
-        }
-      });
-
-      socket.on('recall_message', async ({ messageId }) => {
-        try {
-          const existing = await legacyRepository.findById(messageId);
-          if (!existing) throw new NotFoundError('message', messageId);
-          const recalled = await legacyService.recallMessage(userId, existing.roomId, messageId);
-          io.to(`room_${existing.roomId}`).emit('message_recalled', { messageId: recalled.messageId });
-        } catch (err) {
-          socket.emit('error', mapErrorToApiShape(err));
-        }
-      });
-
-      socket.on('update_message', async ({ roomId, messageId, content }) => {
-        try {
-          const updated = await legacyService.updateMessage?.(userId, roomId, messageId, content);
-          io.to(`room_${roomId}`).emit('message_updated', updated as never);
-        } catch (err) {
-          socket.emit('error', mapErrorToApiShape(err));
-        }
-      });
-
-      socket.on('read_receipt', async ({ roomId, messageId }) => {
-        try {
-          const message = await legacyRepository.findById(messageId);
-          if (!message || message.roomId !== roomId) {
-            throw new ValidationError('Invalid messageId for this room');
-          }
-          await deps.roomMemberRepository.update(roomId, userId, { lastReadId: messageId });
-          socket.to(`room_${roomId}`).emit('read_update', { roomId, userId, messageId });
-        } catch (err) {
-          socket.emit('error', mapErrorToApiShape(err));
-        }
-      });
-
-      // Preserve the old unit/integration harness behaviour for injected
-      // legacy dependencies. Production never enters this branch.
-      socket.on('typing', ({ roomId, isTyping }) => {
-        socket.to(`room_${roomId}`).emit('user_typing', { roomId, userId, isTyping });
-      });
-    }
   });
 };

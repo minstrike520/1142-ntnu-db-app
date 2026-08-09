@@ -1432,7 +1432,7 @@ All errors return the following JSON structure:
 - **Namespace**: `/`
 - **Authentication**: Connection requires the access token in the Socket.IO `auth.token` handshake field.
 - **Subscriptions**: Upon connection, the server adds the socket to `user_<userId>` and to every non-pending room in `room_members`. Membership revocation removes every session from that room.
-- **Recovery**: Clients call `GET /sync` after every connection and token refresh. `connectionStateRecovery` is disabled; Sync Cursor is the single recovery path.
+- **Recovery**: Clients wait for the server's `realtime_ready` event, then call `GET /sync` after every connection and token refresh. `connectionStateRecovery` is disabled; Sync Cursor is the single recovery path. If subscription restoration fails, the server disconnects the socket without sending `realtime_ready`, so the client retries the handshake.
 
 ### Client-to-Server Events
 
@@ -1445,13 +1445,15 @@ All errors return the following JSON structure:
 | Event Name | Payload Type | Description |
 | :--- | :--- | :--- |
 | `new_message` | `MessageWithSender` | Receive new message (mentions also trigger this event) |
-| `message_recalled` | `{ messageId: string, messageSequence: number, changeSequence: number, revision: number }` | Message has been recalled |
+| `message_updated` | `MessageWithSender` | Receive the canonical edited message |
+| `message_recalled` | `{ roomId: string, messageId: string, messageSequence: number, changeSequence: number, revision: number }` | Message has been recalled; `roomId` lets clients update an unloaded room's latest-message projection |
 | `user_typing` | `{ roomId: string, userId: string, isTyping: boolean }` | Typing status of other members |
 | `read_update` | `{ roomId: string, userId: string, messageId: string, readPosition?: number }` | Read receipt updates of other members |
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | Room or membership state change. `type` determines the subtype. See [`room_update` Subtypes](#room_update-subtypes). |
-| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected', createdAt: string }` | Friend request status change notification. Delivered to **both** the addressee (new request) and the requester (accepted / rejected). The client should refresh friend and pending-request lists upon receiving this event regardless of `status`. |
+| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected' \| 'deleted' \| 'unblocked', createdAt: string }` | Friend lifecycle notification. Delivered to the relevant user; the client should refresh friend and pending-request lists upon receiving this event regardless of `status`. |
 | `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | Presence update for a friend. Delivered when a friend connects or disconnects. |
 | `emergency_alert` | `{ userId: string, message: string }` | Receive emergency alert from contact |
+| `realtime_ready` | `void` | Initial durable room subscriptions have been restored; the client may begin `/sync` |
 | `error` | `ApiError` | Error report for failed event processing |
 
 ---

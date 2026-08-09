@@ -64,8 +64,10 @@ retry cannot create a gap.
 Durable change history for Sync Cursor recovery. Each row stores the complete
 message projection at one `change_sequence`, its immutable `message_sequence`,
 `revision`, `change_type` (`created`, `edited`, or `recalled`), actor and
-command idempotency key. A partial unique index on `(actor_id, command_id)`
-makes edit/recall retries no-ops.
+command idempotency key. `mentions` and `attachments` are JSONB snapshots
+captured in the same transaction, so recovery does not mix an old message
+revision with current relations. A partial unique index on `(actor_id,
+command_id)` makes edit/recall retries no-ops.
 
 #### `attachments`
 | Column Name | Type | Description | Constraints |
@@ -101,9 +103,9 @@ created before joining a room with hidden history. `read_position` is monotonic;
 `last_read_id` remains as the API compatibility projection.
 
 #### `read_position_commands`
-Stores `(user_id, command_id)` receipts for idempotent read-position commands.
-The table makes a retry safe while the position update itself uses
-`GREATEST(read_position, target_sequence)`.
+Stores `(user_id, command_id)` receipts for idempotent read-position commands;
+`message_id` records the command target. The table makes a retry safe while
+the position update itself uses `GREATEST(read_position, target_sequence)`.
 
 #### `friendships`
 | Column Name | Type | Description | Constraints |

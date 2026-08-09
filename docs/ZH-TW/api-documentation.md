@@ -1431,7 +1431,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 - **Namespace**: `/`
 - **驗證**: 連線時需在 Socket.IO `auth.token` handshake 欄位帶上 access token。
 - **訂閱**: 連線後伺服器會加入 `user_<userId>`，並加入 `room_members` 中所有非 pending 聊天室；撤銷成員資格時會移除該使用者的所有 session。
-- **復原**: 每次連線與 token refresh 後呼叫 `GET /sync`。不使用 `connectionStateRecovery`，Sync Cursor 是唯一復原路徑。
+- **復原**: 客戶端必須先等待伺服器發出 `realtime_ready`，再於每次連線與 token refresh 後呼叫 `GET /sync`。不使用 `connectionStateRecovery`，Sync Cursor 是唯一復原路徑。若訂閱恢復失敗，伺服器會在發送 `realtime_ready` 前中斷 socket，讓客戶端重新握手。
 
 ### 客戶端發送事件
 
@@ -1444,13 +1444,15 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 | 事件名稱 | Payload 型別 | 說明 |
 | :--- | :--- | :--- |
 | `new_message` | `MessageWithSender` | 收到新訊息（提及機制亦透過此事件通知） |
-| `message_recalled` | `{ messageId: string, messageSequence: number, changeSequence: number, revision: number }` | 訊息被收回 |
+| `message_updated` | `MessageWithSender` | 收到編輯後的 canonical 訊息 |
+| `message_recalled` | `{ roomId: string, messageId: string, messageSequence: number, changeSequence: number, revision: number }` | 訊息被收回；`roomId` 讓客戶端可以更新尚未載入聊天室的最新訊息摘要 |
 | `user_typing` | `{ roomId: string, userId: string, isTyping: boolean }` | 其他成員的輸入狀態 |
 | `read_update` | `{ roomId: string, userId: string, messageId: string, readPosition?: number }` | 其他成員的已讀游標更新 |
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | 房間或成員狀態變更。`type` 欄位決定子類型，詳見 [`room_update` 子類型](#room_update-子類型)。 |
-| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected', createdAt: string }` | 好友請求狀態變更通知。**收件方**（新邀請）與**發送方**（被接受／拒絕）都會收到此事件。客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
+| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected' \| 'deleted' \| 'unblocked', createdAt: string }` | 好友生命週期通知。傳送給相關使用者；客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
 | `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。 |
 | `emergency_alert` | `{ userId: string, message: string }` | 收到緊急聯絡人的警報通知 |
+| `realtime_ready` | `void` | 初始有效聊天室訂閱已恢復；客戶端可以開始 `/sync` |
 | `error` | `ApiError` | 事件處理失敗的錯誤回報 |
 
 ---

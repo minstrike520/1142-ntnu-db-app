@@ -6,10 +6,11 @@ export function makeFriendService(
   repo: ReturnType<typeof makeFriendRepository>,
   notifyUser?: (userId: string, eventName: string, payload: unknown) => void,
   privateRooms?: {
-    markPrivateReadOnly(userA: string, userB: string): Promise<void>;
+    markPrivateReadOnly(userA: string, userB: string): Promise<string | null>;
     createPrivate?(userA: string, userB: string): Promise<unknown>;
     reopenPrivateRoom?(userA: string, userB: string): Promise<void>;
-  }
+  },
+  removeUserFromRoom?: (userId: string, roomId: string) => void | Promise<void>,
 ) {
   return {
     async sendFriendRequest(requesterId: string, targetUserId: string) {
@@ -129,31 +130,51 @@ export function makeFriendService(
       if (userId === targetUserId) {
         throw new ValidationError('Cannot block yourself');
       }
-      await repo.blockUser(userId, targetUserId);
-      await privateRooms?.markPrivateReadOnly(userId, targetUserId);
-      if (notifyUser) {
-        notifyUser(targetUserId, 'friend_request', {
+      const block = async () => {
+        // Make the room reject new messages and remove its live subscribers
+        // before the durable block row commits. An in-flight message can then
+        // either finish before revocation or find the read-only room; it
+        // cannot be published to a socket that remains subscribed afterward.
+        const privateRoomId = await privateRooms?.markPrivateReadOnly(userId, targetUserId);
+        if (privateRoomId) {
+          await removeUserFromRoom?.(userId, privateRoomId);
+          await removeUserFromRoom?.(targetUserId, privateRoomId);
+        }
+        await repo.blockUser(userId, targetUserId);
+        notifyUser?.(targetUserId, 'friend_request', {
           requesterId: userId,
           addresseeId: targetUserId,
           status: 'blocked',
           createdAt: new Date(),
         });
-      }
-      return { status: 'blocked' };
+        return { status: 'blocked' as const };
+      };
+      if (repo.withUserPairLock) return repo.withUserPairLock(userId, targetUserId, block);
+      return block();
     },
 
     async unblockUser(userId: string, blockedId: string) {
-      await repo.unblockUser(userId, blockedId);
-      if (await repo.areFriends(userId, blockedId)) {
-        await privateRooms?.reopenPrivateRoom?.(userId, blockedId);
-      }
-      if (notifyUser) {
-        notifyUser(blockedId, 'friend_request', {
-          requesterId: userId,
-          addresseeId: blockedId,
-          status: 'unblocked',
-          createdAt: new Date(),
-        });
+      const unblock = async () => {
+        await repo.unblockUser(userId, blockedId);
+        if (await repo.areFriends(userId, blockedId)) {
+          await privateRooms?.reopenPrivateRoom?.(userId, blockedId);
+        }
+        if (notifyUser) {
+          notifyUser(blockedId, 'friend_request', {
+            requesterId: userId,
+            addresseeId: blockedId,
+            status: 'unblocked',
+            createdAt: new Date(),
+          });
+        }
+      };
+
+      // Keep removing the block and reopening the private room in the same
+      // pair-ordered critical section as createPrivate/blockUser.
+      if (repo.withUserPairLock) {
+        await repo.withUserPairLock(userId, blockedId, unblock);
+      } else {
+        await unblock();
       }
     },
 

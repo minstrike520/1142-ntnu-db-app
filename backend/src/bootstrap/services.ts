@@ -40,13 +40,20 @@ export const createServices = ({ repositories, publisher }: CreateServicesDeps):
     { signToken, generateRefreshToken, hashToken },
     async (contactId, payload) => {
       let room = await repositories.rooms.findPrivateRoomByMembers(payload.userId, contactId);
-      if (!room) {
+      if (!room || room.isReadonly) {
+        // Emergency contacts do not need to be friends, but createPrivate
+        // still enforces the block check when friendship validation is bypassed.
         const result = await roomService.createPrivate(payload.userId, contactId, true);
         room = result.room;
       }
 
-      await messageService.sendMessage(payload.userId, room.roomId, payload.message);
-      publisher.publishUserEvent(contactId, 'emergency_alert', payload);
+      const message = await messageService.sendMessage(payload.userId, room.roomId, payload.message, {
+        commandId: `emergency:${payload.userId}:${contactId}:${payload.incidentId}`,
+      });
+      if (!(message as typeof message & { __replayedCommand?: boolean }).__replayedCommand) {
+        const { incidentId: _incidentId, ...publicPayload } = payload;
+        publisher.publishUserEvent(contactId, 'emergency_alert', publicPayload);
+      }
     },
     repositories.friends,
     async (userId, data) => {
@@ -63,6 +70,8 @@ export const createServices = ({ repositories, publisher }: CreateServicesDeps):
         console.error('Failed to broadcast user update:', err);
       }
     },
+    undefined,
+    publisher.disconnectUser,
   );
 
   const roomService = makeRoomService(
@@ -84,10 +93,10 @@ export const createServices = ({ repositories, publisher }: CreateServicesDeps):
     },
     undefined,
     (userId, roomId) => {
-      publisher.removeUserFromRoom(userId, roomId);
+      return publisher.removeUserFromRoom(userId, roomId);
     },
     (userId, roomId) => {
-      publisher.addUserToRoom(userId, roomId);
+      return publisher.addUserToRoom(userId, roomId);
     },
   );
 
@@ -115,6 +124,7 @@ export const createServices = ({ repositories, publisher }: CreateServicesDeps):
         roomService.createPrivate(userA, userB, bypassFriendCheck),
       reopenPrivateRoom: roomService.reopenPrivateRoom,
     },
+    publisher.removeUserFromRoom,
   );
 
   return {

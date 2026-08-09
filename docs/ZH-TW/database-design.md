@@ -63,7 +63,8 @@
 供 Sync Cursor 復原使用的持久化變更歷史。每列保存一個
 `change_sequence` 的完整訊息投影、固定的 `message_sequence`、`revision`、
 `change_type`（`created`、`edited`、`recalled`）、操作者與命令 key。
-`(actor_id, command_id)` 的 partial unique index 讓編輯／收回重試成為 no-op。
+`mentions` 與 `attachments` 是同一交易寫入的 JSONB snapshot，復原不會把舊訊息版本
+與目前 relations 混在一起。`(actor_id, command_id)` 的 partial unique index 讓編輯／收回重試成為 no-op。
 
 #### `attachments` (附件)
 | 欄位名稱 | 類型 | 說明 | 條件約束 |
@@ -98,8 +99,8 @@
 向前移動，`last_read_id` 則保留作為 API 相容投影。
 
 #### `read_position_commands`
-儲存 `(user_id, command_id)` 的已讀命令 receipt，讓重試安全；位置更新
-使用 `GREATEST(read_position, target_sequence)`。
+儲存 `(user_id, command_id)` 的已讀命令 receipt，`message_id` 記錄命令目標，讓重試安全；
+位置更新使用 `GREATEST(read_position, target_sequence)`。
 
 #### `friendships` (好友關係)
 | 欄位名稱 | 類型 | 說明 | 條件約束 |

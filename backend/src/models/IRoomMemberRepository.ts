@@ -8,5 +8,6 @@ export interface IRoomMemberRepository {
   update(roomId: string, userId: string, data: Partial<Pick<RoomMember, 'role' | 'nickname' | 'isMuted' | 'lastReadId' | 'readPosition'>>): Promise<RoomMember>;
   markRead?(roomId: string, userId: string, messageId: string, commandId?: string): Promise<RoomMember>;
   remove(roomId: string, userId: string): Promise<void>;
+  removeIfAuthorized?(roomId: string, callerId: string, targetUserId: string, expectedRole: RoomMember['role']): Promise<boolean>;
   resolveMentions(roomId: string, names: string[]): Promise<string[]>;
 }

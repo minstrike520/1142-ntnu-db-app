@@ -15,4 +15,7 @@ export interface IEmergencyContactRepository {
   upsert(userId: string, contactId: string, message: string): Promise<{ contact: EmergencyContact, isUpdate: boolean }>;
   delete(userId: string, contactId: string): Promise<void>;
   recordAlertIfNew(userId: string, lastActivity: Date): Promise<boolean>;
+  withContactLock?<T>(userId: string, contactId: string, operation: () => Promise<T>): Promise<T>;
+  releaseAlertIfNew?(userId: string, lastActivity: Date): Promise<void>;
+  completeAlert?(userId: string, lastActivity: Date): Promise<void>;
 }

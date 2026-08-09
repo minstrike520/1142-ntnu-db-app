@@ -44,6 +44,7 @@ export const createRealtime = ({
   attachSockets(io, {
     roomMemberRepository: repositories.roomMembers,
     friendRepository: repositories.friends,
+    withRoomSubscriptionLock: publisher.withRoomSubscriptionLock,
   });
 
   return { io, engine };
@@ -109,7 +110,19 @@ export const createBunRuntimeServer = ({
         callback?.();
         return;
       }
-      void current.stop(true).finally(() => callback?.());
+      // Drain active HTTP work first. A hard stop remains as a bounded
+      // fallback so a stuck websocket cannot hold deployment forever.
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        callback?.();
+      };
+      void current.stop().finally(finish);
+      const forceStop = setTimeout(() => {
+        if (!finished) void current.stop(true).finally(finish);
+      }, 10_000);
+      forceStop.unref?.();
     },
 
     address() {

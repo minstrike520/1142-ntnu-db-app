@@ -13,14 +13,38 @@ export interface RealtimePublisher {
   bind(io: ChatServer): void;
   publishRoomEvent(roomId: string, event: RealtimeEventName, payload: unknown): void;
   publishUserEvent(userId: string, event: RealtimeEventName, payload: unknown): void;
-  addUserToRoom(userId: string, roomId: string): void;
-  removeUserFromRoom(userId: string, roomId: string): void;
+  addUserToRoom(userId: string, roomId: string): Promise<void>;
+  removeUserFromRoom(userId: string, roomId: string): Promise<void>;
+  withRoomSubscriptionLock<T>(userId: string, roomId: string, operation: () => Promise<T> | T): Promise<T>;
   disconnectUser(userId: string, reason: string): void;
   shutdown(reason: string): void;
 }
 
 export const createRealtimePublisher = (): RealtimePublisher => {
   let io: ChatServer | undefined;
+  const subscriptionLocks = new Map<string, Promise<void>>();
+
+  const withRoomSubscriptionLock = async <T>(
+    userId: string,
+    roomId: string,
+    operation: () => Promise<T> | T,
+  ): Promise<T> => {
+    const key = `${userId}:${roomId}`;
+    const prior = subscriptionLocks.get(key);
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    subscriptionLocks.set(key, current);
+    if (prior) await prior;
+
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (subscriptionLocks.get(key) === current) subscriptionLocks.delete(key);
+    }
+  };
 
   const emit = (target: ReturnType<ChatServer['to']>, event: RealtimeEventName, payload: unknown) => {
     target.emit(event, payload as never);
@@ -42,28 +66,33 @@ export const createRealtimePublisher = (): RealtimePublisher => {
     },
 
     addUserToRoom(userId, roomId) {
-      if (!io) return;
-      void io.in(`user_${userId}`).socketsJoin(`room_${roomId}`);
+      return withRoomSubscriptionLock(userId, roomId, async () => {
+        if (!io) return;
+        await Promise.resolve(io.in(`user_${userId}`).socketsJoin(`room_${roomId}`));
+      });
     },
 
     removeUserFromRoom(userId, roomId) {
-      if (!io) return;
-      void io.in(`user_${userId}`).socketsLeave(`room_${roomId}`);
+      return withRoomSubscriptionLock(userId, roomId, async () => {
+        if (!io) return;
+        await Promise.resolve(io.in(`user_${userId}`).socketsLeave(`room_${roomId}`));
+      });
     },
+
+    withRoomSubscriptionLock,
 
     disconnectUser(userId, reason) {
       if (!io) return;
-      // Socket.IO exposes the close reason to the socket itself, not to the
-      // namespace-level disconnectSockets overload. Keep the reason at the
-      // domain boundary for logging/call-site clarity while using the
-      // transport's supported close operation here.
-      void reason;
+      // Keep the reason out of the Socket.IO close API, which only accepts a
+      // force flag. It is still useful in a bounded operational log, without
+      // logging message contents, tokens, or credentials.
+      console.info('Realtime sessions disconnected', { userId, reason });
       io.in(`user_${userId}`).disconnectSockets(true);
     },
 
     shutdown(reason) {
       if (!io) return;
-      void reason;
+      console.info('Realtime server shutting down', { reason });
       io.disconnectSockets(true);
     },
   };

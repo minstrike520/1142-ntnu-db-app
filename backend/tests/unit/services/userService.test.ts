@@ -337,6 +337,26 @@ describe('userService', () => {
     it('soft deletes the account', async () => {
       await userService.deleteMe('u1');
       expect(mockRepo.update).toHaveBeenCalledWith('u1', { deletedAt: expect.any(Date) });
+      expect(mockRefreshTokenRepo.revokeAllForUser).toHaveBeenCalledWith('u1');
+    });
+
+    it('disconnects all realtime sessions after deleting the account', async () => {
+      const disconnectUser = mock();
+      const service = makeUserService(
+        mockRepo,
+        emergencyContactRepo,
+        mockRefreshTokenRepo,
+        mockJwt,
+        undefined,
+        undefined,
+        undefined,
+        avatarStore,
+        disconnectUser,
+      );
+
+      await service.deleteMe('u1');
+
+      expect(disconnectUser).toHaveBeenCalledWith('u1', 'account_deleted');
     });
   });
 
@@ -495,6 +515,7 @@ describe('userService', () => {
       expect(notifyEmergencyContact).toHaveBeenCalledWith('u2', {
         userId: 'u1',
         message: 'inactive',
+        incidentId: '2026-01-01T00:00:00.000Z',
       });
     });
 
@@ -679,7 +700,10 @@ describe('userService', () => {
       await userService.checkInactivity('u1', new Date('2026-01-03T00:00:00.000Z'));
       expect(notifyEmergencyContact).toHaveBeenCalledWith(
         'c1',
-        expect.objectContaining({ message: expect.stringContaining('User has exceeded their inactivity warning threshold') }),
+        expect.objectContaining({
+          message: expect.stringContaining('User has exceeded their inactivity warning threshold'),
+          incidentId: '2026-01-01T00:00:00.000Z',
+        }),
       );
     });
   });

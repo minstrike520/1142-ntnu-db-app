@@ -517,6 +517,7 @@ describe('roomService', () => {
       const newRoom = { ...room, type: 'private' as const };
       mockRepo.findPrivateRoomByMembers.mockResolvedValue(null);
       mockRepo.create.mockResolvedValue(newRoom);
+      mockRepo.findById.mockResolvedValue(newRoom);
       mockMemberRepo.findMember.mockResolvedValue(null);
 
       const result = await serviceWithSocial.createPrivate('user-1', 'user-2');
@@ -536,6 +537,7 @@ describe('roomService', () => {
       const newRoom = { ...room, type: 'private' as const };
       mockRepo.findPrivateRoomByMembers.mockResolvedValue(null);
       mockRepo.create.mockResolvedValue(newRoom);
+      mockRepo.findById.mockResolvedValue(newRoom);
       mockMemberRepo.findMember.mockResolvedValue(ownerMember);
 
       await serviceWithSocial.createPrivate('user-1', 'user-2');

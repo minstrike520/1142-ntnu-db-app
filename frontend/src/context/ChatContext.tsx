@@ -77,7 +77,7 @@ import {
   uploadRoomAvatar as uploadRoomAvatarApi,
   getActiveAccessToken,
   setActiveAccessToken,
-  refreshTokens,
+  refreshTokensExclusive,
 } from "@/lib/api";
 import {
   createChatSocket,
@@ -88,6 +88,10 @@ import {
   onNewMessage,
   onReadUpdate,
   onSocketError,
+  onSocketConnect,
+  onSocketDisconnect,
+  onSocketConnectError,
+  onRealtimeReady,
   onRoomUpdate,
   onUserStatus,
   onUserTyping,
@@ -102,6 +106,7 @@ export interface Member {
   nickname?: string;
   isMuted?: boolean;
   lastReadId?: string | null;
+  readPosition?: number;
   avatarUrl?: string;
 }
 
@@ -121,6 +126,9 @@ export interface ChatRoom {
   unreadCount?: number;
   lastMessagePreview?: string;
   lastMessageAt?: string;
+  lastMessageId?: string;
+  lastMessageSequence?: number;
+  lastMessageChangeSequence?: number;
   avatarUrl?: string;
   lastReadId?: string | null;
   myRole?: RoomMemberRole;
@@ -563,7 +571,7 @@ const mapRooms = (
         ? {
             content: room.latestMessage.content,
             attachments: [],
-            isRecalled: false,
+            isRecalled: room.latestMessage.isRecalled,
           }
         : null;
 
@@ -598,12 +606,13 @@ const mapRooms = (
       unreadCount: room.unreadCount ?? currentRoom?.unreadCount ?? 0,
       lastReadId: room.lastReadId ?? currentRoom?.lastReadId ?? null,
       myRole: room.role ?? currentRoom?.myRole,
-      lastMessagePreview: latestMessage
-        ? summarizeMessagePreview(latestMessage)
-        : currentRoom?.lastMessagePreview,
+      lastMessagePreview: latestMessage ? summarizeMessagePreview(latestMessage) : undefined,
       lastMessageAt: room.latestMessage
         ? formatMessageTime(room.latestMessage.sentAt)
-        : currentRoom?.lastMessageAt,
+        : undefined,
+      lastMessageId: room.latestMessage?.messageId,
+      lastMessageSequence: room.latestMessage?.messageSequence,
+      lastMessageChangeSequence: room.latestMessage?.changeSequence,
     };
   });
 };
@@ -663,6 +672,7 @@ const mapRoomMember = (member: ApiRoomMember, profile?: UserProfile): Member => 
   nickname: member.nickname,
   isMuted: member.isMuted,
   lastReadId: member.lastReadId ?? null,
+  readPosition: member.readPosition,
   avatarUrl: profile?.avatarUrl,
 });
 
@@ -702,6 +712,30 @@ const sortMessages = (items: Message[]) =>
     return a.id.localeCompare(b.id);
   });
 
+const compareMessageVersion = (left: Message, right: Message): number => {
+  if (left.changeSequence !== undefined && right.changeSequence !== undefined) {
+    return left.changeSequence - right.changeSequence;
+  }
+  if (left.revision !== undefined && right.revision !== undefined) {
+    return left.revision - right.revision;
+  }
+  if (left.messageSequence !== undefined && right.messageSequence !== undefined) {
+    return left.messageSequence - right.messageSequence;
+  }
+  return new Date(left.sentAt).getTime() - new Date(right.sentAt).getTime();
+};
+
+const mergeMessages = (current: Message[], incoming: Message[]): Message[] => {
+  const byId = new Map(current.map((message) => [message.id, message]));
+  for (const message of incoming) {
+    const existing = byId.get(message.id);
+    if (!existing || compareMessageVersion(message, existing) >= 0) {
+      byId.set(message.id, message);
+    }
+  }
+  return hydrateReplyTargets(sortMessages(Array.from(byId.values())));
+};
+
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -716,7 +750,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const notifyDesktopRef = useRef(true);
   const syncCursorRef = useRef(0);
   const syncingRef = useRef(false);
-  const bufferedRealtimeRef = useRef<Array<() => void>>([]);
+  const bufferedRealtimeRef = useRef<Array<{
+    task: () => void;
+    kind?: "message";
+    roomId?: string;
+    messageId?: string;
+  }>>([]);
+  const flushingBufferedRef = useRef(false);
+  const canonicalBufferedRoomsRef = useRef<Set<string>>(new Set());
+  const canonicalBufferedSequencesRef = useRef<Map<string, number>>(new Map());
 
   const [isMounted, setIsMounted] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -728,6 +770,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesRef = useRef<Message[]>([]);
+  const readPositionsRef = useRef<Record<string, number>>({});
   const [groupReadStates, setGroupReadStates] = useState<Record<string, Record<string, string>>>({});
   const [activeRoomNicknames, setActiveRoomNicknames] = useState<Record<string, string>>({});
   const [uiLanguage, setUiLanguageState] = useState<UiLanguage>("zh-TW");
@@ -774,6 +817,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Deduplicate concurrent member loads for the same room.
     const request = fetchRoomMembers(token, roomId)
       .then((members) => {
+        for (const member of members) {
+          if (member.readPosition !== undefined) {
+            readPositionsRef.current[`${roomId}:${member.userId}`] = member.readPosition;
+          }
+        }
         setRooms((current) =>
           current.map((room) =>
             room.id === roomId ? { ...room, members } : room,
@@ -871,7 +919,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       }),
     );
-    setMessages(hydrateReplyTargets(roomMessages.flat()));
+    setMessages((current) => mergeMessages(current, roomMessages.flat()));
   }, [user.username]);
 
   useEffect(() => {
@@ -883,15 +931,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [activeRoomId, token, currentUserId, loadMessagesForRooms]);
 
-  const refreshRoomsAndFolders = async (authToken: string, userId = currentUserId) => {
+  const refreshRoomsAndFolders = async (authToken: string, userId = currentUserId, loadActiveMessages = true): Promise<ChatRoom[]> => {
     const [apiRooms, apiFolders] = await Promise.all([listRooms(authToken), listFolders(authToken)]);
     const nextRooms = mapRooms(apiRooms, apiFolders, roomsRef.current, userId);
 
     setFolders((current) => mapFolders(apiFolders, current));
     setRooms(nextRooms);
     const activeRoom = nextRooms.find((r) => r.id === activeRoomIdRef.current);
-    void loadMessagesForRooms(authToken, activeRoom ? [activeRoom] : [], userId);
+    if (loadActiveMessages) {
+      void loadMessagesForRooms(authToken, activeRoom ? [activeRoom] : [], userId);
+    }
     setRoomsInitialized(true);
+    return nextRooms;
   };
 
   const refreshSocialData = async (authToken: string, settings?: UserSettings, userId = currentUserId) => {
@@ -1014,7 +1065,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setRoomsInitialized(false);
         let currentToken = getActiveAccessToken();
         if (!currentToken) {
-          const refreshResult = await refreshTokens();
+          const refreshResult = await refreshTokensExclusive();
           if (cancelled) return;
           currentToken = refreshResult.token;
         }
@@ -1081,13 +1132,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const storedCursor = Number(sessionStorage.getItem(`near:syncCursor:${currentUserId}`) ?? 0);
     syncCursorRef.current = Number.isSafeInteger(storedCursor) && storedCursor >= 0 ? storedCursor : 0;
     bufferedRealtimeRef.current = [];
+    syncingRef.current = true;
     let disposed = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const socket = createChatSocket(token);
     socketRef.current = socket;
 
-    const enqueueRealtime = (task: () => void) => {
-      if (syncingRef.current) bufferedRealtimeRef.current.push(task);
+    const enqueueRealtime = (
+      task: () => void,
+      metadata: { kind?: "message"; roomId?: string; messageId?: string; changeSequence?: number } = {},
+    ) => {
+      if (syncingRef.current) bufferedRealtimeRef.current.push({ task, ...metadata });
       else task();
     };
 
@@ -1098,29 +1153,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     };
 
     const applySyncChanges = (changes: import('@shared/types').MessageChange[]) => {
-      setMessages((current) => {
-        let next = current;
-        for (const change of changes) {
+      for (const change of changes) advanceCursor(change.changeSequence);
+      setMessages((current) => mergeMessages(
+        current,
+        changes.map((change) => {
           const incoming = mapMessage(change.message, currentUserId);
-          const message = change.message.isRecalled
+          return change.message.isRecalled
             ? { ...incoming, content: '', attachments: [] }
             : incoming;
-          const existing = next.find((item) => item.id === message.id);
-          if (existing && (existing.changeSequence ?? 0) >= change.changeSequence) continue;
-          next = [...next.filter((item) => item.id !== message.id), message];
-          advanceCursor(change.changeSequence);
-        }
-        return hydrateReplyTargets(sortMessages(next));
-      });
+        }),
+      ));
     };
 
-    const synchronize = async () => {
+    let synchronizationInFlight: Promise<void> | null = null;
+    const runSynchronization = async () => {
       syncingRef.current = true;
       let synchronized = false;
       try {
         let hasMore = true;
         while (hasMore) {
           const response = await syncChanges(token, syncCursorRef.current, 250);
+          // The effect may have been replaced while the request was in flight.
+          // Do not let an obsolete connection mutate the new session's state.
+          if (disposed) return;
           applySyncChanges(response.changes);
           if (response.nextCursor > syncCursorRef.current) {
             syncCursorRef.current = response.nextCursor;
@@ -1128,6 +1183,43 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           }
           hasMore = response.hasMore && response.changes.length > 0;
         }
+        // Sync changes update message state, but room summaries contain the
+        // server's canonical unread/read projection. Refresh them once after
+        // the cursor has caught up so offline activity is visible in the
+        // sidebar even when the affected room is not open.
+        const canonicalRooms = await refreshRoomsAndFolders(token, currentUserId, false);
+        if (disposed) return;
+        const historyRestrictedRooms = new Set(
+          canonicalRooms.filter((room) => !room.viewHistory).map((room) => room.id),
+        );
+        if (historyRestrictedRooms.size > 0) {
+          setMessages((current) => current.filter((message) => !historyRestrictedRooms.has(message.roomId)));
+          const activeRoom = canonicalRooms.find((room) => room.id === activeRoomIdRef.current);
+          if (activeRoom) {
+            void loadMessagesForRooms(token, [activeRoom], currentUserId);
+          }
+        }
+        await refreshSocialData(token, undefined, currentUserId);
+        const bufferedMessageIdsByRoom = new Map<string, Set<string>>();
+        for (const buffered of bufferedRealtimeRef.current) {
+          if (buffered.kind !== "message" || !buffered.roomId || !buffered.messageId) continue;
+          const messageIds = bufferedMessageIdsByRoom.get(buffered.roomId) ?? new Set<string>();
+          messageIds.add(buffered.messageId);
+          bufferedMessageIdsByRoom.set(buffered.roomId, messageIds);
+        }
+        canonicalBufferedRoomsRef.current = new Set(
+          canonicalRooms
+            .filter((room) => {
+              const messageIds = bufferedMessageIdsByRoom.get(room.id);
+              return !!room.lastMessageId && !!messageIds?.has(room.lastMessageId);
+            })
+            .map((room) => room.id),
+        );
+        canonicalBufferedSequencesRef.current = new Map(
+          canonicalRooms
+            .filter((room) => room.lastMessageChangeSequence !== undefined)
+            .map((room) => [room.id, room.lastMessageChangeSequence!] as const),
+        );
         synchronized = true;
       } catch (error) {
         console.error('Realtime sync failed; reconnecting before applying buffered events:', error);
@@ -1136,21 +1228,43 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         if (synchronized) {
           syncingRef.current = false;
           const buffered = bufferedRealtimeRef.current.splice(0);
-          buffered.forEach((task) => task());
+          flushingBufferedRef.current = true;
+          try {
+            buffered.forEach(({ task }) => task());
+          } finally {
+            flushingBufferedRef.current = false;
+            canonicalBufferedRoomsRef.current.clear();
+            canonicalBufferedSequencesRef.current.clear();
+          }
         } else {
           // Do not advance the cursor from live events when the initial sync
           // failed: doing so could skip older durable changes on the retry.
-          bufferedRealtimeRef.current = [];
-          if (!disposed) {
-            socket.disconnect();
-            retryTimer = setTimeout(() => {
-              retryTimer = undefined;
-              if (!disposed) socket.connect();
-            }, 1_000);
-          }
+          socket.disconnect();
+          retryTimer = setTimeout(() => {
+            retryTimer = undefined;
+            if (!disposed) socket.connect();
+          }, 1_000);
           syncingRef.current = false;
         }
       }
+    };
+
+    // Socket.IO can emit multiple connect events during a reconnect race.
+    // One cursor must have one active sync request chain, otherwise two chains
+    // can page from the same cursor and flush buffered events out of order.
+    const synchronize = (): Promise<void> => {
+      if (synchronizationInFlight) return synchronizationInFlight;
+      synchronizationInFlight = runSynchronization();
+      const current = synchronizationInFlight;
+      void current.then(
+        () => {
+          if (synchronizationInFlight === current) synchronizationInFlight = null;
+        },
+        () => {
+          if (synchronizationInFlight === current) synchronizationInFlight = null;
+        },
+      );
+      return current;
     };
 
     const cleanupNewMessage = onNewMessage(socket, (payload) => enqueueRealtime(() => {
@@ -1160,10 +1274,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         existingMessage &&
         (existingMessage.changeSequence ?? 0) >= (incoming.changeSequence ?? 0)
       ) {
-        advanceCursor(incoming.changeSequence);
         return;
       }
-      advanceCursor(incoming.changeSequence);
       const incomingRoom = roomsRef.current.find((room) => room.id === incoming.roomId);
 
       if (
@@ -1185,10 +1297,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      setMessages((current) => {
-        const withoutDuplicate = current.filter((message) => message.id !== incoming.id);
-        return hydrateReplyTargets(sortMessages([...withoutDuplicate, incoming]));
-      });
+      setMessages((current) => mergeMessages(current, [incoming]));
 
       // Update the sender's read receipt (since they sent it, they've read it!)
       const senderId = incoming.senderId;
@@ -1209,9 +1318,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 ...room,
                 lastMessagePreview: summarizeMessagePreview(incoming),
                 lastMessageAt: incoming.timestamp,
+                lastMessageId: incoming.id,
+                lastMessageSequence: incoming.messageSequence,
+                lastMessageChangeSequence: incoming.changeSequence,
                 unreadCount:
                   activeRoomIdRef.current === room.id
                     ? 0
+                    : flushingBufferedRef.current && (
+                      (incoming.changeSequence !== undefined
+                        && (canonicalBufferedSequencesRef.current.get(room.id) ?? -1) >= incoming.changeSequence)
+                      || (incoming.changeSequence === undefined && canonicalBufferedRoomsRef.current.has(room.id))
+                    )
+                    ? (room.unreadCount ?? 0)
                     : incoming.senderId === currentUserId
                     ? (room.unreadCount ?? 0)
                     : (room.unreadCount ?? 0) + 1,
@@ -1222,12 +1340,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     : member
                 ),
               }
-            : room,
+          : room,
         ),
       );
-    }));
+    }, { kind: "message", roomId: payload.roomId, messageId: payload.messageId }));
     const cleanupRecall = onMessageRecalled(socket, (payload) => enqueueRealtime(() => {
-      advanceCursor(payload.changeSequence);
       setMessages((current) =>
         hydrateReplyTargets(
           current.map((message) =>
@@ -1246,6 +1363,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           ),
         ),
       );
+      setRooms((current) => current.map((room) =>
+        room.id === payload.roomId && room.lastMessageId === payload.messageId
+          ? {
+              ...room,
+              lastMessagePreview: '',
+              lastMessageSequence: payload.messageSequence ?? room.lastMessageSequence,
+              lastMessageChangeSequence: payload.changeSequence ?? room.lastMessageChangeSequence,
+            }
+          : room,
+      ));
     }));
     const cleanupUpdate = onMessageUpdated(socket, (updatedMessage) => enqueueRealtime(() => {
       if (
@@ -1257,21 +1384,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             .map((message) => message.changeSequence ?? 0),
         )
       ) {
-        advanceCursor(updatedMessage.changeSequence);
         return;
       }
-      advanceCursor(updatedMessage.changeSequence);
-      setMessages((current) =>
-        hydrateReplyTargets(
-          current.map((message) =>
-            message.id === updatedMessage.messageId
-              ? mapMessage(updatedMessage, currentUserId)
-              : message,
-          ),
-        ),
-      );
+      const incoming = mapMessage(updatedMessage, currentUserId);
+      setMessages((current) => mergeMessages(current, [incoming]));
+      setRooms((current) => current.map((room) =>
+        room.id === incoming.roomId && room.lastMessageId === incoming.id
+          ? {
+              ...room,
+              lastMessagePreview: summarizeMessagePreview(incoming),
+              lastMessageAt: incoming.timestamp,
+              lastMessageSequence: incoming.messageSequence,
+              lastMessageChangeSequence: incoming.changeSequence,
+            }
+          : room,
+      ));
     }));
-    const cleanupRead = onReadUpdate(socket, ({ roomId, userId, messageId }) => enqueueRealtime(() => {
+    const cleanupRead = onReadUpdate(socket, ({ roomId, userId, messageId, readPosition }) => enqueueRealtime(() => {
+      const positionKey = `${roomId}:${userId}`;
+      const previousPosition = readPositionsRef.current[positionKey] ?? 0;
+      if (readPosition !== undefined && readPosition < previousPosition) return;
+      if (readPosition !== undefined) {
+        readPositionsRef.current[positionKey] = Math.max(previousPosition, readPosition);
+      }
       setGroupReadStates((current) => ({
         ...current,
         [roomId]: {
@@ -1335,6 +1470,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
     const cleanupError = onSocketError(socket, (error) => {
       console.error("Socket error", error);
+    });
+    const cleanupDisconnect = onSocketDisconnect(socket, (reason) => {
+      if (!disposed && reason === 'io server disconnect') {
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          if (!disposed) socket.connect();
+        }, 1_000);
+      }
+    });
+    const cleanupConnectError = onSocketConnectError(socket, (error) => {
+      console.error("Socket connection failed", error.message, error.data);
+    });
+    const cleanupConnect = onSocketConnect(socket, () => {
+      syncingRef.current = true;
     });
     const cleanupFriendRequest = onFriendRequest(socket, (payload) => {
       const activeTok = tokenRef.current;
@@ -1426,6 +1575,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         );
       } else if (type === 'ROOM_SETTINGS_UPDATED') {
         const updatedRoom = payload;
+        const previousRoom = roomsRef.current.find((room) => room.id === roomId);
         setRooms((current) =>
           current.map((room) =>
             room.id === roomId
@@ -1437,9 +1587,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   viewHistory: updatedRoom.viewHistory,
                   isArchived: updatedRoom.isArchived,
                 }
-              : room
+            : room
           )
         );
+        if (previousRoom?.viewHistory !== updatedRoom.viewHistory) {
+          setMessages((current) => current.filter((message) => message.roomId !== roomId));
+          const activeTok = tokenRef.current;
+          if (activeTok) void refreshRoomsAndFolders(activeTok, currentUserId);
+        }
       } else if (type === 'ROOM_DELETED') {
         setRooms((current) => current.filter((r) => r.id !== roomId));
         if (activeRoomIdRef.current === roomId) {
@@ -1475,7 +1630,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    socket.on("connect", () => {
+    const cleanupRealtimeReady = onRealtimeReady(socket, () => {
       void synchronize();
     });
     socket.connect();
@@ -1489,6 +1644,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       cleanupRead();
       cleanupTyping();
       cleanupError();
+      cleanupDisconnect();
+      cleanupConnectError();
+      cleanupConnect();
+      cleanupRealtimeReady();
       cleanupFriendRequest();
       cleanupEmergencyAlert();
       cleanupUserStatus();
@@ -1519,13 +1678,36 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     router.push("/login");
   };
 
+  const applyCanonicalMessage = (apiMessage: MessageWithSender, updateRoomSummary = true) => {
+    const mapped = mapMessage(apiMessage, currentUserId);
+    const incoming = mapped.isRecalled
+      ? { ...mapped, content: '', attachments: [] }
+      : mapped;
+    setMessages((current) => mergeMessages(current, [incoming]));
+    if (updateRoomSummary) {
+      setRooms((current) => current.map((room) =>
+        room.id === incoming.roomId
+          ? {
+              ...room,
+              lastMessagePreview: summarizeMessagePreview(incoming),
+              lastMessageAt: incoming.timestamp,
+              lastMessageId: incoming.id,
+              lastMessageSequence: incoming.messageSequence,
+              lastMessageChangeSequence: incoming.changeSequence,
+              lastReadId: incoming.senderId === currentUserId ? incoming.id : room.lastReadId,
+            }
+          : room,
+      ));
+    }
+  };
+
   const handleSendMessage = (roomId: string, content: string, replyTarget: Message | null) => {
     if (!content.trim() || !token) return;
 
     void createMessage(token, roomId, {
       content,
       replyToId: replyTarget?.id,
-    }).catch((error) => console.error('Failed to send message:', error));
+    }).then((message) => applyCanonicalMessage(message)).catch((error) => console.error('Failed to send message:', error));
   };
 
   const handleTyping = (roomId: string, isTyping: boolean) => {
@@ -1550,7 +1732,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       content,
       replyToId: options?.replyTarget?.id,
       attachmentIds,
-    }).catch((error) => console.error('Failed to send attachment message:', error));
+    }).then((message) => applyCanonicalMessage(message)).catch((error) => console.error('Failed to send attachment message:', error));
   };
 
   const handleRecallMessage = (msgId: string) => {
@@ -1562,7 +1744,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       message.roomId,
       msgId,
       message.revision ?? 1,
-    ).catch((error) => console.error('Failed to recall message:', error));
+    ).then((updated) => applyCanonicalMessage(updated, false)).catch((error) => console.error('Failed to recall message:', error));
   };
 
   const handleUpdateMessage = (roomId: string, messageId: string, content: string) => {
@@ -1575,7 +1757,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       messageId,
       content,
       message.revision ?? 1,
-    ).catch((error) => console.error('Failed to edit message:', error));
+    ).then((updated) => applyCanonicalMessage(updated, false)).catch((error) => console.error('Failed to edit message:', error));
   };
 
   const handleUpdateProfile = async (profile: ProfileInput) => {
@@ -2106,15 +2288,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const nextRooms = current.map((room) => {
         const roomMessages = sortMessages(messagesByRoom[room.id] ?? []);
         const latestMessage = roomMessages.at(-1);
+        const canProjectLocalLatest = Boolean(
+          latestMessage
+          && (
+            room.lastMessageSequence === undefined
+            || latestMessage.messageSequence === undefined
+            || latestMessage.messageSequence >= room.lastMessageSequence
+          ),
+        );
+        const projectedLatest = canProjectLocalLatest ? latestMessage : undefined;
         const nextUnreadCount =
           activeRoomId === room.id ? 0 : (room.unreadCount ?? 0);
-        const nextPreview = latestMessage ? summarizeMessagePreview(latestMessage) : room.lastMessagePreview;
-        const nextLastMessageAt = latestMessage ? latestMessage.timestamp : room.lastMessageAt;
+        const nextPreview = projectedLatest ? summarizeMessagePreview(projectedLatest) : room.lastMessagePreview;
+        const nextLastMessageAt = projectedLatest ? projectedLatest.timestamp : room.lastMessageAt;
+        const nextLastMessageId = projectedLatest?.id ?? room.lastMessageId;
+        const nextLastMessageSequence = projectedLatest?.messageSequence ?? room.lastMessageSequence;
+        const nextLastMessageChangeSequence = projectedLatest?.changeSequence ?? room.lastMessageChangeSequence;
 
         if (
           room.unreadCount === nextUnreadCount &&
           room.lastMessagePreview === nextPreview &&
           room.lastMessageAt === nextLastMessageAt
+          && room.lastMessageId === nextLastMessageId
+          && room.lastMessageSequence === nextLastMessageSequence
+          && room.lastMessageChangeSequence === nextLastMessageChangeSequence
         ) {
           return room;
         }
@@ -2125,6 +2322,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           unreadCount: nextUnreadCount,
           lastMessagePreview: nextPreview,
           lastMessageAt: nextLastMessageAt,
+          lastMessageId: nextLastMessageId,
+          lastMessageSequence: nextLastMessageSequence,
+          lastMessageChangeSequence: nextLastMessageChangeSequence,
         };
       });
 

@@ -92,7 +92,7 @@ export interface Room {
 }
 
 export interface RoomSummary extends Room {
-  latestMessage?: Pick<Message, 'messageId' | 'senderId' | 'content' | 'sentAt'>;
+  latestMessage?: Pick<Message, 'messageId' | 'senderId' | 'content' | 'sentAt' | 'isRecalled' | 'messageSequence' | 'changeSequence' | 'revision'>;
   unreadCount: number;
   isOnline?: boolean;
   otherMemberId?: string;
@@ -217,26 +217,22 @@ export interface ApiError {
 // ---------------------------------------------------------------------------
 
 export interface ClientToServerEvents {
-  join_room:      (payload: { roomId: string }) => void;
-  leave_room:     (payload: { roomId: string }) => void;
-  send_message:   (payload: { roomId: string; content: string; replyTo?: string; attachmentIds?: string[] }) => void;
-  recall_message: (payload: { messageId: string }) => void;
-  update_message: (payload: { roomId: string; messageId: string; content: string }) => void;
-  typing:         (payload: { roomId: string; isTyping: boolean }) => void;
-  read_receipt:   (payload: { roomId: string; messageId: string }) => void;
+  /** Typing is ephemeral; all durable commands are REST requests. */
+  typing: (payload: { roomId: string; isTyping: boolean }) => void;
 }
 
 export interface ServerToClientEvents {
   new_message:      (payload: MessageWithSender) => void;
-  message_recalled: (payload: { messageId: string; messageSequence?: number; changeSequence?: number; revision?: number }) => void;
+  message_recalled: (payload: { roomId: string; messageId: string; messageSequence: number; changeSequence: number; revision: number }) => void;
   message_updated:  (payload: MessageWithSender) => void;
   user_typing:      (payload: { roomId: string; userId: string; isTyping: boolean }) => void;
   read_update:      (payload: { roomId: string; userId: string; messageId: string; readPosition?: number }) => void;
   room_update:      (payload: { type: string; roomId: string; data: any }) => void;
-  friend_request:   (payload: FriendRequest) => void;
+  friend_request:   (payload: FriendRequestEvent) => void;
   emergency_alert:  (payload: { userId: string; message: string }) => void;
   error:            (payload: ApiError) => void;
   user_status:      (payload: { userId: string; status: 'online' | 'offline' }) => void;
+  realtime_ready:   () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +262,11 @@ export interface FriendRequest {
   addresseeId: string;
   status: FriendshipStatus;
   createdAt: Date;
+}
+
+/** Socket notification status, including friendship lifecycle changes. */
+export interface FriendRequestEvent extends Omit<FriendRequest, 'status'> {
+  status: FriendshipStatus | 'rejected' | 'deleted' | 'unblocked';
 }
 
 export interface Folder {

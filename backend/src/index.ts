@@ -29,7 +29,10 @@ const io = realtime.io;
 if (require.main === module) {
   const stopJobs = startJobs({ repositories, services });
   void startServer({ server, config });
+  let shuttingDown = false;
   const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     stopJobs();
     publisher.shutdown(signal);
     server.close(() => process.exit(0));

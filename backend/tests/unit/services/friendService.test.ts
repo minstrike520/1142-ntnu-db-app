@@ -156,6 +156,24 @@ describe('friendService', () => {
     expect(privateRooms.markPrivateReadOnly).toHaveBeenCalledWith('u1', 'u2');
   });
 
+  it('removes the blocked user from the private room after the block is durable', async () => {
+    const mockRepo = {
+      blockUser: mock().mockResolvedValue(undefined),
+    } as any;
+    const privateRooms = { markPrivateReadOnly: mock().mockResolvedValue('private-room-1') };
+    const removeUserFromRoom = mock();
+    const service = makeFriendService(
+      mockRepo,
+      undefined,
+      privateRooms as any,
+      removeUserFromRoom,
+    );
+
+    await service.blockUser('u1', 'u2');
+
+    expect(removeUserFromRoom).toHaveBeenCalledWith('u2', 'private-room-1');
+  });
+
   it('getPendingRequests, getFriends and getBlockedUsers delegate to the repo', async () => {
     const mockRepo = {
       getPendingRequests: mock().mockResolvedValue(['p']),

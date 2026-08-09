@@ -65,6 +65,38 @@ export const onSocketError = (
   return () => socket.off('error', handler);
 };
 
+export const onSocketDisconnect = (
+  socket: ChatSocket,
+  handler: (reason: string) => void,
+): (() => void) => {
+  socket.on('disconnect', handler);
+  return () => socket.off('disconnect', handler);
+};
+
+export const onSocketConnect = (
+  socket: ChatSocket,
+  handler: () => void,
+): (() => void) => {
+  socket.on('connect', handler);
+  return () => socket.off('connect', handler);
+};
+
+export const onSocketConnectError = (
+  socket: ChatSocket,
+  handler: (error: Error & { data?: unknown }) => void,
+): (() => void) => {
+  socket.on('connect_error', handler);
+  return () => socket.off('connect_error', handler);
+};
+
+export const onRealtimeReady = (
+  socket: ChatSocket,
+  handler: () => void,
+): (() => void) => {
+  socket.on('realtime_ready', handler);
+  return () => socket.off('realtime_ready', handler);
+};
+
 export const onFriendRequest = (
   socket: ChatSocket,
   handler: ServerToClientEvents['friend_request'],
