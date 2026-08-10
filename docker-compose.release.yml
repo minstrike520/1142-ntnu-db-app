@@ -39,6 +39,13 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
       RATE_LIMIT_DISABLED: ${RATE_LIMIT_DISABLED:-false}
+      # This bundle publishes the backend port directly, so callers arrive as
+      # themselves and the peer address is the right thing to bucket on. Raise
+      # this to the number of reverse proxies you put in front — the client IP is
+      # then read that many entries from the right of X-Forwarded-For. Leaving it
+      # at 0 behind a proxy funnels every caller into one bucket; setting it above
+      # the real number of hops lets callers choose their own.
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
       CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
       ATTACHMENT_TYPE_RESTRICTION_ENABLED: ${ATTACHMENT_TYPE_RESTRICTION_ENABLED:-false}
       ATTACHMENT_ALLOWED_MIME_TYPES: ${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}

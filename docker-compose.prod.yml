@@ -1,8 +1,17 @@
+# Ingress topology: cloudflared is the only way in from the internet, and it
+# reaches `frontend` and `backend` over this compose network rather than through
+# any published host port. Every published port below is therefore bound to
+# 127.0.0.1 — enough for the documented local production walkthrough (browse
+# http://localhost:3005), and unreachable from the network, so nothing can skip
+# the tunnel to talk to the backend or the database directly.
+#
+# That binding is what makes trusting `X-Forwarded-For` safe here: see
+# TRUST_PROXY_HOPS on the backend service.
 services:
   db:
     image: postgres:18-alpine
     ports:
-      - "5435:5432"
+      - "127.0.0.1:5435:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -20,7 +29,7 @@ services:
       context: .
       dockerfile: ./backend/Dockerfile.prod
     ports:
-      - "4005:4000"
+      - "127.0.0.1:4005:4000"
     environment:
       - NODE_ENV=${NODE_ENV}
       - PORT=${PORT}
@@ -28,7 +37,18 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
-      - TRUST_PROXY=${TRUST_PROXY:-false}
+      # One trusted hop: cloudflared, which appends the caller's address to
+      # X-Forwarded-For. Without it every request through the tunnel is attributed
+      # to the tunnel container, so a single caller exhausting the auth limiter
+      # (10 attempts / 15 min) locks out logins for everyone.
+      #
+      # Written literally rather than as ${TRUST_PROXY_HOPS:-1}: Compose
+      # interpolates from the project .env, so a value carried over from
+      # .env.example would quietly replace this default and the deployment would
+      # be back to one shared bucket. Change it here, next to the topology that
+      # determines it — add a hop for each additional proxy you put in front, and
+      # verify with the procedure in docs/DEVELOPMENT.md.
+      - TRUST_PROXY_HOPS=1
       - CORS_ORIGINS=${CORS_ORIGINS}
       - ATTACHMENT_TYPE_RESTRICTION_ENABLED=${ATTACHMENT_TYPE_RESTRICTION_ENABLED:-false}
       - ATTACHMENT_ALLOWED_MIME_TYPES=${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
@@ -48,7 +68,7 @@ services:
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
     ports:
-      - "3005:3000"
+      - "127.0.0.1:3005:3000"
     environment:
       - NODE_ENV=${NODE_ENV}
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}

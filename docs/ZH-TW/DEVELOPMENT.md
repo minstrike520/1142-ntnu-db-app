@@ -82,6 +82,55 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 NEXT_PUBLIC_API_URL=http://localhost:4005
 ```
 
+### 正式環境入口拓撲與代理信任
+
+`docker-compose.prod.yml` 的所有主機連接埠都綁定在 `127.0.0.1`，因此文件記載的本機
+正式流程（`http://localhost:3005`）仍可運作，而外部網路唯一的入口是 Cloudflare
+Tunnel。`cloudflared` 是透過 compose 網路連到 `frontend:3000` 與 `backend:4000`，
+完全不經過已發布的主機連接埠。
+
+速率限制以來源 IP 分桶，因此必須知道呼叫端的真實位址。經過 tunnel 時，實際連線位址
+永遠是 `cloudflared` 容器，等於所有外部使用者共用同一個桶 —— 任何人 10 次登入失敗就
+會讓全服務被鎖 15 分鐘。`TRUST_PROXY_HOPS` 用來解決這件事：
+
+| 值 | 意義 |
+|----|------|
+| 未設定 / `0` | 不信任任何代理，直接採用 TCP 連線位址。開發堆疊與任何直連部署皆適用。 |
+| `n` | 前方有 `n` 層自行維運的反向代理，來源 IP 取 `X-Forwarded-For` 由**右**數來第 `n` 段。 |
+
+「由右數」是關鍵。`X-Forwarded-For` 只會被附加，呼叫端自行帶入的內容一定落在左側，
+只有最右邊 `n` 段是我們掌控的基礎設施寫入的。若改採最左段，任何呼叫端都能自選限流
+桶 —— 迴避自己的額度，或去消耗別人的。
+
+`docker-compose.prod.yml` 是直接寫死 `TRUST_PROXY_HOPS=1` 而非使用 `${...}`：Compose
+會讀取專案 `.env` 進行插值，若沿用 `.env.example` 的值會靜默覆寫此預設。前方每多一層
+代理就加一，並直接修改宣告該拓撲的 compose 檔。
+
+驗證部署確實以真實來源 IP 分桶：
+
+```bash
+# 1. 除 tunnel 外不應有其他途徑觸及 backend。在另一台機器上執行：
+curl -sS --max-time 5 http://<host>:4005/api/v1/auth/login   # 必須連線失敗
+curl -sS --max-time 5 http://<host>:5435                     # 必須連線失敗
+
+# 2. 經 tunnel 以單一用戶端耗盡 auth 限流額度。
+for i in $(seq 1 11); do
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<tunnel-host>/api/v1/auth/login \
+    -H 'Content-Type: application/json' -d '{"email":"nobody@example.com","password":"wrong"}'
+done
+# 預期先出現 401，額度用盡後轉為 429。
+
+# 3. 第二個用戶端（不同網路，例如手機行動網路）應仍取得 401 而非 429，代表分桶獨立。
+
+# 4. 偽造標頭不得建立新的桶。以已被限流的用戶端執行，應仍為 429：
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<tunnel-host>/api/v1/auth/login \
+  -H 'X-Forwarded-For: 203.0.113.7' \
+  -H 'Content-Type: application/json' -d '{"email":"nobody@example.com","password":"wrong"}'
+```
+
+若步驟 3 回傳 429，表示 hop 數設得太低；若步驟 4 回傳 401，表示設得太高。另外
+`RATE_LIMIT_DISABLED=true` 會整個跳過限流，測試前請先取消該設定。
+
 ### 環境變數規則
 1. **前端前綴**：任何需要在 Next.js 瀏覽器端讀取的環境變數，都必須加上 `NEXT_PUBLIC_` 前綴。
 2. **生產環境注入**：生產環境不應該依賴已提交的 `.env` 檔案，請改為透過雲端託管平台（例如 Vercel、AWS Secrets Manager）的設定來注入環境變數。
