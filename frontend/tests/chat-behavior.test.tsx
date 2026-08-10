@@ -9,7 +9,12 @@ import { useEffect } from "react";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { mountChatApp } from "./harness";
 import { ME_ID, makeMessage, messageId } from "./fixtures";
-import { __failNextRevisionCommand, __getApiCallLog } from "./mocks/api";
+import {
+  __failNextListMessages,
+  __failNextRevisionCommand,
+  __gateNextSync,
+  __getApiCallLog,
+} from "./mocks/api";
 import { useChat } from "@/context/ChatContext";
 
 describe("opening and switching rooms", () => {
@@ -141,6 +146,22 @@ describe("message revision conflicts", () => {
     await app.settle();
     expect(screen.queryByText(/message changed elsewhere/i)).toBeNull();
   });
+
+  test("does not claim the message was reloaded when the reload itself fails", async () => {
+    const target = messageId("room-1", 40);
+    const app = await mountChatApp("/chat/room-1", { probe: <ConflictProbe /> });
+
+    __failNextRevisionCommand(target);
+    __failNextListMessages();
+    act(() => {
+      recall!(target);
+    });
+    await app.settle();
+
+    // The stale revision is still on screen, so the notice must say so rather
+    // than promise a refresh that never landed.
+    expect(screen.getByText(/could not be reloaded/i)).toBeTruthy();
+  });
 });
 
 describe("typing indicator", () => {
@@ -197,6 +218,57 @@ describe("read receipts", () => {
     await app.settle();
 
     expect(screen.getByTitle("Member Two")).toBeTruthy();
+  });
+});
+
+describe("realtime sync recovery", () => {
+  let readStates: Record<string, Record<string, string>> = {};
+
+  function ReadStateProbe(): React.ReactElement {
+    const { groupReadStates } = useChat();
+    useEffect(() => {
+      readStates = groupReadStates;
+    }, [groupReadStates]);
+    return <div data-testid="read-state-probe" />;
+  }
+
+  test("keeps a read receipt that arrived while a failing sync was in flight", async () => {
+    const app = await mountChatApp("/chat/room-1", { probe: <ReadStateProbe /> });
+    const target = messageId("room-1", 40);
+    expect(readStates["room-1"]?.["m-2"]).not.toBe(target);
+
+    // Reconnect with the sync held open, so the read receipt lands in the
+    // buffer rather than being applied directly.
+    const failing = __gateNextSync();
+    act(() => {
+      app.socket().disconnect();
+      app.socket().connect();
+    });
+    act(() => {
+      app.socket().serverEmit("read_update", {
+        roomId: "room-1",
+        userId: "m-2",
+        messageId: target,
+      });
+    });
+
+    // Precondition: the receipt is buffered, not applied live.
+    expect(readStates["room-1"]?.["m-2"]).not.toBe(target);
+
+    // The sync fails. New-message events are dropped because the retry
+    // re-delivers them; a read receipt never is, so it has to survive.
+    await act(async () => {
+      failing.fail();
+      await Promise.resolve();
+    });
+    await app.settle();
+
+    act(() => {
+      app.socket().connect();
+    });
+    await app.settle();
+
+    expect(readStates["room-1"]?.["m-2"]).toBe(target);
   });
 });
 

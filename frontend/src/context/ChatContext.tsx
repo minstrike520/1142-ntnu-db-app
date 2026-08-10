@@ -1243,11 +1243,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         } else {
           // Do not advance the cursor from live events when the initial sync
           // failed: doing so could skip older durable changes on the retry.
-          // The buffered events are dropped with the cursor they belong to.
-          // Replaying them after a later successful sync would double-count
-          // unread messages, and nothing is lost: the reconnect re-syncs from
-          // the unadvanced cursor, which still covers every buffered change.
-          bufferedRealtimeRef.current.length = 0;
+          //
+          // Only the new-message tasks are dropped. The retry re-syncs from
+          // the unadvanced cursor and re-delivers every durable change, so
+          // replaying those would double-count unread messages while adding
+          // nothing. Everything else — read receipts above all — is never
+          // re-delivered by sync, and the post-sync room refresh reuses the
+          // cached member list rather than reloading read positions, so
+          // dropping them would leave peer read indicators stale until an
+          // unrelated member fetch happened to correct them. Recall and edit
+          // tasks are guarded by `changeSequence`, so a late replay of one
+          // the sync already applied is a no-op.
+          bufferedRealtimeRef.current = bufferedRealtimeRef.current
+            .filter((buffered) => buffered.kind !== "message");
           canonicalBufferedRoomsRef.current.clear();
           canonicalBufferedSequencesRef.current.clear();
           socket.disconnect();
@@ -1754,15 +1762,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
    */
   const handleRevisionConflict = async (
     roomId: string,
+    messageId: string,
     error: unknown,
     noticeKey: string,
   ): Promise<void> => {
     if (!(error instanceof ApiError) || error.status !== 409) throw error;
-    const room = roomsRef.current.find((item) => item.id === roomId);
-    if (token && room) {
-      await loadMessagesForRooms(token, [room], currentUserId);
+    // Only promise the user a refreshed message once the canonical row is
+    // actually back in state. The fetch can fail, and the message can sit
+    // outside the page it returns — in both cases the stale revision is still
+    // on screen, and a notice claiming otherwise would be a lie.
+    let refreshed = false;
+    if (token) {
+      try {
+        const canonical = (await listMessages(token, roomId, { limit: 50 }))
+          .find((row) => row.messageId === messageId);
+        if (canonical) {
+          applyCanonicalMessage(canonical, false);
+          refreshed = true;
+        }
+      } catch (reloadError) {
+        console.error('Failed to reload the conflicted message:', reloadError);
+      }
     }
-    setMessageNoticeKey(noticeKey);
+    setMessageNoticeKey(refreshed ? noticeKey : 'chatroom.conflictReloadFailed');
   };
 
   const handleRecallMessage = (msgId: string) => {
@@ -1776,7 +1798,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       message.revision ?? 1,
     )
       .then((updated) => applyCanonicalMessage(updated, false))
-      .catch((error) => handleRevisionConflict(message.roomId, error, 'chatroom.recallConflict'))
+      .catch((error) => handleRevisionConflict(message.roomId, msgId, error, 'chatroom.recallConflict'))
       .catch((error) => console.error('Failed to recall message:', error));
   };
 
@@ -1792,7 +1814,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       message.revision ?? 1,
     )
       .then((updated) => applyCanonicalMessage(updated, false))
-      .catch((error) => handleRevisionConflict(roomId, error, 'chatroom.editConflict'))
+      .catch((error) => handleRevisionConflict(roomId, messageId, error, 'chatroom.editConflict'))
       .catch((error) => console.error('Failed to edit message:', error));
   };
 

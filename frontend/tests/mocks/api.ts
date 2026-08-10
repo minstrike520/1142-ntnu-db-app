@@ -52,6 +52,13 @@ export const __failNextRevisionCommand = (messageId: string): void => {
   conflictingMessageIds.add(messageId);
 };
 
+/** When set, the next listMessages call rejects (simulates a failed reload). */
+let failNextListMessages = false;
+
+export const __failNextListMessages = (): void => {
+  failNextListMessages = true;
+};
+
 let activeAccessToken: string | null = TEST_TOKEN;
 let settingsState: UserSettings = { ...mySettings };
 
@@ -66,6 +73,8 @@ export const __resetApiMock = (): void => {
   settingsState = { ...mySettings };
   apiCallLog.length = 0;
   conflictingMessageIds.clear();
+  failNextListMessages = false;
+  syncGate = null;
 };
 
 export const getApiBaseUrl = (): string => "http://mock-api.test";
@@ -198,6 +207,10 @@ export const listMessages = async (
   roomId: string,
   options?: { limit?: number },
 ): Promise<MessageWithSender[]> => {
+  if (failNextListMessages) {
+    failNextListMessages = false;
+    throw new ApiError("Service unavailable", 503);
+  }
   const log = messagesByRoom[roomId] ?? [];
   const limit = options?.limit ?? 50;
   // The real API returns newest-first; ChatContext reverses it back.
@@ -260,14 +273,34 @@ export const markRoomRead = async (
   return { ...membersByRoom[roomId]![0], lastReadId: messageId };
 };
 
+/**
+ * Test control over the next syncChanges call: the returned promise stays
+ * pending until the test releases it, which is the only way to emit realtime
+ * events while ChatContext still considers a sync in flight.
+ */
+let syncGate: Promise<{ failed: boolean }> | null = null;
+
+export const __gateNextSync = (): { fail: () => void; succeed: () => void } => {
+  let release!: (outcome: { failed: boolean }) => void;
+  syncGate = new Promise<{ failed: boolean }>((resolve) => { release = resolve; });
+  return {
+    fail: () => release({ failed: true }),
+    succeed: () => release({ failed: false }),
+  };
+};
+
 export const syncChanges = async (
   _token: string,
   cursor: number,
-): Promise<{ changes: []; nextCursor: number; hasMore: false }> => ({
-  changes: [],
-  nextCursor: cursor,
-  hasMore: false,
-});
+): Promise<{ changes: []; nextCursor: number; hasMore: false }> => {
+  const gate = syncGate;
+  if (gate) {
+    syncGate = null;
+    const outcome = await gate;
+    if (outcome.failed) throw new ApiError("Sync failed", 503);
+  }
+  return { changes: [], nextCursor: cursor, hasMore: false };
+};
 
 export const listFolders = async (): Promise<Folder[]> => folders;
 

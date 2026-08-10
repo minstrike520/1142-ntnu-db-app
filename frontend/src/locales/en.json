@@ -229,7 +229,8 @@
     "newMessages": "New Messages",
     "editConflict": "This message changed elsewhere. The latest version has been loaded — please try your edit again.",
     "recallConflict": "This message changed elsewhere. The latest version has been loaded — please try recalling it again.",
-    "dismissNotice": "Dismiss"
+    "dismissNotice": "Dismiss",
+    "conflictReloadFailed": "This message changed elsewhere and could not be reloaded. Please refresh the page before trying again."
   },
   "profileCard": {
     "myInfo": "My Info",
