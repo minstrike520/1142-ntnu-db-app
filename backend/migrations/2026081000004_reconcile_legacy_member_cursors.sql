@@ -1,3 +1,4 @@
+-- Up Migration
 -- 2026081000003 is additive and may already have run in a deployment before
 -- this cursor reconciliation was shipped. Repeat the idempotent member
 -- updates so both upgrade paths preserve the old visibility/read semantics.

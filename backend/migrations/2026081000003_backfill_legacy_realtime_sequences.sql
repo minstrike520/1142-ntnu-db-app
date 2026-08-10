@@ -1,3 +1,4 @@
+-- Up Migration
 -- Existing rows created before realtime durability have zero ordering fields.
 -- Fill room-local order only for rooms that are entirely legacy. Mixed rooms
 -- already contain durable immutable sequences; rewriting those values would

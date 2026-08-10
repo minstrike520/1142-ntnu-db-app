@@ -1,3 +1,4 @@
+-- Up Migration
 -- 1000003 originally rebuilt every room. Repair only still-legacy rooms in
 -- deployments that have not yet issued durable sequences there; never rewrite
 -- an already durable sequence held by a client cursor.
