@@ -132,25 +132,28 @@ export function makeFriendService(
         throw new ValidationError('Cannot block yourself');
       }
       const block = async () => {
-        // The durable block row is written first so a later failure can never
-        // leave the room read-only and unsubscribed with no block record to
-        // undo it. Ordering it first is also safe for the live transport:
-        // `blockUser` and message authorization take the same pair advisory
-        // lock and authorization re-reads `blocks` inside its own transaction,
-        // so once the block commits no further message can be published to
-        // this room. The read-only flag and the socket revocation below are
-        // the cleanup half of the same state change.
         // Writing the block is the whole durable half of this operation: the
         // `blocks` insert trigger closes the private room inside the same
         // transaction, so this flow must not set the read-only flag itself.
         // Two writers for one invariant is what previously let a concurrent
         // unblock reopen the room and then have this request re-close it,
-        // leaving it read-only with no block row to undo it.
+        // leaving it read-only with no block row to undo it. Ordering the
+        // block first is also what makes the live transport safe: `blockUser`
+        // and message authorization take the same pair advisory lock, and
+        // authorization re-reads `blocks` in its own transaction, so once the
+        // block commits nothing further can be published to this room.
         await repo.blockUser(userId, targetUserId);
         // The pair mutex is process-local and `blockUser`'s advisory lock ends
         // with its transaction, so the block can already be lifted by another
         // process. A null here means exactly that, and the room keeps its
         // subscriptions because it is legitimately open again.
+        //
+        // Known residual window: the block can also be lifted between this
+        // lookup and the revocation below, in which case both users are
+        // dropped from a room that has legitimately reopened. That is
+        // self-healing — reconnecting re-derives subscriptions from durable
+        // membership — and closing it properly needs a cross-process lock held
+        // across the whole flow, which is deliberately out of scope here.
         const privateRoomId = privateRooms?.findPrivateRoomIdIfBlocked
           ? await privateRooms.findPrivateRoomIdIfBlocked(userId, targetUserId)
           : await privateRooms?.markPrivateReadOnly(userId, targetUserId);
