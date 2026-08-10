@@ -519,6 +519,30 @@ describe('userService', () => {
       });
     });
 
+    it('keeps delivering to the remaining contacts when one delivery throws', async () => {
+      mockRepo.findById.mockResolvedValue(inactiveUser);
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      emergencyContactRepo.releaseAlertIfNew = mock().mockResolvedValue(undefined);
+      emergencyContactRepo.completeAlert = mock().mockResolvedValue(undefined);
+      emergencyContactRepo.findByUserId.mockResolvedValue([
+        { userId: 'u1', contactId: 'u2', message: 'inactive', createdAt: new Date() },
+        { userId: 'u1', contactId: 'u3', message: 'inactive', createdAt: new Date() },
+      ]);
+      notifyEmergencyContact.mockImplementation(async (contactId: string) => {
+        if (contactId === 'u2') throw new Error('persistence failed');
+      });
+
+      const result = await userService.checkInactivity('u1', new Date('2026-01-04T00:00:00.000Z'));
+
+      expect(notifyEmergencyContact).toHaveBeenCalledTimes(2);
+      expect(result.recipients).toEqual(['u3']);
+      expect(result.failed).toEqual(['u2']);
+      // The incident is still owed to u2, so the reservation is released for
+      // a later retry instead of being marked complete.
+      expect(emergencyContactRepo.releaseAlertIfNew).toHaveBeenCalled();
+      expect(emergencyContactRepo.completeAlert).not.toHaveBeenCalled();
+    });
+
     it('does not alert below the inactivity threshold', async () => {
       mockRepo.findById.mockResolvedValue(inactiveUser);
 

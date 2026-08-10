@@ -131,16 +131,20 @@ export function makeFriendService(
         throw new ValidationError('Cannot block yourself');
       }
       const block = async () => {
-        // Make the room reject new messages and remove its live subscribers
-        // before the durable block row commits. An in-flight message can then
-        // either finish before revocation or find the read-only room; it
-        // cannot be published to a socket that remains subscribed afterward.
+        // The durable block row is written first so a later failure can never
+        // leave the room read-only and unsubscribed with no block record to
+        // undo it. Ordering it first is also safe for the live transport:
+        // `blockUser` and message authorization take the same pair advisory
+        // lock and authorization re-reads `blocks` inside its own transaction,
+        // so once the block commits no further message can be published to
+        // this room. The read-only flag and the socket revocation below are
+        // the cleanup half of the same state change.
+        await repo.blockUser(userId, targetUserId);
         const privateRoomId = await privateRooms?.markPrivateReadOnly(userId, targetUserId);
         if (privateRoomId) {
           await removeUserFromRoom?.(userId, privateRoomId);
           await removeUserFromRoom?.(targetUserId, privateRoomId);
         }
-        await repo.blockUser(userId, targetUserId);
         notifyUser?.(targetUserId, 'friend_request', {
           requesterId: userId,
           addresseeId: targetUserId,

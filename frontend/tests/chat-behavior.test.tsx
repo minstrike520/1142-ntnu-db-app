@@ -5,10 +5,12 @@
  * switching so the render-performance fixes cannot change semantics.
  */
 import { describe, expect, test } from "vitest";
+import { useEffect } from "react";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { mountChatApp } from "./harness";
 import { ME_ID, makeMessage, messageId } from "./fixtures";
-import { __getApiCallLog } from "./mocks/api";
+import { __failNextRevisionCommand, __getApiCallLog } from "./mocks/api";
+import { useChat } from "@/context/ChatContext";
 
 describe("opening and switching rooms", () => {
   test("shows the active room's messages and members panel", async () => {
@@ -106,6 +108,38 @@ describe("receiving and sending messages", () => {
     expect(screen.getByText("Message recalled")).toBeTruthy();
     // The body is gone from the conversation; the sidebar preview may remain.
     expect(screen.queryAllByText("Message 40 in room-1").length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("message revision conflicts", () => {
+  let recall: ((messageId: string) => void) | null = null;
+
+  function ConflictProbe(): React.ReactElement {
+    const { handleRecallMessage } = useChat();
+    useEffect(() => {
+      recall = handleRecallMessage;
+    }, [handleRecallMessage]);
+    return <div data-testid="conflict-probe" />;
+  }
+
+  test("tells the user and reloads the room when the server rejects a stale revision", async () => {
+    const target = messageId("room-1", 40);
+    const app = await mountChatApp("/chat/room-1", { probe: <ConflictProbe /> });
+
+    __failNextRevisionCommand(target);
+    act(() => {
+      recall!(target);
+    });
+    await app.settle();
+
+    // A 409 used to be logged and swallowed, leaving the user staring at a
+    // message the server had already changed.
+    expect(screen.getByText(/message changed elsewhere/i)).toBeTruthy();
+    expect(__getApiCallLog("recallMessage").length).toBe(1);
+
+    fireEvent.click(screen.getByText("Dismiss"));
+    await app.settle();
+    expect(screen.queryByText(/message changed elsewhere/i)).toBeNull();
   });
 });
 

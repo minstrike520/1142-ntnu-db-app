@@ -34,6 +34,24 @@ import {
   roomSummaries,
 } from "../fixtures";
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+/** Message ids whose next edit/recall must fail with a 409 revision conflict. */
+const conflictingMessageIds = new Set<string>();
+
+export const __failNextRevisionCommand = (messageId: string): void => {
+  conflictingMessageIds.add(messageId);
+};
+
 let activeAccessToken: string | null = TEST_TOKEN;
 let settingsState: UserSettings = { ...mySettings };
 
@@ -47,6 +65,7 @@ export const __resetApiMock = (): void => {
   activeAccessToken = TEST_TOKEN;
   settingsState = { ...mySettings };
   apiCallLog.length = 0;
+  conflictingMessageIds.clear();
 };
 
 export const getApiBaseUrl = (): string => "http://mock-api.test";
@@ -211,6 +230,9 @@ export const editMessage = async (
   revision: number,
 ): Promise<MessageWithSender> => {
   apiCallLog.push({ fn: "editMessage", args: [roomId, messageId, content, revision] });
+  if (conflictingMessageIds.delete(messageId)) {
+    throw new ApiError("Message revision is stale", 409);
+  }
   const existing = (messagesByRoom[roomId] ?? []).find((message) => message.messageId === messageId);
   return { ...(existing ?? messagesByRoom["room-1"]![0]), content, revision: revision + 1 };
 };
@@ -222,6 +244,9 @@ export const recallMessage = async (
   revision: number,
 ): Promise<MessageWithSender> => {
   apiCallLog.push({ fn: "recallMessage", args: [roomId, messageId, revision] });
+  if (conflictingMessageIds.delete(messageId)) {
+    throw new ApiError("Message revision is stale", 409);
+  }
   const existing = (messagesByRoom[roomId] ?? []).find((message) => message.messageId === messageId);
   return { ...(existing ?? messagesByRoom["room-1"]![0]), isRecalled: true, revision: revision + 1 };
 };

@@ -156,4 +156,65 @@ describe('attachSockets', () => {
       );
     });
   });
+  describe('session limit', () => {
+    const makeSocket = (id: string) => ({
+      id,
+      data: { user: { userId: 'user-1', name: 'Alice' } },
+      join: mock(),
+      leave: mock(),
+      emit: mock(),
+      to: mock(() => ({ emit: mock() })),
+      on: mock(),
+    });
+
+    const attachLimited = (limit: string) => {
+      const previous = process.env.MAX_SESSIONS_PER_USER;
+      process.env.MAX_SESSIONS_PER_USER = limit;
+      let middleware: any;
+      let connect: any;
+      const io = {
+        use: mock((fn: any) => { middleware = fn; }),
+        on: mock((event: string, handler: any) => {
+          if (event === 'connection') connect = handler;
+        }),
+        to: mock(() => ({ emit: mock() })),
+      } as unknown as ChatServer;
+      attachSockets(io, { roomMemberRepository: roomMemberRepo });
+      process.env.MAX_SESSIONS_PER_USER = previous;
+      return { middleware: middleware!, connect: connect! };
+    };
+
+    it('reserves a slot during the handshake so concurrent handshakes cannot overshoot', () => {
+      const { middleware } = attachLimited('2');
+      const results: Array<Error | undefined> = [];
+
+      // Three handshakes complete their middleware before any of them reaches
+      // the connection handler — the case that made the limit unenforceable.
+      for (const id of ['s1', 's2', 's3']) {
+        middleware(makeSocket(id), (err?: Error) => results.push(err));
+      }
+
+      expect(results[0]).toBeUndefined();
+      expect(results[1]).toBeUndefined();
+      expect(results[2]?.message).toBe('Session limit reached');
+    });
+
+    it('frees the reserved slot when the session disconnects', () => {
+      const { middleware, connect } = attachLimited('1');
+      const first = makeSocket('s1');
+      const firstHandlers: Record<string, any> = {};
+      first.on = mock((event: string, handler: any) => { firstHandlers[event] = handler; }) as any;
+
+      middleware(first, () => {});
+      connect(first);
+      const blocked: Array<Error | undefined> = [];
+      middleware(makeSocket('s2'), (err?: Error) => blocked.push(err));
+      expect(blocked[0]?.message).toBe('Session limit reached');
+
+      firstHandlers.disconnect();
+      const afterDisconnect: Array<Error | undefined> = [];
+      middleware(makeSocket('s3'), (err?: Error) => afterDisconnect.push(err));
+      expect(afterDisconnect[0]).toBeUndefined();
+    });
+  });
 });

@@ -49,6 +49,9 @@ export interface AttachmentRow {
   uploaded_at: Date;
 }
 
+/** The attachment columns a Message Change snapshot stores inline. */
+type AttachmentSnapshotRow = Omit<AttachmentRow, 'message_id'>;
+
 interface MessageChangeRelationRow {
   attachment_id?: string;
   message_id?: string | null;
@@ -415,23 +418,107 @@ export class MessageRepository implements IMessageRepository {
         }
       }
 
-      const rows = await tx<{ message_id: string; change_sequence: number | string }[]>`
-        INSERT INTO messages (
-          room_id, sender_id, content, reply_to_id, message_sequence, change_sequence, revision, command_id
-        )
-        SELECT
-          ${data.roomId}, ${data.senderId}, ${data.content}, ${data.replyToId ?? null},
-          counters.message_sequence + 1,
-          counters.change_sequence + 1,
-          1,
-          ${data.commandId ?? null}
-        FROM (
-          SELECT message_sequence, change_sequence
-          FROM realtime_counters
-          WHERE counter_id = true
+      // Everything that can be validated without the global counter is done
+      // before it is touched. Claiming the attachments here takes only the
+      // per-attachment row locks and leaves the rows pinned for the write
+      // below, so the counter's critical section does not have to pay for it.
+      const uniqueAttachmentIds = data.attachmentIds ? [...new Set(data.attachmentIds)] : [];
+      let attachmentSnapshot: AttachmentSnapshotRow[] = [];
+      if (uniqueAttachmentIds.length > 0) {
+        const pgAttIds = `{${uniqueAttachmentIds.join(',')}}`;
+        attachmentSnapshot = await tx<AttachmentSnapshotRow[]>`
+          SELECT attachment_id, uploaded_by, file_type, original_name, uploaded_at
+          FROM attachments
+          WHERE attachment_id = ANY(${pgAttIds}::uuid[])
+            AND message_id IS NULL
+            AND uploaded_by = ${data.senderId}
+          ORDER BY uploaded_at, attachment_id
           FOR UPDATE
-        ) counters
-        ON CONFLICT (sender_id, command_id) WHERE command_id IS NOT NULL DO NOTHING
+        `;
+        if (attachmentSnapshot.length !== uniqueAttachmentIds.length) {
+          throw new ValidationError('Attachments must exist and must not already belong to a message');
+        }
+      }
+      const uniqueMentions = data.mentions ? [...new Set(data.mentions)].sort() : [];
+
+      // One statement holds the counter row lock, and it is the last write of
+      // the transaction. Postgres keeps a row lock until commit, so the only
+      // way to stop every message, membership and role write in the process
+      // from serializing behind this row is to keep the window between taking
+      // the lock and committing as small as a single round trip. The change
+      // snapshot is therefore built from values already known here rather than
+      // by re-reading the rows the sibling CTEs have just written — a CTE
+      // cannot see its siblings' output.
+      const pgMentionIds = `{${uniqueMentions.join(',')}}`;
+      const pgClaimedAttachmentIds = `{${attachmentSnapshot.map((row) => row.attachment_id).join(',')}}`;
+      const attachmentsJson = JSON.stringify(attachmentSnapshot.map((row) => ({
+        attachment_id: row.attachment_id,
+        uploaded_by: row.uploaded_by,
+        file_type: row.file_type,
+        original_name: row.original_name,
+        uploaded_at: row.uploaded_at,
+      })));
+      const rows = await tx<{ message_id: string; change_sequence: number | string }[]>`
+        WITH seq AS (
+          UPDATE realtime_counters
+          SET message_sequence = message_sequence + 1,
+              change_sequence = change_sequence + 1
+          WHERE counter_id = true
+            AND NOT EXISTS (
+              SELECT 1 FROM messages
+              WHERE sender_id = ${data.senderId} AND command_id = ${data.commandId ?? null}
+            )
+          RETURNING message_sequence, change_sequence
+        ),
+        created AS (
+          INSERT INTO messages (
+            room_id, sender_id, content, reply_to_id, message_sequence, change_sequence, revision, command_id
+          )
+          SELECT
+            ${data.roomId}, ${data.senderId}, ${data.content}, ${data.replyToId ?? null},
+            seq.message_sequence,
+            seq.change_sequence,
+            1,
+            ${data.commandId ?? null}
+          FROM seq
+          ON CONFLICT (sender_id, command_id) WHERE command_id IS NOT NULL DO NOTHING
+          RETURNING message_id, room_id, sender_id, content, reply_to_id,
+                    is_recalled, sent_at, message_sequence, change_sequence, revision
+        ),
+        mentioned AS (
+          INSERT INTO message_mentions (message_id, user_id)
+          SELECT created.message_id, mention
+          FROM created
+          CROSS JOIN unnest(${pgMentionIds}::uuid[]) AS mention
+          RETURNING user_id
+        ),
+        claimed AS (
+          UPDATE attachments a
+          SET message_id = created.message_id
+          FROM created
+          WHERE a.attachment_id = ANY(${pgClaimedAttachmentIds}::uuid[])
+            AND a.message_id IS NULL
+          RETURNING a.attachment_id
+        )
+        INSERT INTO message_changes (
+          change_sequence, message_id, room_id, message_sequence, revision,
+          change_type, actor_id, command_id, sender_id, content, is_recalled,
+          reply_to_id, sent_at, mentions, attachments
+        )
+        SELECT created.change_sequence, created.message_id, created.room_id,
+          created.message_sequence, created.revision, 'created', created.sender_id,
+          ${data.commandId ?? null}, created.sender_id, created.content,
+          created.is_recalled, created.reply_to_id, created.sent_at,
+          ${JSON.stringify(uniqueMentions)}::text::jsonb,
+          COALESCE((
+            SELECT jsonb_agg(
+              entry || jsonb_build_object('message_id', created.message_id)
+              ORDER BY entry_order
+            )
+            FROM jsonb_array_elements(${attachmentsJson}::text::jsonb)
+              WITH ORDINALITY AS claimed_attachment(entry, entry_order)
+          ), '[]'::jsonb)
+        FROM created
         RETURNING message_id, change_sequence
       `;
       if (rows.length === 0) {
@@ -451,66 +538,6 @@ export class MessageRepository implements IMessageRepository {
       }
       createdMessageId = rows[0].message_id;
       responseChangeSequence = Number(rows[0].change_sequence);
-
-      await tx`
-        UPDATE realtime_counters
-        SET message_sequence = message_sequence + 1,
-            change_sequence = change_sequence + 1
-        WHERE counter_id = true
-      `;
-
-      if (data.mentions && data.mentions.length > 0) {
-        for (const userId of data.mentions) {
-          await tx`
-            INSERT INTO message_mentions (message_id, user_id)
-            VALUES (${createdMessageId}, ${userId})
-          `;
-        }
-      }
-
-      if (data.attachmentIds && data.attachmentIds.length > 0) {
-        const pgAttIds = `{${data.attachmentIds.join(',')}}`;
-        const updatedAtts = await tx<{ attachment_id: string }[]>`
-          UPDATE attachments SET message_id = ${createdMessageId}
-          WHERE attachment_id = ANY(${pgAttIds}::uuid[])
-            AND message_id IS NULL
-            AND uploaded_by = ${data.senderId}
-          RETURNING attachment_id
-        `;
-        if (updatedAtts.length !== new Set(data.attachmentIds).size) {
-          throw new ValidationError('Attachments must exist and must not already belong to a message');
-        }
-      }
-
-      await tx`
-        INSERT INTO message_changes (
-          change_sequence, message_id, room_id, message_sequence, revision,
-          change_type, actor_id, command_id, sender_id, content, is_recalled,
-          reply_to_id, sent_at, mentions, attachments
-        )
-        SELECT m.change_sequence, m.message_id, m.room_id, m.message_sequence,
-          m.revision, 'created', m.sender_id, ${data.commandId ?? null},
-          m.sender_id, m.content, m.is_recalled, m.reply_to_id, m.sent_at,
-          COALESCE((
-            SELECT jsonb_agg(mm.user_id ORDER BY mm.user_id)
-            FROM message_mentions mm
-            WHERE mm.message_id = m.message_id
-          ), '[]'::jsonb),
-          COALESCE((
-            SELECT jsonb_agg(jsonb_build_object(
-              'attachment_id', a.attachment_id,
-              'message_id', a.message_id,
-              'uploaded_by', a.uploaded_by,
-              'file_type', a.file_type,
-              'original_name', a.original_name,
-              'uploaded_at', a.uploaded_at
-            ) ORDER BY a.uploaded_at, a.attachment_id)
-            FROM attachments a
-            WHERE a.message_id = m.message_id
-          ), '[]'::jsonb)
-        FROM messages m
-        WHERE m.message_id = ${createdMessageId}
-      `;
     });
 
     const message = responseChangeSequence !== undefined
@@ -605,34 +632,40 @@ export class MessageRepository implements IMessageRepository {
         return;
       }
 
+      // One statement, and the last write of the transaction: the counter row
+      // lock is what serializes every durable write in the process, so it is
+      // taken as late as possible and released at the commit that follows.
       const next = await tx<{ change_sequence: number | string }[]>`
-        UPDATE realtime_counters
-        SET change_sequence = change_sequence + 1
-        WHERE counter_id = true
-        RETURNING change_sequence
-      `;
-      const changeSequence = next[0].change_sequence;
-      responseChangeSequence = Number(changeSequence);
-      await tx`
-        UPDATE messages
-        SET is_recalled = true,
-            change_sequence = ${changeSequence},
-            revision = revision + 1
-        WHERE message_id = ${messageId}
-      `;
-      await tx`
+        WITH seq AS (
+          UPDATE realtime_counters
+          SET change_sequence = change_sequence + 1
+          WHERE counter_id = true
+          RETURNING change_sequence
+        ),
+        recalled AS (
+          UPDATE messages
+          SET is_recalled = true,
+              change_sequence = seq.change_sequence,
+              revision = messages.revision + 1
+          FROM seq
+          WHERE messages.message_id = ${messageId}
+          RETURNING messages.message_id, messages.room_id, messages.message_sequence,
+                    messages.revision, messages.sender_id, messages.content,
+                    messages.reply_to_id, messages.sent_at, messages.change_sequence
+        )
         INSERT INTO message_changes (
           change_sequence, message_id, room_id, message_sequence, revision,
           change_type, actor_id, command_id, sender_id, content, is_recalled,
           reply_to_id, sent_at, mentions, attachments
         )
-        SELECT ${changeSequence}, message_id, room_id, message_sequence,
-          revision, 'recalled', ${actorId ?? null}, ${commandId ?? null},
-          sender_id, content, true, reply_to_id, sent_at,
+        SELECT recalled.change_sequence, recalled.message_id, recalled.room_id,
+          recalled.message_sequence, recalled.revision, 'recalled', ${actorId ?? null},
+          ${commandId ?? null}, recalled.sender_id, recalled.content, true,
+          recalled.reply_to_id, recalled.sent_at,
           COALESCE((
             SELECT jsonb_agg(mm.user_id ORDER BY mm.user_id)
             FROM message_mentions mm
-            WHERE mm.message_id = messages.message_id
+            WHERE mm.message_id = recalled.message_id
           ), '[]'::jsonb),
           COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
@@ -644,10 +677,12 @@ export class MessageRepository implements IMessageRepository {
               'uploaded_at', a.uploaded_at
             ) ORDER BY a.uploaded_at, a.attachment_id)
             FROM attachments a
-            WHERE a.message_id = messages.message_id
+            WHERE a.message_id = recalled.message_id
           ), '[]'::jsonb)
-        FROM messages WHERE message_id = ${messageId}
+        FROM recalled
+        RETURNING change_sequence
       `;
+      responseChangeSequence = Number(next[0].change_sequence);
     });
     const message = responseChangeSequence !== undefined
       ? await this.fetchChangeSnapshot(responseChangeSequence, messageId)
@@ -727,46 +762,55 @@ export class MessageRepository implements IMessageRepository {
         throw new ValidationError('Cannot edit a recalled message');
       }
 
-      const next = await tx<{ change_sequence: number | string }[]>`
-        UPDATE realtime_counters
-        SET change_sequence = change_sequence + 1
-        WHERE counter_id = true
-        RETURNING change_sequence
-      `;
-      const changeSequence = next[0].change_sequence;
-      responseChangeSequence = Number(changeSequence);
-      await tx`
-        UPDATE messages
-        SET content = ${content},
-            change_sequence = ${changeSequence},
-            revision = revision + 1
-        WHERE message_id = ${messageId}
-      `;
-
+      // The mention set is rewritten before the counter is touched. These rows
+      // do not depend on the new sequence, and anything executed while the
+      // counter row is locked blocks every other durable write in the process.
       await tx`DELETE FROM message_mentions WHERE message_id = ${messageId}`;
-
-      if (mentions && mentions.length > 0) {
-        for (const userId of mentions) {
-          await tx`
-            INSERT INTO message_mentions (message_id, user_id)
-            VALUES (${messageId}, ${userId})
-          `;
-        }
+      const uniqueMentions = mentions ? [...new Set(mentions)] : [];
+      if (uniqueMentions.length > 0) {
+        const pgMentionIds = `{${uniqueMentions.join(',')}}`;
+        await tx`
+          INSERT INTO message_mentions (message_id, user_id)
+          SELECT ${messageId}, mention
+          FROM unnest(${pgMentionIds}::uuid[]) AS mention
+        `;
       }
 
-      await tx`
+      // Allocating the sequence, applying the edit and recording the snapshot
+      // is one statement and the last write of the transaction, so the counter
+      // row lock is released a single round trip later at commit.
+      const next = await tx<{ change_sequence: number | string }[]>`
+        WITH seq AS (
+          UPDATE realtime_counters
+          SET change_sequence = change_sequence + 1
+          WHERE counter_id = true
+          RETURNING change_sequence
+        ),
+        edited AS (
+          UPDATE messages
+          SET content = ${content},
+              change_sequence = seq.change_sequence,
+              revision = messages.revision + 1
+          FROM seq
+          WHERE messages.message_id = ${messageId}
+          RETURNING messages.message_id, messages.room_id, messages.message_sequence,
+                    messages.revision, messages.sender_id, messages.content,
+                    messages.is_recalled, messages.reply_to_id, messages.sent_at,
+                    messages.change_sequence
+        )
         INSERT INTO message_changes (
           change_sequence, message_id, room_id, message_sequence, revision,
           change_type, actor_id, command_id, sender_id, content, is_recalled,
           reply_to_id, sent_at, mentions, attachments
         )
-        SELECT ${changeSequence}, message_id, room_id, message_sequence,
-          revision, 'edited', ${actorId ?? null}, ${commandId ?? null},
-          sender_id, content, is_recalled, reply_to_id, sent_at,
+        SELECT edited.change_sequence, edited.message_id, edited.room_id,
+          edited.message_sequence, edited.revision, 'edited', ${actorId ?? null},
+          ${commandId ?? null}, edited.sender_id, edited.content,
+          edited.is_recalled, edited.reply_to_id, edited.sent_at,
           COALESCE((
             SELECT jsonb_agg(mm.user_id ORDER BY mm.user_id)
             FROM message_mentions mm
-            WHERE mm.message_id = messages.message_id
+            WHERE mm.message_id = edited.message_id
           ), '[]'::jsonb),
           COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
@@ -778,10 +822,12 @@ export class MessageRepository implements IMessageRepository {
               'uploaded_at', a.uploaded_at
             ) ORDER BY a.uploaded_at, a.attachment_id)
             FROM attachments a
-            WHERE a.message_id = messages.message_id
+            WHERE a.message_id = edited.message_id
           ), '[]'::jsonb)
-        FROM messages WHERE message_id = ${messageId}
+        FROM edited
+        RETURNING change_sequence
       `;
+      responseChangeSequence = Number(next[0].change_sequence);
     });
 
     const message = responseChangeSequence !== undefined

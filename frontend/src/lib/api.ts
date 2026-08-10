@@ -19,6 +19,22 @@ import type {
   SyncResponse,
 } from '@shared/types';
 
+/**
+ * A failed HTTP response. Callers that have to react to a specific status —
+ * a 409 revision conflict, for instance — need it, and a bare `Error` throws
+ * that away.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export const getApiBaseUrl = (): string => {
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
   
@@ -229,8 +245,12 @@ const request = async (
       });
     }
 
-    const payload = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(payload?.message ?? `Request failed with status ${response.status}`);
+    const payload = (await response.json().catch(() => null)) as { message?: string; code?: string } | null;
+    throw new ApiError(
+      payload?.message ?? `Request failed with status ${response.status}`,
+      response.status,
+      payload?.code,
+    );
   }
 
   return response;

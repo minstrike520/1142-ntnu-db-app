@@ -11,6 +11,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { resolveAssetUrl } from "@/lib/assets";
+import { translate } from "@/lib/i18n";
 import { NotificationBridge } from "@/lib/notificationBridge";
 import type {
   Attachment as ApiAttachment,
@@ -29,6 +30,7 @@ import type {
   UserSettings,
 } from "@shared/types";
 import {
+  ApiError,
   approveRoomMember,
   attachmentDownloadUrl,
   blockUser as blockUserApi,
@@ -784,6 +786,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   });
   const [selectedFriendForSidebar, setSelectedFriendForSidebar] = useState<Friend | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  // Translation key of the transient message-level notice (revision conflicts).
+  const [messageNoticeKey, setMessageNoticeKey] = useState<string | null>(null);
   const [showRightPanel, setShowRightPanel] = useState<boolean>(true);
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({});
   const [activeProfilePopover, setActiveProfilePopover] = useState<{ instanceId: string; userId: string } | null>(null);
@@ -1239,6 +1243,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         } else {
           // Do not advance the cursor from live events when the initial sync
           // failed: doing so could skip older durable changes on the retry.
+          // The buffered events are dropped with the cursor they belong to.
+          // Replaying them after a later successful sync would double-count
+          // unread messages, and nothing is lost: the reconnect re-syncs from
+          // the unadvanced cursor, which still covers every buffered change.
+          bufferedRealtimeRef.current.length = 0;
+          canonicalBufferedRoomsRef.current.clear();
+          canonicalBufferedSequencesRef.current.clear();
           socket.disconnect();
           retryTimer = setTimeout(() => {
             retryTimer = undefined;
@@ -1735,6 +1746,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }).then((message) => applyCanonicalMessage(message)).catch((error) => console.error('Failed to send attachment message:', error));
   };
 
+  /**
+   * A 409 means the local revision was stale: someone else edited or recalled
+   * the message first. Silently swallowing it leaves the user looking at
+   * content the server has already replaced, so realign from the server and
+   * tell them what happened.
+   */
+  const handleRevisionConflict = async (
+    roomId: string,
+    error: unknown,
+    noticeKey: string,
+  ): Promise<void> => {
+    if (!(error instanceof ApiError) || error.status !== 409) throw error;
+    const room = roomsRef.current.find((item) => item.id === roomId);
+    if (token && room) {
+      await loadMessagesForRooms(token, [room], currentUserId);
+    }
+    setMessageNoticeKey(noticeKey);
+  };
+
   const handleRecallMessage = (msgId: string) => {
     if (!token) return;
     const message = messagesRef.current.find((item) => item.id === msgId);
@@ -1744,7 +1774,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       message.roomId,
       msgId,
       message.revision ?? 1,
-    ).then((updated) => applyCanonicalMessage(updated, false)).catch((error) => console.error('Failed to recall message:', error));
+    )
+      .then((updated) => applyCanonicalMessage(updated, false))
+      .catch((error) => handleRevisionConflict(message.roomId, error, 'chatroom.recallConflict'))
+      .catch((error) => console.error('Failed to recall message:', error));
   };
 
   const handleUpdateMessage = (roomId: string, messageId: string, content: string) => {
@@ -1757,7 +1790,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       messageId,
       content,
       message.revision ?? 1,
-    ).then((updated) => applyCanonicalMessage(updated, false)).catch((error) => console.error('Failed to edit message:', error));
+    )
+      .then((updated) => applyCanonicalMessage(updated, false))
+      .catch((error) => handleRevisionConflict(roomId, error, 'chatroom.editConflict'))
+      .catch((error) => console.error('Failed to edit message:', error));
   };
 
   const handleUpdateProfile = async (profile: ProfileInput) => {
@@ -2591,6 +2627,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           <ProfilePopoverContext.Provider value={profilePopoverValue}>
             <RightPanelContext.Provider value={rightPanelValue}>
               {children}
+              {messageNoticeKey && (
+                <div
+                  role="status"
+                  className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg"
+                >
+                  <span>{translate(uiLanguage, messageNoticeKey)}</span>
+                  <button
+                    type="button"
+                    className="font-semibold underline"
+                    onClick={() => setMessageNoticeKey(null)}
+                  >
+                    {translate(uiLanguage, "chatroom.dismissNotice")}
+                  </button>
+                </div>
+              )}
             </RightPanelContext.Provider>
           </ProfilePopoverContext.Provider>
         </TypingUsersContext.Provider>

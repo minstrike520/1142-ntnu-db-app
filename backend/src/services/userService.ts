@@ -37,6 +37,8 @@ interface JwtHelper {
 interface EmergencyAlertResult {
   alerted: boolean;
   recipients: string[];
+  /** Contacts whose durable delivery threw. Non-empty means a retry is owed. */
+  failed?: string[];
   reason?: string;
 }
 
@@ -94,6 +96,7 @@ export const makeUserService = (
     }
 
     const recipients: string[] = [];
+    const failed: string[] = [];
     for (const contact of contacts) {
       const msg = contact.message || fallbackMessage;
       const deliver = async (): Promise<boolean> => {
@@ -108,12 +111,31 @@ export const makeUserService = (
         }
         return true;
       };
-      const delivered = emergencyContactRepo.withContactLock
-        ? await emergencyContactRepo.withContactLock(userId, contact.contactId, deliver)
-        : await deliver();
-      if (delivered) recipients.push(contact.contactId);
+      // One unreachable contact must not silence the alert for everyone else,
+      // so each delivery is isolated. Retrying the whole incident later is
+      // safe because delivery is keyed by `incidentId` and is idempotent.
+      try {
+        const delivered = emergencyContactRepo.withContactLock
+          ? await emergencyContactRepo.withContactLock(userId, contact.contactId, deliver)
+          : await deliver();
+        if (delivered) recipients.push(contact.contactId);
+      } catch (error) {
+        failed.push(contact.contactId);
+        console.error(
+          `Failed to deliver emergency alert to contact ${contact.contactId} for user ${userId}:`,
+          error,
+        );
+      }
     }
 
+    if (failed.length > 0) {
+      return {
+        alerted: recipients.length > 0,
+        recipients,
+        failed,
+        reason: 'PARTIAL_DELIVERY',
+      };
+    }
     return { alerted: true, recipients };
   };
 
@@ -365,7 +387,11 @@ export const makeUserService = (
           'User has exceeded their inactivity warning threshold',
           user.lastActivity.toISOString(),
         );
-        if (!alert.alerted) {
+        if (!alert.alerted || (alert.failed?.length ?? 0) > 0) {
+          // A partially delivered incident still owes the remaining contacts a
+          // notification, so the reservation is released and the next run
+          // retries. Contacts that already received the message are protected
+          // by the per-incident idempotency key.
           await emergencyContactRepo.releaseAlertIfNew?.(userId, user.lastActivity);
         } else {
           await emergencyContactRepo.completeAlert?.(userId, user.lastActivity);

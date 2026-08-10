@@ -226,7 +226,10 @@
     "messageRecalled": "Message recalled",
     "downloadingAttachment": "Downloading attachment",
     "downloadAttachment": "Download attachment",
-    "newMessages": "New Messages"
+    "newMessages": "New Messages",
+    "editConflict": "This message changed elsewhere. The latest version has been loaded — please try your edit again.",
+    "recallConflict": "This message changed elsewhere. The latest version has been loaded — please try recalling it again.",
+    "dismissNotice": "Dismiss"
   },
   "profileCard": {
     "myInfo": "My Info",

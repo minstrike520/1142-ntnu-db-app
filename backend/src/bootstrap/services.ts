@@ -38,6 +38,11 @@ export const createServices = ({ repositories, publisher }: CreateServicesDeps):
     repositories.emergencyContacts,
     repositories.refreshTokens,
     { signToken, generateRefreshToken, hashToken },
+    // Durable-first: this callback deliberately has no socket-only fallback,
+    // because emitting `emergency_alert` for a message that failed to persist
+    // is the ghost notification this flow exists to remove. A throw here is
+    // isolated per contact by `notifyContacts`, which keeps delivering to the
+    // remaining contacts and marks the incident for retry.
     async (contactId, payload) => {
       let room = await repositories.rooms.findPrivateRoomByMembers(payload.userId, contactId);
       if (!room || room.isReadonly) {
