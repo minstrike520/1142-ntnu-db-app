@@ -223,12 +223,16 @@ describe("read receipts", () => {
 
 describe("realtime sync recovery", () => {
   let readStates: Record<string, Record<string, string>> = {};
+  let observedRooms: Array<{ id: string; unreadCount?: number }> = [];
 
   function ReadStateProbe(): React.ReactElement {
-    const { groupReadStates } = useChat();
+    const { groupReadStates, rooms } = useChat();
     useEffect(() => {
       readStates = groupReadStates;
     }, [groupReadStates]);
+    useEffect(() => {
+      observedRooms = rooms;
+    }, [rooms]);
     return <div data-testid="read-state-probe" />;
   }
 
@@ -269,6 +273,39 @@ describe("realtime sync recovery", () => {
     await app.settle();
 
     expect(readStates["room-1"]?.["m-2"]).toBe(target);
+  });
+
+  test("replays a buffered new message for its side effects without double-counting unread", async () => {
+    const app = await mountChatApp("/chat/room-1", { probe: <ReadStateProbe /> });
+    const incoming = makeMessage("room-2", 99, "m-3", { content: "Buffered while syncing" });
+
+    const failing = __gateNextSync();
+    act(() => {
+      app.socket().disconnect();
+      app.socket().connect();
+    });
+    act(() => {
+      app.socket().serverEmit("new_message", incoming);
+    });
+
+    await act(async () => {
+      failing.fail();
+      await Promise.resolve();
+    });
+    await app.settle();
+
+    act(() => {
+      app.socket().connect();
+    });
+    await app.settle();
+
+    // The sender's read receipt rides on new_message and is never re-delivered
+    // by sync, so the task has to be replayed rather than dropped.
+    expect(readStates["room-2"]?.["m-3"]).toBe(incoming.messageId);
+    expect(screen.getAllByText("Buffered while syncing").length).toBeGreaterThan(0);
+    // The retry's canonical room projection already counted this message, so
+    // the replay must not add to it. room-2 is unread 3 in the fixtures.
+    expect(observedRooms.find((room) => room.id === "room-2")?.unreadCount).toBe(3);
   });
 });
 

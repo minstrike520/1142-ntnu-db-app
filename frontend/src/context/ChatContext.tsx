@@ -759,6 +759,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     messageId?: string;
   }>>([]);
   const flushingBufferedRef = useRef(false);
+  // Messages buffered across a failed sync. Their tasks are still replayed —
+  // they carry read receipts and notifications that sync cannot rebuild — but
+  // the retry's canonical room projection has already counted them as unread,
+  // so the local increment has to be suppressed for exactly these ids.
+  const replayedWithoutUnreadRef = useRef<Set<string>>(new Set());
   const canonicalBufferedRoomsRef = useRef<Set<string>>(new Set());
   const canonicalBufferedSequencesRef = useRef<Map<string, number>>(new Map());
 
@@ -1136,6 +1141,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const storedCursor = Number(sessionStorage.getItem(`near:syncCursor:${currentUserId}`) ?? 0);
     syncCursorRef.current = Number.isSafeInteger(storedCursor) && storedCursor >= 0 ? storedCursor : 0;
     bufferedRealtimeRef.current = [];
+    replayedWithoutUnreadRef.current.clear();
     syncingRef.current = true;
     let disposed = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1239,23 +1245,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             flushingBufferedRef.current = false;
             canonicalBufferedRoomsRef.current.clear();
             canonicalBufferedSequencesRef.current.clear();
+            replayedWithoutUnreadRef.current.clear();
           }
         } else {
           // Do not advance the cursor from live events when the initial sync
           // failed: doing so could skip older durable changes on the retry.
           //
-          // Only the new-message tasks are dropped. The retry re-syncs from
-          // the unadvanced cursor and re-delivers every durable change, so
-          // replaying those would double-count unread messages while adding
-          // nothing. Everything else — read receipts above all — is never
-          // re-delivered by sync, and the post-sync room refresh reuses the
-          // cached member list rather than reloading read positions, so
-          // dropping them would leave peer read indicators stale until an
-          // unrelated member fetch happened to correct them. Recall and edit
-          // tasks are guarded by `changeSequence`, so a late replay of one
-          // the sync already applied is a no-op.
-          bufferedRealtimeRef.current = bufferedRealtimeRef.current
-            .filter((buffered) => buffered.kind !== "message");
+          // Every task is kept, because none of them can be reconstructed from
+          // sync alone: read receipts are not re-delivered at all, and a
+          // new-message task also carries the sender's read receipt, the
+          // cached member's lastReadId and the desktop notification — the
+          // post-sync room refresh reuses the cached member list, so those
+          // would simply be lost. What the retry does reproduce is the unread
+          // count, which arrives as the server's canonical projection, so only
+          // that increment is suppressed for the messages seen here. Recall
+          // and edit tasks are guarded by `changeSequence`, making a late
+          // replay of one the sync already applied a no-op.
+          for (const buffered of bufferedRealtimeRef.current) {
+            if (buffered.kind === "message" && buffered.messageId) {
+              replayedWithoutUnreadRef.current.add(buffered.messageId);
+            }
+          }
           canonicalBufferedRoomsRef.current.clear();
           canonicalBufferedSequencesRef.current.clear();
           socket.disconnect();
@@ -1316,6 +1326,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
+      // Read synchronously: a `setRooms` updater runs at render time, by which
+      // point the buffered-replay bookkeeping has already been cleared.
+      const suppressUnreadForThisMessage = replayedWithoutUnreadRef.current.has(incoming.id);
+
       setMessages((current) => mergeMessages(current, [incoming]));
 
       // Update the sender's read receipt (since they sent it, they've read it!)
@@ -1343,6 +1357,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 unreadCount:
                   activeRoomIdRef.current === room.id
                     ? 0
+                    : suppressUnreadForThisMessage
+                    ? (room.unreadCount ?? 0)
                     : flushingBufferedRef.current && (
                       (incoming.changeSequence !== undefined
                         && (canonicalBufferedSequencesRef.current.get(room.id) ?? -1) >= incoming.changeSequence)
