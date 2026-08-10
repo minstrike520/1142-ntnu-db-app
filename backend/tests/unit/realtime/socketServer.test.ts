@@ -167,9 +167,11 @@ describe('attachSockets', () => {
       on: mock(),
     });
 
-    const attachLimited = (limit: string) => {
+    const attachLimited = (limit: string, reservationTtl?: string) => {
       const previous = process.env.MAX_SESSIONS_PER_USER;
+      const previousTtl = process.env.SESSION_RESERVATION_TTL_MS;
       process.env.MAX_SESSIONS_PER_USER = limit;
+      if (reservationTtl !== undefined) process.env.SESSION_RESERVATION_TTL_MS = reservationTtl;
       let middleware: any;
       let connect: any;
       const io = {
@@ -181,6 +183,7 @@ describe('attachSockets', () => {
       } as unknown as ChatServer;
       attachSockets(io, { roomMemberRepository: roomMemberRepo });
       process.env.MAX_SESSIONS_PER_USER = previous;
+      process.env.SESSION_RESERVATION_TTL_MS = previousTtl;
       return { middleware: middleware!, connect: connect! };
     };
 
@@ -197,6 +200,45 @@ describe('attachSockets', () => {
       expect(results[0]).toBeUndefined();
       expect(results[1]).toBeUndefined();
       expect(results[2]?.message).toBe('Session limit reached');
+    });
+
+    it('reclaims a reserved slot when the handshake never reaches connection', async () => {
+      const { middleware } = attachLimited('1', '5');
+
+      // The transport dies after the middleware runs, so the connection
+      // handler — and with it the disconnect listener — never runs.
+      middleware(makeSocket('aborted'), () => {});
+      const whileReserved: Array<Error | undefined> = [];
+      middleware(makeSocket('s2'), (err?: Error) => whileReserved.push(err));
+      expect(whileReserved[0]?.message).toBe('Session limit reached');
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const afterExpiry: Array<Error | undefined> = [];
+      middleware(makeSocket('s3'), (err?: Error) => afterExpiry.push(err));
+      expect(afterExpiry[0]).toBeUndefined();
+    });
+
+    it('keeps the slot of a connection that arrived before its reservation expired', async () => {
+      const { middleware, connect } = attachLimited('1', '5');
+      const first = makeSocket('s1');
+      const firstHandlers: Record<string, any> = {};
+      first.on = mock((event: string, handler: any) => { firstHandlers[event] = handler; }) as any;
+
+      middleware(first, () => {});
+      connect(first);
+
+      // The reservation timer must not hand this live session's slot back.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const blocked: Array<Error | undefined> = [];
+      middleware(makeSocket('s2'), (err?: Error) => blocked.push(err));
+      expect(blocked[0]?.message).toBe('Session limit reached');
+
+      firstHandlers.disconnect();
+      const afterDisconnect: Array<Error | undefined> = [];
+      middleware(makeSocket('s3'), (err?: Error) => afterDisconnect.push(err));
+      expect(afterDisconnect[0]).toBeUndefined();
     });
 
     it('frees the reserved slot when the session disconnects', () => {
