@@ -1777,7 +1777,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const canonical = (await listMessages(token, roomId, { limit: 50 }))
           .find((row) => row.messageId === messageId);
         if (canonical) {
-          applyCanonicalMessage(canonical, false);
+          // The sidebar preview is derived from this message whenever it is
+          // the room's last one, and the conflict means the event that would
+          // normally have refreshed the summary may never arrive. Skipping it
+          // unconditionally would leave a stale preview behind a notice that
+          // claims the latest version is on screen.
+          const isRoomPreview = roomsRef.current
+            .some((room) => room.id === roomId && room.lastMessageId === messageId);
+          applyCanonicalMessage(canonical, isRoomPreview);
           refreshed = true;
         }
       } catch (reloadError) {
