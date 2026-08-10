@@ -9,6 +9,7 @@ export interface IRoomRepository {
   findByInviteCode(code: string): Promise<Room | null>;
   findPrivateRoomByMembers(userA: string, userB: string): Promise<Room | null>;
   reopenPrivateRoomIfUnblocked?(roomId: string, userA: string, userB: string): Promise<Room | null>;
+  markPrivateReadOnlyIfBlocked?(roomId: string, userA: string, userB: string): Promise<Room | null>;
   findByMember(userId: string): Promise<RoomSummary[]>;
   create(data: CreateRoomData): Promise<Room>;
   update(roomId: string, data: UpdateRoomData): Promise<Room>;

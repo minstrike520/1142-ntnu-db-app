@@ -121,6 +121,29 @@ export class RoomRepository implements IRoomRepository {
     return rows.length === 0 ? null : mapRowToRoom(rows[0]);
   }
 
+  /**
+   * The mirror of `reopenPrivateRoomIfUnblocked`. Marking the room read-only
+   * has to be conditional for the same reason reopening is: the block flow
+   * spans several transactions, so a concurrent unblock can commit in between.
+   * An unconditional update would then re-close a room that is legitimately
+   * open again and leave it read-only with no block row to undo it.
+   */
+  async markPrivateReadOnlyIfBlocked(roomId: string, userA: string, userB: string): Promise<Room | null> {
+    const rows = await this.sql<RoomRow[]>`
+      UPDATE chat_rooms cr
+      SET is_readonly = true
+      WHERE cr.room_id = ${roomId}
+        AND cr.type = 'private'
+        AND EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE (b.blocker_id = ${userA} AND b.blocked_id = ${userB})
+             OR (b.blocker_id = ${userB} AND b.blocked_id = ${userA})
+        )
+      RETURNING cr.*
+    `;
+    return rows.length === 0 ? null : mapRowToRoom(rows[0]);
+  }
+
   async reopenPrivateRoomIfUnblocked(roomId: string, userA: string, userB: string): Promise<Room | null> {
     const rows = await this.sql<RoomRow[]>`
       UPDATE chat_rooms cr

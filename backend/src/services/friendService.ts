@@ -7,6 +7,7 @@ export function makeFriendService(
   notifyUser?: (userId: string, eventName: string, payload: unknown) => void,
   privateRooms?: {
     markPrivateReadOnly(userA: string, userB: string): Promise<string | null>;
+    markPrivateReadOnlyIfBlocked?(userA: string, userB: string): Promise<string | null>;
     createPrivate?(userA: string, userB: string): Promise<unknown>;
     reopenPrivateRoom?(userA: string, userB: string): Promise<void>;
   },
@@ -140,7 +141,14 @@ export function makeFriendService(
         // this room. The read-only flag and the socket revocation below are
         // the cleanup half of the same state change.
         await repo.blockUser(userId, targetUserId);
-        const privateRoomId = await privateRooms?.markPrivateReadOnly(userId, targetUserId);
+        // The pair mutex is process-local and `blockUser`'s advisory lock ends
+        // with its transaction, so another process can lift this block before
+        // the cleanup below runs. Both steps are therefore conditional on the
+        // block still existing: if it is gone, the room is legitimately open
+        // and must keep its subscriptions.
+        const privateRoomId = privateRooms?.markPrivateReadOnlyIfBlocked
+          ? await privateRooms.markPrivateReadOnlyIfBlocked(userId, targetUserId)
+          : await privateRooms?.markPrivateReadOnly(userId, targetUserId);
         if (privateRoomId) {
           await removeUserFromRoom?.(userId, privateRoomId);
           await removeUserFromRoom?.(targetUserId, privateRoomId);

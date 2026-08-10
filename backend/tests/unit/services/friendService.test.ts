@@ -26,7 +26,8 @@ describe('friendService', () => {
       blockUser: mock(async () => { order.push('blockUser'); }),
     } as any;
     const privateRooms = {
-      markPrivateReadOnly: mock(async () => { order.push('markPrivateReadOnly'); return 'room-1'; }),
+      markPrivateReadOnly: mock(),
+      markPrivateReadOnlyIfBlocked: mock(async () => { order.push('markPrivateReadOnly'); return 'room-1'; }),
     };
     const removeUserFromRoom = mock(async () => { order.push('removeUserFromRoom'); });
     const service = makeFriendService(mockRepo, undefined, privateRooms as any, removeUserFromRoom as any);
@@ -41,6 +42,29 @@ describe('friendService', () => {
       'removeUserFromRoom',
       'removeUserFromRoom',
     ]);
+  });
+
+  it('blockUser skips room cleanup when a concurrent unblock already lifted the block', async () => {
+    const mockRepo = {
+      blockUser: mock().mockResolvedValue(undefined),
+    } as any;
+    // A concurrent unblock committed between blockUser and the cleanup, so the
+    // conditional mark matches nothing and reports no room.
+    const privateRooms = {
+      markPrivateReadOnly: mock(),
+      markPrivateReadOnlyIfBlocked: mock().mockResolvedValue(null),
+    };
+    const removeUserFromRoom = mock();
+    const service = makeFriendService(mockRepo, undefined, privateRooms as any, removeUserFromRoom as any);
+
+    const result = await service.blockUser('u1', 'u2');
+
+    expect(result).toEqual({ status: 'blocked' });
+    expect(privateRooms.markPrivateReadOnlyIfBlocked).toHaveBeenCalledWith('u1', 'u2');
+    // The room is legitimately open again, so it must keep its subscriptions
+    // and must not be re-closed by the unconditional path.
+    expect(privateRooms.markPrivateReadOnly).not.toHaveBeenCalled();
+    expect(removeUserFromRoom).not.toHaveBeenCalled();
   });
 
   it('blockUser leaves the room usable when the durable block fails', async () => {
