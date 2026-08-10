@@ -7,7 +7,7 @@ export function makeFriendService(
   notifyUser?: (userId: string, eventName: string, payload: unknown) => void,
   privateRooms?: {
     markPrivateReadOnly(userA: string, userB: string): Promise<string | null>;
-    markPrivateReadOnlyIfBlocked?(userA: string, userB: string): Promise<string | null>;
+    findPrivateRoomIdIfBlocked?(userA: string, userB: string): Promise<string | null>;
     createPrivate?(userA: string, userB: string): Promise<unknown>;
     reopenPrivateRoom?(userA: string, userB: string): Promise<void>;
   },
@@ -140,14 +140,19 @@ export function makeFriendService(
         // so once the block commits no further message can be published to
         // this room. The read-only flag and the socket revocation below are
         // the cleanup half of the same state change.
+        // Writing the block is the whole durable half of this operation: the
+        // `blocks` insert trigger closes the private room inside the same
+        // transaction, so this flow must not set the read-only flag itself.
+        // Two writers for one invariant is what previously let a concurrent
+        // unblock reopen the room and then have this request re-close it,
+        // leaving it read-only with no block row to undo it.
         await repo.blockUser(userId, targetUserId);
         // The pair mutex is process-local and `blockUser`'s advisory lock ends
-        // with its transaction, so another process can lift this block before
-        // the cleanup below runs. Both steps are therefore conditional on the
-        // block still existing: if it is gone, the room is legitimately open
-        // and must keep its subscriptions.
-        const privateRoomId = privateRooms?.markPrivateReadOnlyIfBlocked
-          ? await privateRooms.markPrivateReadOnlyIfBlocked(userId, targetUserId)
+        // with its transaction, so the block can already be lifted by another
+        // process. A null here means exactly that, and the room keeps its
+        // subscriptions because it is legitimately open again.
+        const privateRoomId = privateRooms?.findPrivateRoomIdIfBlocked
+          ? await privateRooms.findPrivateRoomIdIfBlocked(userId, targetUserId)
           : await privateRooms?.markPrivateReadOnly(userId, targetUserId);
         if (privateRoomId) {
           await removeUserFromRoom?.(userId, privateRoomId);

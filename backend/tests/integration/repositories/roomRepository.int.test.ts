@@ -142,7 +142,31 @@ describe('RoomRepository (pg)', () => {
     expect(rooms[0].unreadCount).toBe(0);
   });
 
-  it('markPrivateReadOnlyIfBlocked only closes the room while a block exists', async () => {
+  it('the blocks trigger closes the private room in the same transaction as the block', async () => {
+    const users = await testPool`
+      INSERT INTO users (name, email, password_hash)
+      VALUES ('Blocker', 'blocker@test.com', 'hash'), ('Blocked', 'blocked@test.com', 'hash')
+      RETURNING user_id
+    `;
+    const blockerId: string = users[0].user_id;
+    const blockedId: string = users[1].user_id;
+
+    const room = await repo.create({ type: 'private', requireApproval: false, viewHistory: true });
+    await testPool`
+      INSERT INTO room_members (room_id, user_id, role)
+      VALUES (${room.roomId}, ${blockerId}, 'member'), (${room.roomId}, ${blockedId}, 'member')
+    `;
+    expect((await repo.findById(room.roomId))!.isReadonly).toBe(false);
+
+    // The service layer deliberately no longer writes this flag, so the
+    // trigger being the sole owner of the invariant is now load-bearing.
+    await testPool`
+      INSERT INTO blocks (blocker_id, blocked_id) VALUES (${blockerId}, ${blockedId})
+    `;
+    expect((await repo.findById(room.roomId))!.isReadonly).toBe(true);
+  });
+
+  it('findPrivateRoomIdIfBlocked reports the room only while a block exists', async () => {
     const users = await testPool`
       INSERT INTO users (name, email, password_hash)
       VALUES ('Blocker', 'blocker@test.com', 'hash'), ('Blocked', 'blocked@test.com', 'hash')
@@ -157,26 +181,20 @@ describe('RoomRepository (pg)', () => {
       VALUES (${room.roomId}, ${blockerId}, 'member'), (${room.roomId}, ${blockedId}, 'member')
     `;
 
-    // No block recorded: the update must match nothing, which is what stops a
-    // request whose block was lifted concurrently from re-closing the room.
-    const withoutBlock = await repo.markPrivateReadOnlyIfBlocked(room.roomId, blockerId, blockedId);
-    expect(withoutBlock).toBeNull();
-    expect((await repo.findById(room.roomId))!.isReadonly).toBe(false);
+    // No block: a request whose block was lifted concurrently gets nothing
+    // back and therefore revokes nothing.
+    expect(await repo.findPrivateRoomIdIfBlocked(blockerId, blockedId)).toBeNull();
 
     await testPool`
       INSERT INTO blocks (blocker_id, blocked_id) VALUES (${blockerId}, ${blockedId})
     `;
-    const withBlock = await repo.markPrivateReadOnlyIfBlocked(room.roomId, blockerId, blockedId);
-    expect(withBlock).not.toBeNull();
-    expect((await repo.findById(room.roomId))!.isReadonly).toBe(true);
+    expect(await repo.findPrivateRoomIdIfBlocked(blockerId, blockedId)).toBe(room.roomId);
+    // The pair is matched in either direction, and the lookup never writes.
+    expect(await repo.findPrivateRoomIdIfBlocked(blockedId, blockerId)).toBe(room.roomId);
 
-    // The pair is matched in either direction.
     await testPool`DELETE FROM blocks`;
     await repo.update(room.roomId, { isReadonly: false });
-    await testPool`
-      INSERT INTO blocks (blocker_id, blocked_id) VALUES (${blockedId}, ${blockerId})
-    `;
-    const reversed = await repo.markPrivateReadOnlyIfBlocked(room.roomId, blockerId, blockedId);
-    expect(reversed).not.toBeNull();
+    expect(await repo.findPrivateRoomIdIfBlocked(blockerId, blockedId)).toBeNull();
+    expect((await repo.findById(room.roomId))!.isReadonly).toBe(false);
   });
 });

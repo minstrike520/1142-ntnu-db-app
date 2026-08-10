@@ -125,7 +125,7 @@ export const createServices = ({ repositories, publisher }: CreateServicesDeps):
     },
     {
       markPrivateReadOnly: roomService.markPrivateReadOnly,
-      markPrivateReadOnlyIfBlocked: roomService.markPrivateReadOnlyIfBlocked,
+      findPrivateRoomIdIfBlocked: roomService.findPrivateRoomIdIfBlocked,
       createPrivate: (userA: string, userB: string, bypassFriendCheck?: boolean) =>
         roomService.createPrivate(userA, userB, bypassFriendCheck),
       reopenPrivateRoom: roomService.reopenPrivateRoom,

@@ -157,20 +157,20 @@ export const makeRoomService = (
     },
 
     /**
-     * Read-only variant used by the block flow. It returns the room id only
-     * when a block between the pair is still recorded, so a request whose
-     * block was already lifted by a concurrent unblock stops short instead of
-     * re-closing a room that is legitimately open again.
+     * Used by the block flow to locate the room whose sockets need revoking.
+     * It deliberately does not touch room state: the `blocks` insert trigger
+     * already closes the room inside the same transaction as the block row,
+     * and a second writer for that invariant is what let a concurrent unblock
+     * leave a room read-only with no block to undo it. Returning null when the
+     * block is gone also stops a stale request from revoking access to a room
+     * that has legitimately reopened.
      */
-    async markPrivateReadOnlyIfBlocked(userA: string, userB: string): Promise<string | null> {
-      const existing = await repo.findPrivateRoomByMembers(userA, userB);
-      if (!existing) return null;
-      if (!repo.markPrivateReadOnlyIfBlocked) {
-        await repo.update(existing.roomId, { isReadonly: true });
-        return existing.roomId;
+    async findPrivateRoomIdIfBlocked(userA: string, userB: string): Promise<string | null> {
+      if (repo.findPrivateRoomIdIfBlocked) {
+        return repo.findPrivateRoomIdIfBlocked(userA, userB);
       }
-      const marked = await repo.markPrivateReadOnlyIfBlocked(existing.roomId, userA, userB);
-      return marked ? existing.roomId : null;
+      const existing = await repo.findPrivateRoomByMembers(userA, userB);
+      return existing ? existing.roomId : null;
     },
 
     async reopenPrivateRoom(userA: string, userB: string): Promise<void> {
