@@ -4,7 +4,7 @@
  * of messages, typing, read receipts, unread state, panel toggling and room
  * switching so the render-performance fixes cannot change semantics.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { useEffect } from "react";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { mountChatApp } from "./harness";
@@ -327,10 +327,10 @@ describe("realtime sync recovery", () => {
     expect(reloads.length).toBeGreaterThan(0);
   });
 
-  test("checkpoints durable events so the next sync resumes from them", async () => {
+  test("never advances the sync cursor from a live event's sequence", async () => {
     const app = await mountChatApp("/chat/room-1", { probe: <ReadStateProbe /> });
     const incoming = makeMessage("room-1", 41, "m-2", {
-      content: "Checkpointed",
+      content: "Live only",
       changeSequence: 4_242,
     });
 
@@ -345,10 +345,46 @@ describe("realtime sync recovery", () => {
     });
     await app.settle();
 
-    // The event was received live, so recovery must resume from it rather than
-    // replaying the whole session back from where the last sync stopped.
+    // Services publish after their transaction commits and after a follow-up
+    // snapshot query, so concurrent commands can reach the client out of
+    // sequence order. Trusting the larger sequence as a watermark would push a
+    // smaller, not-yet-received change permanently behind `/sync`'s
+    // `change_sequence > cursor` filter. Only `/sync` may move the cursor.
     const cursors = __getApiCallLog("syncChanges").map((entry) => entry.args[0]);
-    expect(cursors.at(-1)).toBe(4_242);
+    expect(cursors).not.toContain(4_242);
+    expect(cursors.at(-1)).toBe(0);
+  });
+
+  test("checkpoints the cursor through /sync while the session stays connected", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const app = await mountChatApp("/chat/room-1", { probe: <ReadStateProbe /> });
+
+      // No durable event yet, so a tick has nothing to checkpoint.
+      const idleBefore = __getApiCallLog("syncChanges").length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6 * 60_000);
+      });
+      expect(__getApiCallLog("syncChanges").length).toBe(idleBefore);
+
+      act(() => {
+        app.socket().serverEmit(
+          "new_message",
+          makeMessage("room-1", 42, "m-2", { content: "Checkpoint me", changeSequence: 4_243 }),
+        );
+      });
+      await app.settle();
+
+      // Now the cursor is behind, so the tick pulls it forward through the one
+      // path that cannot straddle a sequence gap — without a reconnect.
+      const before = __getApiCallLog("syncChanges").length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6 * 60_000);
+      });
+      expect(__getApiCallLog("syncChanges").length).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

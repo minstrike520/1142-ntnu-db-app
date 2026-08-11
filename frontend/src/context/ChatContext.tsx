@@ -552,6 +552,12 @@ const hydrateReplyTargets = (items: Message[]): Message[] => {
   });
 };
 
+// How often a connected session re-runs `/sync` purely to move its cursor
+// forward. Long enough that an idle-but-chatty session is not making steady
+// background requests, short enough that the catch-up after a reconnect stays
+// bounded by minutes of activity rather than by the whole connection.
+const CURSOR_CHECKPOINT_INTERVAL_MS = 5 * 60_000;
+
 const mapRooms = (
   apiRooms: RoomSummary[],
   apiFolders: ApiFolder[],
@@ -1304,9 +1310,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Socket.IO can emit multiple connect events during a reconnect race.
     // One cursor must have one active sync request chain, otherwise two chains
     // can page from the same cursor and flush buffered events out of order.
-    const synchronize = (): Promise<void> => {
+    const runExclusive = (operation: () => Promise<void>): Promise<void> => {
       if (synchronizationInFlight) return synchronizationInFlight;
-      synchronizationInFlight = runSynchronization();
+      synchronizationInFlight = operation();
       const current = synchronizationInFlight;
       void current.then(
         () => {
@@ -1319,19 +1325,59 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       return current;
     };
 
+    const synchronize = (): Promise<void> => runExclusive(runSynchronization);
+
+    // A live durable event must never advance the cursor itself, however
+    // tempting its `changeSequence` looks. Services publish *after* their
+    // transaction commits and after a follow-up snapshot query, so two
+    // concurrent commands race in the application layer and this client can
+    // see the larger sequence first. Taking it as a watermark and then
+    // dropping the socket before the smaller one arrives would put that change
+    // permanently behind `/sync`'s `change_sequence > cursor` filter — a
+    // silently lost edit or recall.
+    //
+    // `/sync` has no such hazard: the counter row lock is held until commit,
+    // so changes become visible in sequence order and a page can never
+    // straddle a gap. The cursor is therefore checkpointed by running an
+    // ordinary cursor-only `/sync` on a timer, which is what keeps a
+    // long-lived session from paging its entire connection back on the next
+    // reconnect. Deliberately not `runSynchronization`: a periodic tick must
+    // not refresh rooms, and must not take the failure path that disconnects
+    // the socket.
+    let liveChangesSinceCheckpoint = false;
+    const noteLiveDurableChange = () => {
+      liveChangesSinceCheckpoint = true;
+    };
+
+    const runCheckpoint = async () => {
+      try {
+        let hasMore = true;
+        while (hasMore) {
+          const response = await syncChanges(token, syncCursorRef.current, 250);
+          if (disposed) return;
+          applySyncChanges(response.changes);
+          if (response.nextCursor > syncCursorRef.current) {
+            syncCursorRef.current = response.nextCursor;
+            sessionStorage.setItem(`near:syncCursor:${currentUserId}`, String(syncCursorRef.current));
+          }
+          hasMore = response.hasMore && response.changes.length > 0;
+        }
+        liveChangesSinceCheckpoint = false;
+      } catch (error) {
+        // The cursor simply stays where it was; the next tick or the next
+        // reconnect's sync covers the same ground.
+        console.error('Realtime cursor checkpoint failed:', error);
+      }
+    };
+
+    const checkpointTimer = setInterval(() => {
+      if (disposed || syncingRef.current || !liveChangesSinceCheckpoint) return;
+      if (!socket.connected) return;
+      void runExclusive(runCheckpoint);
+    }, CURSOR_CHECKPOINT_INTERVAL_MS);
+
     const cleanupNewMessage = onNewMessage(socket, (payload) => enqueueRealtime(() => {
-      // Durable events carry the same change sequence `/sync` pages through, so
-      // a session that stays connected for hours can keep its cursor current
-      // instead of leaving it where the last sync stopped and then paging the
-      // whole gap back, 250 rows at a time, on the next reconnect.
-      //
-      // Advancing here rather than in the socket callback is what makes it
-      // safe: `enqueueRealtime` holds every task until the sync that owns the
-      // cursor has succeeded, so a change committed before the subscription
-      // was restored is always covered by that sync first. When the sync fails
-      // the tasks stay buffered and unexecuted, which is exactly the "do not
-      // advance the cursor from live events" rule the retry path depends on.
-      advanceCursor(payload.changeSequence);
+      noteLiveDurableChange();
       const incoming = mapMessage(payload, currentUserId);
       const existingMessage = messagesRef.current.find((message) => message.id === incoming.id);
       if (
@@ -1415,7 +1461,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       );
     }, { kind: "message", roomId: payload.roomId, messageId: payload.messageId }));
     const cleanupRecall = onMessageRecalled(socket, (payload) => enqueueRealtime(() => {
-      advanceCursor(payload.changeSequence);
+      noteLiveDurableChange();
       setMessages((current) =>
         hydrateReplyTargets(
           current.map((message) =>
@@ -1446,7 +1492,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       ));
     }));
     const cleanupUpdate = onMessageUpdated(socket, (updatedMessage) => enqueueRealtime(() => {
-      advanceCursor(updatedMessage.changeSequence);
+      noteLiveDurableChange();
       if (
         updatedMessage.changeSequence !== undefined &&
         updatedMessage.changeSequence <= Math.max(
@@ -1710,6 +1756,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     return () => {
       disposed = true;
       if (retryTimer) clearTimeout(retryTimer);
+      clearInterval(checkpointTimer);
       cleanupNewMessage();
       cleanupRecall();
       cleanupUpdate();
