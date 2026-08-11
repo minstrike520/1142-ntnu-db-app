@@ -301,8 +301,22 @@ export const makeRoomService = (
       if (member.role === 'owner') {
         throw new ForbiddenError('Owner cannot leave room. Transfer ownership first.');
       }
-      await roomMemberRepo.remove(roomId, userId);
+      // Same boundary as `kickMember` and the demotion path: the subscription
+      // goes before the membership write, never after. `remove` commits in its
+      // own transaction, so revoking afterwards leaves a window in which a peer's
+      // message is published to a socket that is still in `room_<roomId>` but no
+      // longer a member.
       await onMembershipRevoked?.(userId, roomId);
+      try {
+        await roomMemberRepo.remove(roomId, userId);
+      } catch (error) {
+        // Still a member, so the subscription has to go back — plus the standing
+        // recovery signal, because a restored subscription replays nothing that
+        // was published while it was gone.
+        await onMembershipGranted?.(userId, roomId);
+        emitToUser?.(userId, 'realtime_ready', undefined);
+        throw error;
+      }
       emitToUser?.(userId, 'room_update', {
         type: 'MEMBER_LEFT',
         roomId,

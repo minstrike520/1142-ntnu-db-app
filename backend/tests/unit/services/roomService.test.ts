@@ -354,6 +354,41 @@ describe('roomService', () => {
       mockMemberRepo.findMember.mockResolvedValue(ownerMember);
       await expect(roomService.leave('user-1', 'room-1')).rejects.toThrow(ForbiddenError);
     });
+
+    it('revokes the subscription before the membership row is deleted', async () => {
+      const order: string[] = [];
+      const onMembershipRevoked = mock(async () => { order.push('revoke'); });
+      const serviceWithHooks = makeRoomService(
+        mockRepo, mockMemberRepo, undefined, undefined, undefined, undefined, mock(), avatarStore,
+        onMembershipRevoked, mock(),
+      );
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue({ role: 'member' } as RoomMember);
+      mockMemberRepo.remove.mockImplementation(async () => { order.push('remove'); });
+
+      await serviceWithHooks.leave('user-2', 'room-1');
+
+      // Reversed, a peer's message committed in between is published to a socket
+      // that is still in the room but no longer a member.
+      expect(order).toEqual(['revoke', 'remove']);
+    });
+
+    it('restores the subscription and signals recovery when the delete fails', async () => {
+      const emitToUser = mock();
+      const onMembershipGranted = mock();
+      const serviceWithHooks = makeRoomService(
+        mockRepo, mockMemberRepo, undefined, undefined, undefined, undefined, emitToUser, avatarStore,
+        mock(), onMembershipGranted,
+      );
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember.mockResolvedValue({ role: 'member' } as RoomMember);
+      mockMemberRepo.remove.mockRejectedValue(new Error('remove failed'));
+
+      await expect(serviceWithHooks.leave('user-2', 'room-1')).rejects.toThrow('remove failed');
+
+      expect(onMembershipGranted).toHaveBeenCalledWith('user-2', 'room-1');
+      expect(emitToUser).toHaveBeenCalledWith('user-2', 'realtime_ready', undefined);
+    });
   });
 
   describe('kickMember', () => {
