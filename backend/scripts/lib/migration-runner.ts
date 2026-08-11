@@ -123,7 +123,7 @@ function assertConsistentOrder(
 }
 
 /** Pending migrations, oldest first, capped by `count`. */
-function selectPending(
+export function selectPending(
   appliedNames: string[],
   migrations: MigrationFile[],
   count: number | undefined,
@@ -133,11 +133,11 @@ function selectPending(
     (migration) => !applied.has(migration.name),
   );
 
-  return count === undefined ? pending : pending.slice(0, Math.abs(count));
+  return count === undefined ? pending : pending.slice(0, Math.max(0, count));
 }
 
 /** Applied migrations to revert, newest first, defaulting to a single one. */
-function selectApplied(
+export function selectApplied(
   appliedNames: string[],
   migrations: MigrationFile[],
   count: number | undefined,
@@ -146,7 +146,15 @@ function selectApplied(
     migrations.map((migration) => [migration.name, migration]),
   );
 
-  const targets = appliedNames.slice(-Math.abs(count ?? 1)).reverse();
+  const limit = count ?? 1;
+
+  // Guarded rather than fed to `slice`, because `slice(-0)` is `slice(0)` —
+  // the whole array. `migrate down 0` therefore used to revert every applied
+  // migration, wiping the schema on a command that reads as a no-op. `up 0`
+  // was already zero migrations, so zero means zero in both directions now.
+  if (limit <= 0) return [];
+
+  const targets = appliedNames.slice(-limit).reverse();
   const missing = targets.filter((name) => !byName.has(name));
 
   if (missing.length > 0) {

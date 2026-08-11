@@ -18,6 +18,10 @@ import {
   createMigration,
   normalizeMigrationName,
 } from '../../../scripts/lib/create-migration';
+import {
+  selectApplied,
+  selectPending,
+} from '../../../scripts/lib/migration-runner';
 
 /**
  * These rules decide which migrations run and in what order, against databases
@@ -273,5 +277,44 @@ describe('createMigration', () => {
     await expect(createMigration([], dir)).rejects.toThrow(
       "'migrationName' is required.",
     );
+  });
+});
+
+/**
+ * The count decides how much schema a single command touches, so the boundary
+ * values are pinned here. `down` in particular is destructive and irreversible
+ * against a real database, which makes an off-by-one an outage rather than a
+ * failed test.
+ */
+describe('migration selection counts', () => {
+  const migrations = ['a', 'b', 'c'].map((name) => ({
+    name,
+    path: `/tmp/${name}.sql`,
+    sections: { up: '', down: '' },
+  })) as unknown as Parameters<typeof selectPending>[1];
+  const names = ['a', 'b', 'c'];
+
+  it('applies every pending migration when no count is given', () => {
+    expect(selectPending([], migrations, undefined).map((m) => m.name)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('caps pending migrations at the count', () => {
+    expect(selectPending([], migrations, 2).map((m) => m.name)).toEqual(['a', 'b']);
+  });
+
+  it('reverts the newest applied migration when no count is given', () => {
+    expect(selectApplied(names, migrations, undefined).map((m) => m.name)).toEqual(['c']);
+  });
+
+  it('reverts newest first, capped at the count', () => {
+    expect(selectApplied(names, migrations, 2).map((m) => m.name)).toEqual(['c', 'b']);
+  });
+
+  // `slice(-0)` is `slice(0)`, so an unguarded count of zero selected the whole
+  // applied list and rolled the entire schema back on a command that reads as
+  // a no-op. Zero must mean zero in both directions.
+  it('treats a count of zero as no migrations in both directions', () => {
+    expect(selectApplied(names, migrations, 0)).toEqual([]);
+    expect(selectPending([], migrations, 0)).toEqual([]);
   });
 });
