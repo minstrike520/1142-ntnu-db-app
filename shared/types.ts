@@ -266,7 +266,7 @@ export interface FriendRequest {
 
 /** Socket notification status, including friendship lifecycle changes. */
 export interface FriendRequestEvent extends Omit<FriendRequest, 'status'> {
-  status: FriendshipStatus | 'rejected' | 'deleted' | 'unblocked';
+  status: FriendshipStatus | 'rejected' | 'deleted' | 'blocked' | 'unblocked';
 }
 
 export interface Folder {

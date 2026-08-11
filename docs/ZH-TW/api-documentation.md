@@ -1450,7 +1450,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 | `user_typing` | `{ roomId: string, userId: string, isTyping: boolean }` | 其他成員的輸入狀態 |
 | `read_update` | `{ roomId: string, userId: string, messageId: string, readPosition?: number }` | 其他成員的已讀游標更新 |
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | 房間或成員狀態變更。`type` 欄位決定子類型，詳見 [`room_update` 子類型](#room_update-子類型)。 |
-| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected' \| 'deleted' \| 'unblocked', createdAt: string }` | 好友生命週期通知。傳送給相關使用者；客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
+| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected' \| 'deleted' \| 'blocked' \| 'unblocked', createdAt: string }` | 好友生命週期通知。傳送給相關使用者；客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
 | `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。 |
 | `emergency_alert` | `{ userId: string, message: string }` | 收到緊急聯絡人的警報通知 |
 | `realtime_ready` | `void` | 有效聊天室訂閱已恢復；客戶端可以開始 `/sync`。每次連線送出一次，伺服器還原先前撤銷的訂閱時也會再送 |
