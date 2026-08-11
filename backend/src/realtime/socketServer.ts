@@ -106,8 +106,20 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
     const userId = socket.data.user.userId;
     let disconnected = false;
     // A reservation that already expired has given its slot back, so this
-    // connection has to take one of its own.
-    if (!settleReservation(socket)) acquireSession(userId);
+    // connection has to take one of its own — and the limit has to be tested
+    // again before it does. The middleware's check cannot stand in for it: it
+    // passed against a count that included this handshake's own reservation,
+    // and the slot has since been returned. Other connections may have taken
+    // it in the meantime, so acquiring unconditionally here is what pushes a
+    // user past `MAX_SESSIONS_PER_USER`.
+    if (!settleReservation(socket)) {
+      if ((sessionCounts.get(userId) ?? 0) >= sessionLimit) {
+        socket.emit('error', { statusCode: 429, message: 'Session limit reached', code: 'SESSION_LIMIT' });
+        socket.disconnect(true);
+        return;
+      }
+      acquireSession(userId);
+    }
     socket.join(`user_${userId}`);
 
     const clearTypingTimers = () => {

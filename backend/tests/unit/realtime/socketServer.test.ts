@@ -241,6 +241,44 @@ describe('attachSockets', () => {
       expect(afterDisconnect[0]).toBeUndefined();
     });
 
+    it('rejects a connection whose reservation expired once the limit refilled', async () => {
+      const { middleware, connect } = attachLimited('1', '5');
+      const late: any = { ...makeSocket('late'), disconnect: mock() };
+      late.on = mock() as any;
+
+      // The handshake reserves the only slot, then stalls past the TTL, so the
+      // timer hands the slot back.
+      middleware(late, () => {});
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      // Someone else takes the freed slot and stays connected.
+      const holder = makeSocket('holder');
+      const holderHandlers: Record<string, any> = {};
+      holder.on = mock((event: string, handler: any) => { holderHandlers[event] = handler; }) as any;
+      const holderResult: Array<Error | undefined> = [];
+      middleware(holder, (err?: Error) => holderResult.push(err));
+      expect(holderResult[0]).toBeUndefined();
+      connect(holder);
+
+      // Now the stalled handshake finally reaches the connection handler. It no
+      // longer holds a reservation, so taking a slot unconditionally would put
+      // the user at two sessions against a limit of one.
+      connect(late);
+
+      expect(late.disconnect).toHaveBeenCalled();
+      expect(late.join).not.toHaveBeenCalled();
+
+      // The count must still be exactly the holder's one session.
+      const after: Array<Error | undefined> = [];
+      middleware(makeSocket('s3'), (err?: Error) => after.push(err));
+      expect(after[0]?.message).toBe('Session limit reached');
+
+      holderHandlers.disconnect();
+      const afterRelease: Array<Error | undefined> = [];
+      middleware(makeSocket('s4'), (err?: Error) => afterRelease.push(err));
+      expect(afterRelease[0]).toBeUndefined();
+    });
+
     it('frees the reserved slot when the session disconnects', () => {
       const { middleware, connect } = attachLimited('1');
       const first = makeSocket('s1');
