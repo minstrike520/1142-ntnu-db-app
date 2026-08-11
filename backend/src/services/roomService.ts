@@ -432,11 +432,34 @@ export const makeRoomService = (
         }
       }
 
-      await roomMemberRepo.update(roomId, targetUserId, data as Parameters<typeof roomMemberRepo.update>[2]);
+      const demotingToPending = target.role !== 'pending' && data.role === 'pending';
+
+      // Revoked before the state change, never after. `roomMemberRepo.update`
+      // commits in its own transaction, so revoking afterwards leaves a window
+      // where the demoted member is still in `room_<roomId>` and a peer's
+      // message is published straight to them — content they have just lost
+      // access to. `kickMember` already draws the boundary this way.
+      if (demotingToPending) {
+        await onMembershipRevoked?.(targetUserId, roomId);
+      }
+
+      try {
+        await roomMemberRepo.update(roomId, targetUserId, data as Parameters<typeof roomMemberRepo.update>[2]);
+      } catch (error) {
+        // The demotion never landed, so the subscription has to go back. A
+        // restored subscription replays nothing, hence the same recovery
+        // signal the failed-kick path sends: the client re-runs `/sync` and
+        // picks up whatever was published while it was out.
+        if (demotingToPending) {
+          await onMembershipGranted?.(targetUserId, roomId);
+          emitToUser?.(targetUserId, 'realtime_ready', undefined);
+        }
+        throw error;
+      }
+
       if (target.role === 'pending' && data.role && data.role !== 'pending') {
         await onMembershipGranted?.(targetUserId, roomId);
-      } else if (target.role !== 'pending' && data.role === 'pending') {
-        await onMembershipRevoked?.(targetUserId, roomId);
+      } else if (demotingToPending) {
         emitToUser?.(targetUserId, 'room_update', {
           type: 'MEMBER_UPDATED',
           roomId,

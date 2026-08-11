@@ -779,6 +779,71 @@ describe('roomService', () => {
     });
   });
 
+  describe('updateMember demotion to pending', () => {
+    it('revokes the subscription before the role change commits', async () => {
+      const order: string[] = [];
+      const onMembershipRevoked = mock(async () => { order.push('revoke'); });
+      const serviceWithHooks = makeRoomService(
+        mockRepo, mockMemberRepo, undefined, undefined, undefined, undefined, mock(), avatarStore,
+        onMembershipRevoked, mock(),
+      );
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember
+        .mockResolvedValueOnce(ownerMember)
+        .mockResolvedValueOnce({ ...ownerMember, userId: 'user-2', role: 'member' } as RoomMember);
+      mockMemberRepo.update.mockImplementation(async () => {
+        order.push('update');
+        return ownerMember;
+      });
+
+      await serviceWithHooks.updateMember('room-1', 'user-1', 'user-2', { role: 'pending' });
+
+      // Reversed, the demoted member stays in `room_<roomId>` across the commit
+      // and a peer's message is delivered to someone who just lost access.
+      expect(order).toEqual(['revoke', 'update']);
+    });
+
+    it('restores the subscription and signals recovery when the role change fails', async () => {
+      const emitToUser = mock();
+      const onMembershipRevoked = mock();
+      const onMembershipGranted = mock();
+      const serviceWithHooks = makeRoomService(
+        mockRepo, mockMemberRepo, undefined, undefined, undefined, undefined, emitToUser, avatarStore,
+        onMembershipRevoked, onMembershipGranted,
+      );
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember
+        .mockResolvedValueOnce(ownerMember)
+        .mockResolvedValueOnce({ ...ownerMember, userId: 'user-2', role: 'member' } as RoomMember);
+      mockMemberRepo.update.mockRejectedValue(new Error('update failed'));
+
+      await expect(
+        serviceWithHooks.updateMember('room-1', 'user-1', 'user-2', { role: 'pending' }),
+      ).rejects.toThrow('update failed');
+
+      expect(onMembershipRevoked).toHaveBeenCalledWith('user-2', 'room-1');
+      expect(onMembershipGranted).toHaveBeenCalledWith('user-2', 'room-1');
+      expect(emitToUser).toHaveBeenCalledWith('user-2', 'realtime_ready', undefined);
+    });
+
+    it('does not revoke anything for a plain nickname change', async () => {
+      const onMembershipRevoked = mock();
+      const serviceWithHooks = makeRoomService(
+        mockRepo, mockMemberRepo, undefined, undefined, undefined, undefined, mock(), avatarStore,
+        onMembershipRevoked, mock(),
+      );
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember
+        .mockResolvedValueOnce(ownerMember)
+        .mockResolvedValueOnce({ ...ownerMember, userId: 'user-2', role: 'member' } as RoomMember);
+      mockMemberRepo.update.mockResolvedValue(ownerMember);
+
+      await serviceWithHooks.updateMember('room-1', 'user-1', 'user-2', { nickname: 'Bob' });
+
+      expect(onMembershipRevoked).not.toHaveBeenCalled();
+    });
+  });
+
   describe('kickMember with emitRoomEvent and system message', () => {
     it('emits MEMBER_KICKED when emitRoomEvent is provided', async () => {
       const emitRoomEvent = mock();
