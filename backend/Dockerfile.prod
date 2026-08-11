@@ -59,6 +59,8 @@ COPY --chown=bun:bun backend/package.json ./
 
 COPY --chown=bun:bun backend/src ./src
 COPY --chown=bun:bun backend/migrations ./migrations
+# CMD runs `migrate:up`, which is scripts/migrate.ts.
+COPY --chown=bun:bun backend/scripts ./scripts
 COPY --chown=bun:bun shared /shared
 COPY --chown=bun:bun tsconfig.base.json /tsconfig.base.json
 COPY --chown=bun:bun backend/tsconfig.json ./tsconfig.json
