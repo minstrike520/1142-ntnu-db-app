@@ -7,4 +7,11 @@ if (process.env.DATABASE_URL_TEST) {
 }
 
 // Set CORS_ORIGINS before the first E2E file imports src/index.
-process.env.CORS_ORIGINS = process.env.CORS_ORIGINS ?? 'http://allowed.example,http://localhost:3005';
+//
+// Assigned unconditionally, not with `??`: the CORS E2E case asserts against
+// this exact allowlist, so the suite has to own the variable. Deferring to an
+// inherited value made the test fail for anyone who had CORS_ORIGINS exported
+// — which `.env.example` ships and every docker-compose developer therefore
+// has — with a bare "expected http://allowed.example, received undefined"
+// that points at the app rather than at the environment.
+process.env.CORS_ORIGINS = 'http://allowed.example,http://localhost:3005';
