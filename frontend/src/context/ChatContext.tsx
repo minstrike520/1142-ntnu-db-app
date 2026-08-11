@@ -1310,22 +1310,48 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Socket.IO can emit multiple connect events during a reconnect race.
     // One cursor must have one active sync request chain, otherwise two chains
     // can page from the same cursor and flush buffered events out of order.
-    const runExclusive = (operation: () => Promise<void>): Promise<void> => {
-      if (synchronizationInFlight) return synchronizationInFlight;
-      synchronizationInFlight = operation();
-      const current = synchronizationInFlight;
-      void current.then(
-        () => {
-          if (synchronizationInFlight === current) synchronizationInFlight = null;
-        },
-        () => {
-          if (synchronizationInFlight === current) synchronizationInFlight = null;
-        },
-      );
-      return current;
+    //
+    // Coalescing is per kind, not blanket. A full sync owns `syncingRef` and
+    // the buffered-event flush, so it can never be *replaced* by whatever
+    // happens to be running: handing back an in-flight checkpoint instead
+    // would leave `syncingRef` stuck true and every later realtime event
+    // sitting in the buffer, unapplied, until the next disconnect. Duplicate
+    // full syncs still collapse into one — that is the reconnect race this
+    // chain exists for — but a full sync requested while the cursor checkpoint
+    // is mid-request is queued behind it rather than dropped.
+    let outstandingFullSync: Promise<void> | null = null;
+
+    const track = (request: Promise<void>): Promise<void> => {
+      synchronizationInFlight = request;
+      const clear = () => {
+        if (synchronizationInFlight === request) synchronizationInFlight = null;
+        if (outstandingFullSync === request) outstandingFullSync = null;
+      };
+      void request.then(clear, clear);
+      return request;
     };
 
-    const synchronize = (): Promise<void> => runExclusive(runSynchronization);
+    const synchronize = (): Promise<void> => {
+      if (outstandingFullSync) return outstandingFullSync;
+      const previous = synchronizationInFlight;
+      const request = (async () => {
+        // Never rejects: a checkpoint swallows its own errors, and a failed
+        // predecessor must not stop this sync from running.
+        if (previous) await previous.catch(() => undefined);
+        if (disposed) return;
+        await runSynchronization();
+      })();
+      outstandingFullSync = request;
+      return track(request);
+    };
+
+    // Opportunistic, unlike `synchronize`: if anything is already talking to
+    // `/sync` there is nothing to checkpoint behind it, and the next tick will
+    // come round again.
+    const checkpointCursor = (): void => {
+      if (synchronizationInFlight) return;
+      void track(runCheckpoint());
+    };
 
     // A live durable event must never advance the cursor itself, however
     // tempting its `changeSequence` looks. Services publish *after* their
@@ -1373,7 +1399,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const checkpointTimer = setInterval(() => {
       if (disposed || syncingRef.current || !liveChangesSinceCheckpoint) return;
       if (!socket.connected) return;
-      void runExclusive(runCheckpoint);
+      checkpointCursor();
     }, CURSOR_CHECKPOINT_INTERVAL_MS);
 
     const cleanupNewMessage = onNewMessage(socket, (payload) => enqueueRealtime(() => {

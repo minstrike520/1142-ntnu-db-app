@@ -386,6 +386,52 @@ describe("realtime sync recovery", () => {
       vi.useRealTimers();
     }
   });
+
+  test("still runs the reconnect's full sync when a checkpoint is mid-request", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const app = await mountChatApp("/chat/room-1", { probe: <ReadStateProbe /> });
+
+      // Leave the cursor behind so the tick has something to checkpoint.
+      act(() => {
+        app.socket().serverEmit(
+          "new_message",
+          makeMessage("room-1", 42, "m-2", { content: "Before checkpoint", changeSequence: 5_000 }),
+        );
+      });
+      await app.settle();
+
+      // Hold the checkpoint's request open, then reconnect underneath it.
+      const gate = __gateNextSync();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6 * 60_000);
+      });
+      act(() => {
+        app.socket().disconnect();
+        app.socket().connect();
+      });
+      await act(async () => {
+        gate.succeed();
+        await Promise.resolve();
+      });
+      await app.settle();
+
+      // The reconnect's full sync owns `syncingRef` and the buffered-event
+      // flush. If it had been swapped for the in-flight checkpoint, syncing
+      // would never end and this message would buffer instead of rendering.
+      act(() => {
+        app.socket().serverEmit(
+          "new_message",
+          makeMessage("room-1", 43, "m-2", { content: "After reconnect" }),
+        );
+      });
+      await app.settle();
+
+      expect(screen.getAllByText("After reconnect").length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("right panel", () => {
