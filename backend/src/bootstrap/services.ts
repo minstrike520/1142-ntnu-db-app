@@ -55,21 +55,35 @@ export const createServices = ({ repositories, publisher }: CreateServicesDeps):
       await messageService.sendMessage(payload.userId, room.roomId, payload.message, {
         commandId: `emergency:${payload.userId}:${contactId}:${payload.incidentId}`,
       });
-      // Published on every attempt, including a replay of an
-      // already-persisted command. The message itself is suppressed on replay
-      // inside `sendMessage` and does not need re-sending — `/sync` recovers
-      // it. This alert has no such path: it is transient, and the incident is
-      // marked completed once delivery returns, so a suppressed one is gone
-      // for good. That is exactly what happens when the process dies between
-      // the message transaction committing and this publish, and the lease
-      // retry then finds the command already recorded.
+      // The message is suppressed on replay inside `sendMessage` and does not
+      // need re-sending — `/sync` recovers it. This alert has no such path: it
+      // is transient, so whether to send it is decided by its own per-contact
+      // receipt rather than by whether the message command was a replay.
       //
-      // The two failure modes are not symmetric. A duplicate emergency alert
-      // is noise; a missing one defeats the feature. So the retry re-sends
-      // rather than deduplicating, and the rare double alert is the accepted
-      // cost.
-      const { incidentId: _incidentId, ...publicPayload } = payload;
-      publisher.publishUserEvent(contactId, 'emergency_alert', publicPayload);
+      // `__replayedCommand` cannot answer the question. It is true both when
+      // the process died between the message transaction committing and this
+      // publish (the alert never went out, and must) and when the incident is
+      // being retried because a *different* contact failed (this one already
+      // heard, and must not hear again). Only a record of the publish itself
+      // separates them.
+      //
+      // Published before the receipt is written, not after: a crash in between
+      // costs a duplicate alert on the retry, whereas the reverse order costs a
+      // lost one. A duplicate is noise; a miss defeats the feature.
+      const alreadyAlerted = await repositories.emergencyContacts.hasAlertDelivery?.(
+        payload.userId,
+        contactId,
+        payload.incidentId,
+      );
+      if (!alreadyAlerted) {
+        const { incidentId: _incidentId, ...publicPayload } = payload;
+        publisher.publishUserEvent(contactId, 'emergency_alert', publicPayload);
+        await repositories.emergencyContacts.recordAlertDelivery?.(
+          payload.userId,
+          contactId,
+          payload.incidentId,
+        );
+      }
     },
     repositories.friends,
     async (userId, data) => {

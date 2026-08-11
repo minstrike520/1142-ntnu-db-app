@@ -152,6 +152,22 @@ export class EmergencyContactRepository implements IEmergencyContactRepository {
     `;
   }
 
+  async hasAlertDelivery(userId: string, contactId: string, incidentId: string): Promise<boolean> {
+    const rows = await this.sql<{ user_id: string }[]>`
+      SELECT user_id FROM emergency_alert_deliveries
+      WHERE user_id = ${userId} AND contact_id = ${contactId} AND incident_id = ${incidentId}
+    `;
+    return rows.length > 0;
+  }
+
+  async recordAlertDelivery(userId: string, contactId: string, incidentId: string): Promise<void> {
+    await this.sql`
+      INSERT INTO emergency_alert_deliveries (user_id, contact_id, incident_id)
+      VALUES (${userId}, ${contactId}, ${incidentId})
+      ON CONFLICT (user_id, contact_id, incident_id) DO NOTHING
+    `;
+  }
+
   async completeAlert(userId: string, lastActivity: Date): Promise<void> {
     await this.sql`
       UPDATE emergency_alert_logs
