@@ -2,7 +2,7 @@ import type { MessageWithSender } from '@shared/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validate } from '../middlewares/validator';
-import { readPositionSchema } from './messageSchemas';
+import { messageParamSchema, readPositionSchema, roomParamSchema } from './messageSchemas';
 import { ValidationError } from '../utils/AppError';
 
 export interface MessageService {
@@ -70,7 +70,7 @@ export const listMessagesQuerySchema = z.object({
 export const makeMessageRoutes = (service: MessageService) => {
   const app = new Hono();
 
-  app.get('/:roomId/messages', validate('query', listMessagesQuerySchema), async (c) => {
+  app.get('/:roomId/messages', validate('param', roomParamSchema), validate('query', listMessagesQuerySchema), async (c) => {
     const userId = c.get('user').userId;
     const roomId = c.req.param('roomId');
     const query = c.req.valid('query') as { before_id?: string; beforeId?: string; limit?: number };
@@ -81,7 +81,7 @@ export const makeMessageRoutes = (service: MessageService) => {
     return c.json(messages, 200);
   });
 
-  app.post('/:roomId/messages', async (c) => {
+  app.post('/:roomId/messages', validate('param', roomParamSchema), async (c) => {
     if (!service.sendMessage) return c.body(null, 404);
     const userId = c.get('user').userId;
     const roomId = c.req.param('roomId');
@@ -96,7 +96,7 @@ export const makeMessageRoutes = (service: MessageService) => {
     return c.json(message, 201);
   });
 
-  app.patch('/:roomId/messages/:messageId', async (c) => {
+  app.patch('/:roomId/messages/:messageId', validate('param', messageParamSchema), async (c) => {
     const userId = c.get('user').userId;
     const roomId = c.req.param('roomId');
     const messageId = c.req.param('messageId');
@@ -116,7 +116,7 @@ export const makeMessageRoutes = (service: MessageService) => {
     return c.body(null, 204);
   });
 
-  app.post('/:roomId/messages/:messageId/recall', async (c) => {
+  app.post('/:roomId/messages/:messageId/recall', validate('param', messageParamSchema), async (c) => {
     if (!service.recallMessage) return c.body(null, 404);
     const userId = c.get('user').userId;
     const recalled = await service.recallMessage(userId, c.req.param('roomId'), c.req.param('messageId'), {
@@ -126,7 +126,7 @@ export const makeMessageRoutes = (service: MessageService) => {
     return c.json(recalled, 200);
   });
 
-  app.put('/:roomId/read-position', validate('json', readPositionSchema), async (c) => {
+  app.put('/:roomId/read-position', validate('param', roomParamSchema), validate('json', readPositionSchema), async (c) => {
     if (!service.markRead) return c.body(null, 404);
     // Cast for the same reason as the query validator above: `validate` takes a
     // bare ZodSchema, so Hono cannot infer the parsed shape. The schema is what

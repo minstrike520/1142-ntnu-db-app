@@ -167,6 +167,31 @@ describe('Realtime recovery REST contract', () => {
     expect(readRetry.body.readPosition).toBe(read.body.readPosition);
   });
 
+  it('rejects malformed path ids as validation errors, not server faults', async () => {
+    // Every one of these used to reach a `uuid` comparison, raise 22P02 in
+    // PostgreSQL, and surface as a 500 — a client mistake reported as an outage.
+    const bad = 'not-a-uuid';
+    const auth = (req: request.Test) => req.set('Authorization', `Bearer ${token}`);
+
+    const list = await auth(request(app).get(`/api/v1/rooms/${bad}/messages`));
+    const create = await auth(request(app).post(`/api/v1/rooms/${bad}/messages`))
+      .set('Idempotency-Key', 'bad-path-create')
+      .send({ content: 'x' });
+    const edit = await auth(request(app).patch(`/api/v1/rooms/${bad}/messages/${bad}`))
+      .set('If-Match', '1')
+      .set('Idempotency-Key', 'bad-path-edit')
+      .send({ content: 'x' });
+    const recall = await auth(request(app).post(`/api/v1/rooms/${bad}/messages/${bad}/recall`))
+      .set('If-Match', '1')
+      .set('Idempotency-Key', 'bad-path-recall');
+    const read = await auth(request(app).put(`/api/v1/rooms/${bad}/read-position`))
+      .set('Idempotency-Key', 'bad-path-read')
+      .send({ messageId: '00000000-0000-4000-8000-000000000000' });
+
+    expect([list.status, create.status, edit.status, recall.status, read.status])
+      .toEqual([400, 400, 400, 400, 400]);
+  });
+
   it('rejects a malformed read-position messageId as a validation error', async () => {
     // Without a schema this string reaches a `uuid` comparison, PostgreSQL
     // raises 22P02, and the generic handler reports a client mistake as a 500.

@@ -26,11 +26,19 @@ export const recallMessageSchema = z.object({
   messageId: idSchema,
 });
 
-// The read position targets a message by id, and the repository puts that value
-// straight into a `uuid` comparison. Anything that is not a UUID makes
-// PostgreSQL raise 22P02, which the generic error handler turns into a 500 —
-// a malformed request reported as a server fault. Validated here instead.
+// Ids reach the repositories as `uuid` comparisons. Anything that is not a UUID
+// makes PostgreSQL raise 22P02, which the generic error handler turns into a
+// 500 — a malformed request reported as a server fault. These schemas keep that
+// on the client's side of the line, as a 400.
 export const readPositionSchema = z.object({
+  messageId: z.string().uuid('messageId must be a valid UUID'),
+});
+
+export const roomParamSchema = z.object({
+  roomId: z.string().uuid('roomId must be a valid UUID'),
+});
+
+export const messageParamSchema = roomParamSchema.extend({
   messageId: z.string().uuid('messageId must be a valid UUID'),
 });
 
