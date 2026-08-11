@@ -266,6 +266,29 @@ pnpm --filter near-chat-frontend lint
 docker compose exec frontend pnpm run lint
 ```
 
+### 執行前端瀏覽器測試（Playwright）
+這組測試在主機上執行，不在 Docker 內，並且與 `frontend/tests/` 的 Vitest 測試完全分開。它以真實 Chromium 對前端 production build 進行驗證；所有 `/api/v1` 請求都在瀏覽器內被攔截並回覆假資料，因此不需要後端，也不需要資料庫。
+
+npm 套件不含瀏覽器執行檔，每台機器需先安裝一次：
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+```
+
+接著執行測試。`playwright.config.ts` 會自行建置並啟動 Next.js，因此不需要事先啟動伺服器：
+
+```bash
+pnpm --filter near-chat-frontend test:browser
+```
+
+測試失敗時，HTML report、trace 與 screenshot 會產生在 `frontend/playwright-report/` 與 `frontend/test-results/`：
+
+```bash
+pnpm --filter near-chat-frontend exec playwright show-report
+```
+
+測試檔案位於 `frontend/tests-browser/`，共用的 REST mock 為 `frontend/tests-browser/support/api-mock.ts`。串接真實後端與 Postgres 的 full-stack 瀏覽器 E2E 由 Issue #544 另行追蹤，屆時會建立獨立 lane，而不是擴張這條 lane 的責任。
+
 ### 執行單元測試
 單元測試不需要資料庫連線。
 ```bash

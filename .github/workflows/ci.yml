@@ -43,6 +43,7 @@ jobs:
       frontend-required: ${{ steps.plan.outputs.frontend-required }}
       backend-required: ${{ steps.plan.outputs.backend-required }}
       database-required: ${{ steps.plan.outputs.database-required }}
+      browser-required: ${{ steps.plan.outputs.browser-required }}
       security-required: ${{ steps.plan.outputs.security-required }}
       run-build: ${{ steps.plan.outputs.run-build }}
     steps:
@@ -123,11 +124,17 @@ jobs:
           frontend_required=false
           backend_required=false
           database_required=false
+          browser_required=false
           security_required=false
           run_build=false
 
+          # The browser lane exercises the same frontend the frontend lane
+          # lints, typechecks and unit-tests, so it follows that decision rather
+          # than carrying a fifth near-identical path list that would drift.
+          # This mirrors how the database lane follows backend.
           if [[ "$EVENT_NAME" == "workflow_dispatch" || "$FRONTEND_CHANGED" == "true" ]]; then
             frontend_required=true
+            browser_required=true
           fi
 
           # The database lane verifies the same code the backend lane builds, so
@@ -160,6 +167,7 @@ jobs:
             echo "frontend-required=$frontend_required"
             echo "backend-required=$backend_required"
             echo "database-required=$database_required"
+            echo "browser-required=$browser_required"
             echo "security-required=$security_required"
             echo "run-build=$run_build"
           } >> "$GITHUB_OUTPUT"
@@ -185,6 +193,11 @@ jobs:
     if: needs.detect.outputs.database-required == 'true'
     uses: ./.github/workflows/ci-database.yml
 
+  browser:
+    needs: detect
+    if: needs.detect.outputs.browser-required == 'true'
+    uses: ./.github/workflows/ci-browser.yml
+
   security:
     needs: detect
     if: needs.detect.outputs.security-required == 'true'
@@ -202,7 +215,7 @@ jobs:
   required-checks:
     name: required-checks
     if: always()
-    needs: [detect, frontend, backend, database, security]
+    needs: [detect, frontend, backend, database, browser, security]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every lane reached an acceptable state
@@ -211,10 +224,12 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           DATABASE_RESULT: ${{ needs.database.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
           FRONTEND_REQUIRED: ${{ needs.detect.outputs.frontend-required }}
           BACKEND_REQUIRED: ${{ needs.detect.outputs.backend-required }}
           DATABASE_REQUIRED: ${{ needs.detect.outputs.database-required }}
+          BROWSER_REQUIRED: ${{ needs.detect.outputs.browser-required }}
           SECURITY_REQUIRED: ${{ needs.detect.outputs.security-required }}
         run: |
           set -uo pipefail
@@ -230,6 +245,17 @@ jobs:
           # silently drop a whole lane and still go green. `cancelled` and
           # `failure` are never acceptable for either kind of lane.
           check_lane() { # name, result, required
+            # The required flag has to be literally true or false. If a lane's
+            # `detect` output is missing from the `outputs:` block or misspelled
+            # there, the expression yields an empty string: the lane's `if`
+            # evaluates false and it is skipped, and an empty flag would then
+            # take the not-required branch and accept that skip. `set -u` cannot
+            # catch it because the variable is defined in `env:`, just empty.
+            if [[ "$3" != "true" && "$3" != "false" ]]; then
+              fail "$1 required-flag is '$3'; expected true or false (missing or misspelled detect output)"
+              return
+            fi
+
             if [[ "$3" == "true" ]]; then
               [[ "$2" == "success" ]] || fail "$1 was required but finished as $2"
             else
@@ -242,6 +268,7 @@ jobs:
           check_lane frontend "$FRONTEND_RESULT" "$FRONTEND_REQUIRED"
           check_lane backend "$BACKEND_RESULT" "$BACKEND_REQUIRED"
           check_lane database "$DATABASE_RESULT" "$DATABASE_REQUIRED"
+          check_lane browser "$BROWSER_RESULT" "$BROWSER_REQUIRED"
           check_lane security "$SECURITY_RESULT" "$SECURITY_REQUIRED"
 
           # Written before exiting, not after: a gate that fails is exactly when
@@ -253,6 +280,7 @@ jobs:
             echo "| frontend | \`$FRONTEND_REQUIRED\` | \`$FRONTEND_RESULT\` |"
             echo "| backend | \`$BACKEND_REQUIRED\` | \`$BACKEND_RESULT\` |"
             echo "| database | \`$DATABASE_REQUIRED\` | \`$DATABASE_RESULT\` |"
+            echo "| browser | \`$BROWSER_REQUIRED\` | \`$BROWSER_RESULT\` |"
             echo "| security | \`$SECURITY_REQUIRED\` | \`$SECURITY_RESULT\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
