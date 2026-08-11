@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'bun:test';
 import path from 'path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import {
   assertMigrationOrder,
   compareMigrationFileNames,
@@ -96,6 +98,15 @@ describe('splitMigrationSql', () => {
     expect(up).toBe('SELECT 1;');
     expect(down).toBeNull();
   });
+
+  it('handles a down marker with no up marker the way node-pg-migrate does', () => {
+    // Degenerate, but the slicing is asymmetric and worth pinning: with no up
+    // marker the whole file becomes the up half, down section included.
+    const { up, down } = splitMigrationSql('--- Down migration\nDROP TABLE t;');
+
+    expect(up).toBe('--- Down migration\nDROP TABLE t;');
+    expect(down).toBe('--- Down migration\nDROP TABLE t;');
+  });
 });
 
 describe('assertMigrationOrder', () => {
@@ -111,15 +122,46 @@ describe('assertMigrationOrder', () => {
 });
 
 describe('loadMigrationFiles', () => {
-  it('returns every migration in the repository, sorted, named as pgmigrations records them', async () => {
-    const migrations = await loadMigrationFiles();
-    const names = migrations.map((migration) => migration.name);
+  /**
+   * Pinned literally rather than compared against a re-sort of itself: the
+   * order below is the one node-pg-migrate actually recorded in `pgmigrations`
+   * on a real database, so it is the deployed history this runner must keep
+   * reproducing. Asserting `names` equals `names.sort(comparator)` would pass
+   * for any comparator, including one that swaps the two 2026053000000 files.
+   *
+   * Adding a migration is expected to extend this list.
+   */
+  const expectedOrder = [
+    '1716300000000_init',
+    '1716300000001_create-attachments-table',
+    '2026053000000_create-friendships-and-blocks',
+    '2026053000000_emergency_contacts',
+    '2026053014000_add_folders',
+    '2026053016000_message_mentions',
+    '2026053100000_message_pagination_index',
+    '2026053118300_room_invite_code_unique',
+    '2026053120000_emergency_alert_logs',
+    '2026060100000_db_optimization',
+    '2026061200000_create_refresh_tokens_table',
+    '2026061500000_index_unindexed_foreign_keys',
+    '2026061501000_add_repository_views',
+    '2026061502000_add_demo_warning_fields',
+    '2026061600000_add_room_order_field',
+    '2026063000000_remove_demo_warning_fields',
+  ];
 
-    expect(names).toEqual([...names].sort(compareMigrationFileNames));
-    expect(names).toContain('1716300000000_init');
+  it('reproduces the migration order node-pg-migrate recorded', async () => {
+    const migrations = await loadMigrationFiles();
+
+    expect(migrations.map((migration) => migration.name)).toEqual(expectedOrder);
     // The recorded name is the basename without the extension.
-    expect(names.every((name) => !name.endsWith('.sql'))).toBe(true);
     expect(migrations[0]?.filePath).toBe(path.join(migrationsDir, '1716300000000_init.sql'));
+  });
+
+  it('sorts the shared-prefix pair the same way from any starting order', () => {
+    // Guards the tie-break specifically: reversing the input must not change
+    // the result, whatever order the filesystem hands them back in.
+    expect([...expectedOrder].reverse().sort(compareMigrationFileNames)).toEqual(expectedOrder);
   });
 
   it('every migration in the repository is splittable and reversible', async () => {
@@ -132,15 +174,17 @@ describe('loadMigrationFiles', () => {
   });
 
   it('refuses a non-SQL migration rather than sending it to the database', async () => {
-    const dir = path.join(__dirname, 'fixtures-migrate-runner');
-
-    await Bun.write(path.join(dir, '1_ok.sql'), '--- Up migration\nSELECT 1;');
-    await Bun.write(path.join(dir, '2_unsupported.ts'), 'export const up = () => {};');
+    // Built in a temp dir, never under tests/: a leaked .ts fixture here would
+    // be picked up by both `tsc --noEmit` and `bun test tests/unit`.
+    const dir = await mkdtemp(path.join(tmpdir(), 'migrate-runner-'));
 
     try {
+      await Bun.write(path.join(dir, '1_ok.sql'), '--- Up migration\nSELECT 1;');
+      await Bun.write(path.join(dir, '2_unsupported.ts'), 'export const up = () => {};');
+
       await expect(loadMigrationFiles(dir)).rejects.toThrow(/Only \.sql migrations are supported/);
     } finally {
-      await Bun.$`rm -rf ${dir}`.quiet();
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

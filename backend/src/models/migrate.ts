@@ -23,8 +23,15 @@
 import { SQL } from "bun";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { describeDatabaseTarget } from "../utils/describeDatabaseTarget";
 
-// `__dirname`, not `import.meta`: tsconfig.json compiles with "module":
+// This runner has to live under src/, not scripts/: Dockerfile.prod's runner
+// stage copies only `backend/src` and `backend/migrations`, and its CMD runs
+// `migrate:up` before the app. src/ is also what eslint and tsc are scoped to.
+//
+// Resolved from `__dirname`, not cwd, so the command works from anywhere. In
+// the production image that is /app/src/models -> /app/migrations.
+// `__dirname` rather than `import.meta`: tsconfig.json compiles with "module":
 // "commonjs", which rejects import.meta at typecheck time. Bun provides both.
 const MIGRATIONS_DIR = path.resolve(__dirname, "../../migrations");
 const MIGRATIONS_TABLE = '"public"."pgmigrations"';
@@ -177,7 +184,14 @@ function requireDatabaseUrl(): string {
 async function withLockedConnection<T>(
   handler: (connection: SQL) => Promise<T>,
 ): Promise<T> {
-  const sql = new SQL(requireDatabaseUrl());
+  const databaseUrl = requireDatabaseUrl();
+
+  // Say which database is about to be altered — never the URL itself, which
+  // carries credentials. Bun reads `.env` automatically where the old Node CLI
+  // did not, so the target is no longer obvious from the invocation alone.
+  console.log(`MIGRATE: target=${describeDatabaseTarget(databaseUrl)}`);
+
+  const sql = new SQL(databaseUrl);
   const connection = await sql.reserve();
 
   try {
@@ -190,7 +204,7 @@ async function withLockedConnection<T>(
     }
 
     try {
-      return await handler(connection as unknown as SQL);
+      return await handler(connection);
     } finally {
       await connection
         .unsafe(`SELECT pg_advisory_unlock(${ADVISORY_LOCK_ID})`)
@@ -202,6 +216,9 @@ async function withLockedConnection<T>(
   }
 }
 
+// Same DDL node-pg-migrate emits. It additionally repaired a missing PRIMARY KEY
+// on a pre-existing table, which only mattered for tables created by versions
+// old enough to omit it; anything the v9 CLI created already has one.
 async function ensureMigrationsTable(connection: SQL): Promise<void> {
   await connection.unsafe(
     `CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (id SERIAL PRIMARY KEY, name varchar(255) NOT NULL, run_on timestamp NOT NULL)`,
@@ -250,17 +267,25 @@ async function applyMigrations(
       console.log(`### MIGRATION ${migration.name} (${direction.toUpperCase()}) ###`);
       await connection.unsafe(await readMigrationSql(migration, direction));
 
-      if (direction === "up") {
-        await connection`INSERT INTO public.pgmigrations (name, run_on) VALUES (${migration.name}, NOW())`;
-      } else {
-        await connection`DELETE FROM public.pgmigrations WHERE name = ${migration.name}`;
-      }
+      // NOW() is the transaction timestamp, so every row in a batch shares one
+      // `run_on` and `ORDER BY run_on, id` stays in application order. A
+      // client-side timestamp here would quietly break that ordering.
+      await connection.unsafe(
+        direction === "up"
+          ? `INSERT INTO ${MIGRATIONS_TABLE} (name, run_on) VALUES ($1, NOW())`
+          : `DELETE FROM ${MIGRATIONS_TABLE} WHERE name = $1`,
+        [migration.name],
+      );
     }
 
     await connection.unsafe("COMMIT");
   } catch (error) {
     console.warn("> Rolling back attempted migration ...");
-    await connection.unsafe("ROLLBACK");
+    // Never let a failing ROLLBACK replace the migration error that caused it —
+    // that error is the one the operator needs to see.
+    await connection
+      .unsafe("ROLLBACK")
+      .catch((rollbackError: Error) => console.warn(`> Rollback failed: ${rollbackError.message}`));
     throw error;
   }
 }
@@ -299,6 +324,12 @@ async function migrateDown(count: number): Promise<void> {
 
     const migrations = await loadMigrationFiles();
     const appliedNames = await getAppliedNames(connection);
+    // Checked for `down` too, matching node-pg-migrate: its runner validates the
+    // order before it branches on direction.
+    assertMigrationOrder(
+      appliedNames,
+      migrations.map((migration) => migration.name),
+    );
 
     // Newest first: rolling back has to undo migrations in reverse order.
     const toRun = appliedNames.slice(-count).reverse();
@@ -330,7 +361,21 @@ async function migrateDown(count: number): Promise<void> {
 async function createMigration(name: string): Promise<void> {
   await mkdir(MIGRATIONS_DIR, { recursive: true });
 
-  const filePath = path.join(MIGRATIONS_DIR, `${Date.now()}_${name}.sql`);
+  // node-pg-migrate used a bare `Date.now()`, which is a latent outage here: the
+  // existing prefixes are hand-written pseudo-dates (`2026053000000`), not epoch
+  // milliseconds, and real epoch ms does not overtake them until 2034. A bare
+  // timestamp therefore sorts *before* 14 applied migrations, and the next
+  // `migrate:up` aborts on the order check — including the one in
+  // Dockerfile.prod's CMD, which would leave the container unable to start.
+  // Stay monotonic against whatever is already on disk instead.
+  const existing = await loadMigrationFiles();
+  const highestPrefix = existing.reduce(
+    (highest, migration) => Math.max(highest, getNumericPrefix(migration.fileName)),
+    0,
+  );
+  const prefix = Math.max(Date.now(), highestPrefix + 1);
+
+  const filePath = path.join(MIGRATIONS_DIR, `${prefix}_${name}.sql`);
   await writeFile(filePath, MIGRATION_TEMPLATE, { flag: "wx" });
 
   console.log(`Created migration -- ${filePath}`);
