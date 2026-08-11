@@ -181,9 +181,36 @@ docker compose exec backend bun run db:seed
 
 ### 常見指令
 - **建立新的遷移檔**：`docker compose exec backend bun run migrate:create <name>`
-- **執行資料庫遷移**：`docker compose exec backend bun run migrate:up`
-- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`
+- **執行資料庫遷移**：`docker compose exec backend bun run migrate:up`（可加上數量：`migrate:up <count>`）
+- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`（預設回滾一個；`migrate:down <count>` 可指定數量）
 - **寫入種子資料**：`docker compose exec backend bun run db:seed`
+
+### 關於 Migration Runner
+遷移由 `backend/scripts/migrate.ts` 執行，這是一個以 `Bun.SQL` 實作的最小 runner。
+它在 #421 取代了 `node-pg-migrate`，讓後端只依賴 Bun — 不再需要 Node 執行環境，也不再需要 `pg` driver。
+
+它的行為：
+
+- 套用 `backend/migrations/` 底下所有 `.sql` 檔，依檔名的數字前綴排序，並將每個檔案以名稱記錄在
+  `pgmigrations` 表中。已記錄的檔案不會重複套用。
+- 依 `-- Up Migration` 與 `-- Down Migration` 標頭切分每個檔案。
+- 單次執行是**一個交易**。任何一個遷移失敗時，該次執行不會提交任何內容，
+  且錯誤訊息會指出失敗的檔案名稱。
+- 執行前先取得 PostgreSQL advisory lock，因此兩個同時啟動的容器不會並行遷移；
+  後者會以 `Another migration is already running.` 結束。
+- 若 `backend/migrations/` 中出現非 `.sql` 檔案，會直接失敗，而不是靜默略過。
+- 當分支合併導致新的遷移排在已套用的遷移之前時，會以
+  `Not run migration … is preceding already run migration …` 中止。
+  請將該檔案改名為更大的前綴，使其排在最後。
+
+`pgmigrations` 表、記錄的名稱、排序規則與 advisory lock id 都與 `node-pg-migrate` 相同，
+因此由舊工具遷移過的資料庫可以無縫接續。
+
+設定 `MIGRATE_VERBOSE=1` 可在執行前印出每個遷移的 SQL。
+
+遷移檔一律為 SQL。`migrate:create` 會產生
+`backend/migrations/<YYYYMMDD><序號>_<name>.sql`，內含兩個區段標頭，
+並自動選擇一定會排在既有遷移之後的前綴。
 
 ### 修復損壞的開發資料庫
 如果遷移過程中遇到 `relation ... already exists` 錯誤，或者遷移狀態發生混亂：

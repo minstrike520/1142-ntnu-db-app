@@ -83,7 +83,7 @@ To ensure consistent project communications:
   CI creates a fresh database on every run and is unaffected.
 * **After the first real deployment**: `init.sql` is frozen. From that point on,
   every schema modification is an additive migration under `backend/migrations/`
-  using `node-pg-migrate`, and the baseline is never edited again. Whoever performs
+  as plain SQL applied by the Bun runner in `backend/scripts/migrate.ts`, and the baseline is never edited again. Whoever performs
   the first deployment is responsible for flipping this rule in this document.
 * **Migration Commands** (Execute inside the backend container):
   - **Create migration**: `docker compose exec backend pnpm run migrate:create <name>`
