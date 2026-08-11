@@ -307,6 +307,49 @@ describe("realtime sync recovery", () => {
     // the replay must not add to it. room-2 is unread 3 in the fixtures.
     expect(observedRooms.find((room) => room.id === "room-2")?.unreadCount).toBe(3);
   });
+
+  test("reloads the active room's members after a recovery sync", async () => {
+    const app = await mountChatApp("/chat/room-1", { probe: <ReadStateProbe /> });
+    const before = __getApiCallLog("listRoomMembers").length;
+
+    act(() => {
+      app.socket().disconnect();
+      app.socket().connect();
+    });
+    await app.settle();
+
+    // Room summaries carry no members and the cached list survives the refresh,
+    // so without an explicit reload the roles, avatars and read markers changed
+    // during the outage would stay stale until the user switched rooms.
+    const reloads = __getApiCallLog("listRoomMembers")
+      .slice(before)
+      .filter((entry) => entry.args[0] === "room-1");
+    expect(reloads.length).toBeGreaterThan(0);
+  });
+
+  test("checkpoints durable events so the next sync resumes from them", async () => {
+    const app = await mountChatApp("/chat/room-1", { probe: <ReadStateProbe /> });
+    const incoming = makeMessage("room-1", 41, "m-2", {
+      content: "Checkpointed",
+      changeSequence: 4_242,
+    });
+
+    act(() => {
+      app.socket().serverEmit("new_message", incoming);
+    });
+    await app.settle();
+
+    act(() => {
+      app.socket().disconnect();
+      app.socket().connect();
+    });
+    await app.settle();
+
+    // The event was received live, so recovery must resume from it rather than
+    // replaying the whole session back from where the last sync stopped.
+    const cursors = __getApiCallLog("syncChanges").map((entry) => entry.args[0]);
+    expect(cursors.at(-1)).toBe(4_242);
+  });
 });
 
 describe("right panel", () => {

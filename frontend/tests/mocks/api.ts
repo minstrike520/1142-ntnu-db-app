@@ -195,7 +195,10 @@ export const leaveRoom = async (): Promise<void> => undefined;
 export const listRoomMembers = async (
   _token: string,
   roomId: string,
-): Promise<RoomMember[]> => membersByRoom[roomId] ?? [];
+): Promise<RoomMember[]> => {
+  apiCallLog.push({ fn: "listRoomMembers", args: [roomId] });
+  return membersByRoom[roomId] ?? [];
+};
 
 export const approveRoomMember = async (): Promise<void> => undefined;
 export const updateRoomMember = async (): Promise<void> => undefined;
@@ -293,6 +296,7 @@ export const syncChanges = async (
   _token: string,
   cursor: number,
 ): Promise<{ changes: []; nextCursor: number; hasMore: false }> => {
+  apiCallLog.push({ fn: "syncChanges", args: [cursor] });
   const gate = syncGate;
   if (gate) {
     syncGate = null;

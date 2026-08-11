@@ -848,24 +848,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           return next;
         });
 
-        const roomReads = members.reduce<Record<string, string>>((reads, member) => {
-          if (member.lastReadId) {
-            reads[member.userId] = member.lastReadId;
+        setGroupReadStates((current) => {
+          const existing = current[roomId] ?? {};
+          const roomReads: Record<string, string> = {};
+          for (const member of members) {
+            if (!member.lastReadId) continue;
+            // Read markers only ever move forward. A snapshot that carries no
+            // read position cannot be shown to be newer than one the client
+            // already holds, so it must not overwrite it — otherwise a member
+            // list still in flight when a `read_update` lands (a room switch
+            // during a burst, or the reload that follows a socket recovery)
+            // would roll that receipt back to whatever the request had read.
+            if (member.readPosition === undefined && existing[member.userId]) continue;
+            roomReads[member.userId] = member.lastReadId;
           }
-          return reads;
-        }, {});
 
-        setGroupReadStates((current) =>
-          Object.keys(roomReads).length === 0
+          return Object.keys(roomReads).length === 0
             ? current
-            : {
-                ...current,
-                [roomId]: {
-                  ...(current[roomId] ?? {}),
-                  ...roomReads,
-                },
-              },
-        );
+            : { ...current, [roomId]: { ...existing, ...roomReads } };
+        });
 
         return members;
       })
@@ -1210,6 +1211,28 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           }
         }
         await refreshSocialData(token, undefined, currentUserId);
+        // Room summaries carry no member list, and `mapRooms` deliberately
+        // keeps the cached one so a refresh does not blank the open room. That
+        // leaves members as the one part of the room projection the recovery
+        // above never reconciles: `read_update` is not replayed by `/sync` at
+        // all, and the `room_update` subtypes that normally trigger a member
+        // reload (renames, avatar and nickname edits, role changes, joins and
+        // kicks) are dropped while the socket is down. Without this the open
+        // room shows stale avatars, roles and read markers until the user
+        // switches rooms or reloads the page.
+        //
+        // Awaited, and awaited here rather than after the flush: the member
+        // list carries read markers, so it has to land before the buffered
+        // events replay or a receipt that arrived during the outage would be
+        // overwritten by the older snapshot this request was already holding.
+        // Its failure is swallowed on purpose — stale members are worth far
+        // less than the recovered messages, which are already committed by
+        // this point, so it must not send the whole sync down the retry path.
+        const recoveredRoomId = activeRoomIdRef.current;
+        if (recoveredRoomId && canonicalRooms.some((room) => room.id === recoveredRoomId)) {
+          await loadGroupMembers(recoveredRoomId).catch(console.error);
+          if (disposed) return;
+        }
         const bufferedMessageIdsByRoom = new Map<string, Set<string>>();
         for (const buffered of bufferedRealtimeRef.current) {
           if (buffered.kind !== "message" || !buffered.roomId || !buffered.messageId) continue;
@@ -1297,6 +1320,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     };
 
     const cleanupNewMessage = onNewMessage(socket, (payload) => enqueueRealtime(() => {
+      // Durable events carry the same change sequence `/sync` pages through, so
+      // a session that stays connected for hours can keep its cursor current
+      // instead of leaving it where the last sync stopped and then paging the
+      // whole gap back, 250 rows at a time, on the next reconnect.
+      //
+      // Advancing here rather than in the socket callback is what makes it
+      // safe: `enqueueRealtime` holds every task until the sync that owns the
+      // cursor has succeeded, so a change committed before the subscription
+      // was restored is always covered by that sync first. When the sync fails
+      // the tasks stay buffered and unexecuted, which is exactly the "do not
+      // advance the cursor from live events" rule the retry path depends on.
+      advanceCursor(payload.changeSequence);
       const incoming = mapMessage(payload, currentUserId);
       const existingMessage = messagesRef.current.find((message) => message.id === incoming.id);
       if (
@@ -1380,6 +1415,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       );
     }, { kind: "message", roomId: payload.roomId, messageId: payload.messageId }));
     const cleanupRecall = onMessageRecalled(socket, (payload) => enqueueRealtime(() => {
+      advanceCursor(payload.changeSequence);
       setMessages((current) =>
         hydrateReplyTargets(
           current.map((message) =>
@@ -1410,6 +1446,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       ));
     }));
     const cleanupUpdate = onMessageUpdated(socket, (updatedMessage) => enqueueRealtime(() => {
+      advanceCursor(updatedMessage.changeSequence);
       if (
         updatedMessage.changeSequence !== undefined &&
         updatedMessage.changeSequence <= Math.max(
