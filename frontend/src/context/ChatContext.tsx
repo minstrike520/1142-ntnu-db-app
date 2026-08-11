@@ -1634,7 +1634,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (activeTok) {
         void refreshSocialData(activeTok, undefined, currentUserId);
         
-        const status = payload.status as string;
+        const status = payload.status;
         if (
           status === "accepted" ||
           status === "deleted" ||
@@ -2525,6 +2525,37 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const prevActiveRoomIdRef = useRef<string | null>(null);
 
+  // Advances the local read marker optimistically, then undoes it if the write
+  // never lands. Both callers below decide whether to send by comparing the
+  // marker with the newest message, so a marker left ahead of a failed write is
+  // self-silencing: the room looks read here while the server still counts it
+  // unread, and nothing retries until a new message, a room switch or a reload.
+  const commitReadPosition = (
+    authToken: string,
+    userId: string,
+    roomId: string,
+    messageId: string,
+    previousMessageId: string | null,
+  ) => {
+    setGroupReadStates((current) => ({
+      ...current,
+      [roomId]: { ...(current[roomId] ?? {}), [userId]: messageId },
+    }));
+
+    void markRoomReadApi(authToken, roomId, messageId).catch((error) => {
+      console.error("Failed to persist read position:", error);
+      setGroupReadStates((current) => {
+        const roomState = current[roomId] ?? {};
+        // A later read may already have superseded this one — only undo our own.
+        if (roomState[userId] !== messageId) return current;
+        const next = { ...roomState };
+        if (previousMessageId === null) delete next[userId];
+        else next[userId] = previousMessageId;
+        return { ...current, [roomId]: next };
+      });
+    });
+  };
+
   useEffect(() => {
     if (!token || !activeRoomId || !currentUserId) return;
 
@@ -2548,17 +2579,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     if (currentLastReadId === latestIncoming.id) return;
 
-    void markRoomReadApi(token, activeRoomId, latestIncoming.id).catch((error) =>
-      console.error("Failed to persist read position:", error),
-    );
-
-    setGroupReadStates((current) => ({
-      ...current,
-      [activeRoomId]: {
-        ...(current[activeRoomId] ?? {}),
-        [currentUserId]: latestIncoming.id,
-      },
-    }));
+    commitReadPosition(token, currentUserId, activeRoomId, latestIncoming.id, currentLastReadId);
   }, [activeRoomId, currentUserId, groupReadStates, messages, token]);
 
   // Stable function for Chatroom to call when the user has scrolled to the bottom
@@ -2576,13 +2597,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         room.members?.find((m) => m.userId === currentUserId)?.lastReadId ??
         null;
       if (currentLastReadId === latestIncoming.id) return;
-      void markRoomReadApi(token, roomId, latestIncoming.id).catch((error) =>
-        console.error("Failed to persist read position:", error),
-      );
-      setGroupReadStates((current) => ({
-        ...current,
-        [roomId]: { ...(current[roomId] ?? {}), [currentUserId]: latestIncoming.id },
-      }));
+      commitReadPosition(token, currentUserId, roomId, latestIncoming.id, currentLastReadId);
     };
   });
 
