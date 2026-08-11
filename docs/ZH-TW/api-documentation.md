@@ -1431,7 +1431,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 - **Namespace**: `/`
 - **驗證**: 連線時需在 Socket.IO `auth.token` handshake 欄位帶上 access token。
 - **訂閱**: 連線後伺服器會加入 `user_<userId>`，並加入 `room_members` 中所有非 pending 聊天室；撤銷成員資格時會移除該使用者的所有 session。
-- **復原**: 客戶端必須先等待伺服器發出 `realtime_ready`，再於每次連線與 token refresh 後呼叫 `GET /sync`。不使用 `connectionStateRecovery`，Sync Cursor 是唯一復原路徑。若訂閱恢復失敗，伺服器會在發送 `realtime_ready` 前中斷 socket，讓客戶端重新握手。
+- **復原**: 客戶端必須先等待伺服器發出 `realtime_ready`，再於每次連線與 token refresh 後呼叫 `GET /sync`。不使用 `connectionStateRecovery`，Sync Cursor 是唯一復原路徑。若訂閱恢復失敗，伺服器會在發送 `realtime_ready` 前中斷 socket，讓客戶端重新握手。此外，當伺服器還原自己先前撤銷的訂閱時（條件式刪除失敗的踢除），也會在連線期間再次送出 `realtime_ready`：還原訂閱不會補送撤銷期間已發布的內容。
 
 ### 客戶端發送事件
 
@@ -1452,7 +1452,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 | `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected' \| 'deleted' \| 'unblocked', createdAt: string }` | 好友生命週期通知。傳送給相關使用者；客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
 | `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。 |
 | `emergency_alert` | `{ userId: string, message: string }` | 收到緊急聯絡人的警報通知 |
-| `realtime_ready` | `void` | 初始有效聊天室訂閱已恢復；客戶端可以開始 `/sync` |
+| `realtime_ready` | `void` | 有效聊天室訂閱已恢復；客戶端可以開始 `/sync`。每次連線送出一次，伺服器還原先前撤銷的訂閱時也會再送 |
 | `error` | `ApiError` | 事件處理失敗的錯誤回報 |
 
 ---

@@ -477,6 +477,14 @@ export const makeRoomService = (
         : (await roomMemberRepo.remove(roomId, targetUserId), true);
       if (!removed) {
         await onMembershipGranted?.(targetUserId, roomId);
+        // Restoring the subscription does not replay what it missed. Anything
+        // published to the room between the revoke above and this restore was
+        // broadcast while the target had no session in `room_<roomId>`, and a
+        // rejoin delivers nothing retroactively. `realtime_ready` is the
+        // client's standing recovery signal — it re-runs `/sync` from its
+        // cursor — so the durable changes committed inside that window are
+        // recovered instead of being lost for the rest of the session.
+        emitToUser?.(targetUserId, 'realtime_ready', undefined);
         throw new ConflictError('Room membership changed; retry the kick');
       }
       emitToUser?.(targetUserId, 'room_update', {

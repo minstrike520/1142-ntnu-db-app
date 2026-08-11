@@ -807,6 +807,48 @@ describe('roomService', () => {
 
       expect(messageRepo.create).toHaveBeenCalledWith(expect.objectContaining({ content: '[System] Bob已被移出群組' }));
     });
+
+    it('restores the subscription and signals recovery when the conditional delete loses the race', async () => {
+      const emitToUser = mock();
+      const onMembershipRevoked = mock();
+      const onMembershipGranted = mock();
+      const serviceWithHooks = makeRoomService(
+        mockRepo, mockMemberRepo, undefined, undefined, undefined, undefined, emitToUser, avatarStore,
+        onMembershipRevoked, onMembershipGranted,
+      );
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember
+        .mockResolvedValueOnce(ownerMember)
+        .mockResolvedValueOnce({ ...ownerMember, userId: 'user-2', role: 'member' } as RoomMember);
+      // The target was promoted between the role check and the delete.
+      mockMemberRepo.removeIfAuthorized = mock().mockResolvedValue(false);
+
+      await expect(serviceWithHooks.kickMember('room-1', 'user-1', 'user-2')).rejects.toThrow(ConflictError);
+
+      expect(mockMemberRepo.remove).not.toHaveBeenCalled();
+      expect(onMembershipRevoked).toHaveBeenCalledWith('user-2', 'room-1');
+      expect(onMembershipGranted).toHaveBeenCalledWith('user-2', 'room-1');
+      // Rejoining a Socket.IO room replays nothing, so the target has to be
+      // told to run `/sync` for the changes published while it was out.
+      expect(emitToUser).toHaveBeenCalledWith('user-2', 'realtime_ready', undefined);
+    });
+
+    it('does not signal recovery when the kick succeeds', async () => {
+      const emitToUser = mock();
+      const serviceWithHooks = makeRoomService(
+        mockRepo, mockMemberRepo, undefined, undefined, undefined, undefined, emitToUser, avatarStore,
+        mock(), mock(),
+      );
+      mockRepo.findById.mockResolvedValue(room);
+      mockMemberRepo.findMember
+        .mockResolvedValueOnce(ownerMember)
+        .mockResolvedValueOnce({ ...ownerMember, userId: 'user-2', role: 'member' } as RoomMember);
+      mockMemberRepo.removeIfAuthorized = mock().mockResolvedValue(true);
+
+      await serviceWithHooks.kickMember('room-1', 'user-1', 'user-2');
+
+      expect(emitToUser).not.toHaveBeenCalledWith('user-2', 'realtime_ready', undefined);
+    });
   });
 
   describe('uploadAvatar with emitRoomEvent', () => {
