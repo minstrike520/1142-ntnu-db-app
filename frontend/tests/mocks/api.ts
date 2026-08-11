@@ -74,6 +74,7 @@ export const __resetApiMock = (): void => {
   apiCallLog.length = 0;
   conflictingMessageIds.clear();
   failNextListMessages = false;
+  failMarkRoomRead = false;
   syncGate = null;
 };
 
@@ -267,12 +268,20 @@ export const recallMessage = async (
   return { ...(existing ?? messagesByRoom["room-1"]![0]), isRecalled: true, revision: revision + 1 };
 };
 
+/** Makes every markRoomRead call reject, the way an offline client sees it. */
+let failMarkRoomRead = false;
+
+export const __failMarkRoomRead = (fail: boolean): void => {
+  failMarkRoomRead = fail;
+};
+
 export const markRoomRead = async (
   _token: string,
   roomId: string,
   messageId: string,
 ): Promise<RoomMember> => {
   apiCallLog.push({ fn: "markRoomRead", args: [roomId, messageId] });
+  if (failMarkRoomRead) throw new ApiError("Read position write failed", 503);
   return { ...membersByRoom[roomId]![0], lastReadId: messageId };
 };
 

@@ -10,6 +10,7 @@ import { act, fireEvent, screen } from "@testing-library/react";
 import { mountChatApp } from "./harness";
 import { ME_ID, makeMessage, messageId } from "./fixtures";
 import {
+  __failMarkRoomRead,
   __failNextListMessages,
   __failNextRevisionCommand,
   __gateNextSync,
@@ -430,6 +431,33 @@ describe("realtime sync recovery", () => {
       expect(screen.getAllByText("After reconnect").length).toBeGreaterThan(0);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  test("backs off instead of looping when the read-position write keeps failing", async () => {
+    const app = await mountChatApp("/chat/room-1", { probe: <ReadStateProbe /> });
+    __failMarkRoomRead(true);
+    try {
+      const before = __getApiCallLog("markRoomRead").length;
+
+      // A new message in the open room makes the effect send a read position.
+      // The write fails, the marker is rolled back, and the rollback is itself
+      // an input to that same effect — without a backoff the two spin.
+      act(() => {
+        app.socket().serverEmit(
+          "new_message",
+          makeMessage("room-1", 44, "m-2", { content: "Triggers a read write" }),
+        );
+      });
+      await app.settle();
+
+      const attempts = __getApiCallLog("markRoomRead").length - before;
+      expect(attempts).toBeGreaterThan(0);
+      // The first backoff is a second long, so a settled render pass may retry
+      // once or twice — but never the unbounded burst the loop produced.
+      expect(attempts).toBeLessThan(5);
+    } finally {
+      __failMarkRoomRead(false);
     }
   });
 });

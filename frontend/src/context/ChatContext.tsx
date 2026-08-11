@@ -2530,6 +2530,26 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // marker with the newest message, so a marker left ahead of a failed write is
   // self-silencing: the room looks read here while the server still counts it
   // unread, and nothing retries until a new message, a room switch or a reload.
+  //
+  // The rollback alone is not enough, though. `groupReadStates` is a dependency
+  // of the effect below, so undoing the marker immediately re-runs the effect,
+  // which calls straight back in here — a request loop with no delay and no
+  // ceiling for as long as the write keeps failing (offline, a persistent 5xx,
+  // a permission change). The per-room backoff below is what turns that into a
+  // paced retry, and `retryTick` is what wakes the effect once it expires.
+  const readPositionRetryRef = useRef(
+    new Map<string, { inFlight?: string; blockedUntil?: number; attempts: number; timer?: ReturnType<typeof setTimeout> }>(),
+  );
+  const [readPositionRetryTick, setReadPositionRetryTick] = useState(0);
+
+  useEffect(() => {
+    const retries = readPositionRetryRef.current;
+    return () => {
+      for (const state of retries.values()) if (state.timer) clearTimeout(state.timer);
+      retries.clear();
+    };
+  }, []);
+
   const commitReadPosition = (
     authToken: string,
     userId: string,
@@ -2537,23 +2557,53 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     messageId: string,
     previousMessageId: string | null,
   ) => {
+    const state = readPositionRetryRef.current.get(roomId) ?? { attempts: 0 };
+    readPositionRetryRef.current.set(roomId, state);
+
+    // Already writing this exact position, or still inside the backoff window
+    // from the last failure.
+    if (state.inFlight === messageId) return;
+    if (state.blockedUntil !== undefined && Date.now() < state.blockedUntil) return;
+
+    state.inFlight = messageId;
     setGroupReadStates((current) => ({
       ...current,
       [roomId]: { ...(current[roomId] ?? {}), [userId]: messageId },
     }));
 
-    void markRoomReadApi(authToken, roomId, messageId).catch((error) => {
-      console.error("Failed to persist read position:", error);
-      setGroupReadStates((current) => {
-        const roomState = current[roomId] ?? {};
-        // A later read may already have superseded this one — only undo our own.
-        if (roomState[userId] !== messageId) return current;
-        const next = { ...roomState };
-        if (previousMessageId === null) delete next[userId];
-        else next[userId] = previousMessageId;
-        return { ...current, [roomId]: next };
-      });
-    });
+    void markRoomReadApi(authToken, roomId, messageId).then(
+      () => {
+        state.inFlight = undefined;
+        state.attempts = 0;
+        state.blockedUntil = undefined;
+      },
+      (error) => {
+        console.error("Failed to persist read position:", error);
+        state.inFlight = undefined;
+        state.attempts += 1;
+        // 1s, 2s, 4s … capped at 30s.
+        const delay = Math.min(30_000, 1_000 * 2 ** (state.attempts - 1));
+        state.blockedUntil = Date.now() + delay;
+        if (state.timer) clearTimeout(state.timer);
+        state.timer = setTimeout(() => {
+          state.timer = undefined;
+          state.blockedUntil = undefined;
+          // The effect is otherwise inert until something it depends on
+          // changes, and a failed write changes nothing it watches.
+          setReadPositionRetryTick((tick) => tick + 1);
+        }, delay);
+
+        setGroupReadStates((current) => {
+          const roomState = current[roomId] ?? {};
+          // A later read may already have superseded this one — only undo our own.
+          if (roomState[userId] !== messageId) return current;
+          const next = { ...roomState };
+          if (previousMessageId === null) delete next[userId];
+          else next[userId] = previousMessageId;
+          return { ...current, [roomId]: next };
+        });
+      },
+    );
   };
 
   useEffect(() => {
@@ -2580,7 +2630,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     if (currentLastReadId === latestIncoming.id) return;
 
     commitReadPosition(token, currentUserId, activeRoomId, latestIncoming.id, currentLastReadId);
-  }, [activeRoomId, currentUserId, groupReadStates, messages, token]);
+  }, [activeRoomId, currentUserId, groupReadStates, messages, token, readPositionRetryTick]);
 
   // Stable function for Chatroom to call when the user has scrolled to the bottom
   const markRoomAsReadRef = useRef<((roomId: string) => void) | null>(null);
