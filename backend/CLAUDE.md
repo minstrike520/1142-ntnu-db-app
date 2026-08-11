@@ -13,7 +13,7 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 | [src/index.ts](src/index.ts) | Composition Root: calls the `src/bootstrap/` factories in dependency order and launches the HTTP server. Holds wiring only — no construction logic of its own |
 | [src/bootstrap/](src/bootstrap/) | One factory per assembly stage: `config`, `repositories`, `services`, `httpApp`, `realtime`, `jobs`, `start` |
 | [src/models/db.ts](src/models/db.ts) | Exports the shared `pg.Pool` instance initialized from the `DATABASE_URL` environment variable |
-| [migrations/](migrations/) | PostgreSQL migration files written in raw SQL managed by `node-pg-migrate` |
+| [migrations/](migrations/) | PostgreSQL migration files written in raw SQL, applied by the Bun runner in [scripts/migrate.ts](scripts/migrate.ts) |
 | [package.json](package.json) | NPM scripts (`pnpm run dev` for `bun --watch`, `pnpm run test`) and dependencies |
 
 ## Subdirectories
@@ -28,7 +28,7 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 ### 1. Database Access & Query Policies
 - Prisma has been completely removed.
 - **NEVER** use Prisma or any ORM. You must use raw SQL queries parameterized via `pool.query()` in repositories.
-- Schema modifications must be performed by creating a new migration file under `migrations/` via `pnpm run migrate:create <name>`. Refer to existing migrations to understand table names and schema patterns.
+- Schema modifications must be performed by creating a new migration file under `migrations/` via `bun run migrate:create <name>`. Refer to existing migrations to understand table names and schema patterns.
 
 ### 2. Architecture & Layering Rules
 The server strictly implements a 3-tier Hono architecture:

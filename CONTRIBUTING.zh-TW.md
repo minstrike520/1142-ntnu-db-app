@@ -79,7 +79,7 @@
   **不新增 migration 檔**。這讓 Schema 保持為單一份可讀的定義，而不是「基準檔 + 一疊補丁」。
   本機已有 volume 的人需執行一次 `docker compose down -v` 才會套用；CI 每次都建立全新資料庫，不受影響。
 * **首次正式部署之後**：`init.sql` 即凍結。自此每次 Schema 變更都必須是
-  `backend/migrations/` 底下以 `node-pg-migrate` 撰寫的 additive migration，基準檔不再修改。
+  `backend/migrations/` 底下的 additive SQL migration（由 `backend/scripts/migrate.ts` 這個 Bun runner 套用），基準檔不再修改。
   執行首次部署的人負責回來翻轉本文件的這條規則。
 * **Migration 相關指令**（請於後端容器內執行）：
   - **建立遷移檔**：`docker compose exec backend pnpm run migrate:create <name>`

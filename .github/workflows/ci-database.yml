@@ -29,7 +29,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      # node-pg-migrate reads DATABASE_URL; the test helpers read
+      # The migration runner reads DATABASE_URL; the test helpers read
       # DATABASE_URL_TEST (tests/helpers/testPool.ts throws without it). Both
       # are needed — see the explicit DATABASE_URL on the migrate step below.
       DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5433/ntnu_test
