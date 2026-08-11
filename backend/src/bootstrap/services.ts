@@ -52,13 +52,24 @@ export const createServices = ({ repositories, publisher }: CreateServicesDeps):
         room = result.room;
       }
 
-      const message = await messageService.sendMessage(payload.userId, room.roomId, payload.message, {
+      await messageService.sendMessage(payload.userId, room.roomId, payload.message, {
         commandId: `emergency:${payload.userId}:${contactId}:${payload.incidentId}`,
       });
-      if (!(message as typeof message & { __replayedCommand?: boolean }).__replayedCommand) {
-        const { incidentId: _incidentId, ...publicPayload } = payload;
-        publisher.publishUserEvent(contactId, 'emergency_alert', publicPayload);
-      }
+      // Published on every attempt, including a replay of an
+      // already-persisted command. The message itself is suppressed on replay
+      // inside `sendMessage` and does not need re-sending — `/sync` recovers
+      // it. This alert has no such path: it is transient, and the incident is
+      // marked completed once delivery returns, so a suppressed one is gone
+      // for good. That is exactly what happens when the process dies between
+      // the message transaction committing and this publish, and the lease
+      // retry then finds the command already recorded.
+      //
+      // The two failure modes are not symmetric. A duplicate emergency alert
+      // is noise; a missing one defeats the feature. So the retry re-sends
+      // rather than deduplicating, and the rare double alert is the accepted
+      // cost.
+      const { incidentId: _incidentId, ...publicPayload } = payload;
+      publisher.publishUserEvent(contactId, 'emergency_alert', publicPayload);
     },
     repositories.friends,
     async (userId, data) => {
