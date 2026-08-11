@@ -57,8 +57,13 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 - The active branch is `dev`.
 - Code changes should be verified with TypeScript compiler checks (`pnpm exec tsc --noEmit` on both backend and frontend) and E2E/integration tests.
 
-### 5. GitHub Text Language
-- Write all human-readable GitHub text in **Traditional Chinese (繁體中文)**: PR titles (the description after the conventional-commit prefix), PR bodies, and Issue titles/bodies/comments.
-- Keep structural tokens and code in English: the conventional-commit type prefix (e.g. `fix:`, `docs:`), `Closes #<n>`, branch names, file paths, code identifiers, and any trailer/footer lines.
+### 5. Language Usage Conventions
+- **PR title**: English, following Conventional Commits (e.g. `feat(vimeo): add batch thumbnail download`, `fix(migration): prevent temporary file leak on failure`).
+- **PR body / PR comment / review comment**: Traditional Chinese (繁體中文).
+- **Issue title / body / comment**: Traditional Chinese (繁體中文).
+- **Git commit message**: English, following Conventional Commits (e.g. `feat(vimeo): support streaming uploads`, `fix(ui): prevent video list flickering on selection`).
+- **Branch name**: English.
+- **Code identifiers** (class, function, variable, type, interface, enum, constant, file/directory names, API and other code identifiers): English.
+- Technical terms, code identifiers, CLI commands, API names, package names, and proper nouns without a suitable Chinese translation must stay in their original English form even inside Traditional Chinese text.
 
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
