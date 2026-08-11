@@ -16,10 +16,28 @@
  */
 import { runner } from "node-pg-migrate";
 
-const [direction, countArg] = Bun.argv.slice(2);
+const USAGE = "Usage: bun scripts/migrate.ts <up|down> [count]";
+
+const args = Bun.argv.slice(2);
+const [direction, countArg] = args;
 
 if (direction !== "up" && direction !== "down") {
-  console.error("Usage: bun scripts/migrate.ts <up|down> [count]");
+  console.error(USAGE);
+  process.exit(1);
+}
+
+// Anything past the count is rejected rather than ignored. This entrypoint
+// deliberately implements two of the CLI's arguments and none of its flags, so
+// silently dropping the rest would turn a habitual `up 1 --dry-run` into a real
+// schema change — the CLI promises that flag only prints SQL. Failing here
+// keeps the gap visible; forward a flag explicitly if one is ever needed.
+if (args.length > 2) {
+  console.error(
+    `Unexpected argument: ${args[2]}\n` +
+      "This entrypoint accepts a direction and an optional count only — it does " +
+      "not forward node-pg-migrate CLI flags such as --dry-run.\n" +
+      USAGE,
+  );
   process.exit(1);
 }
 
@@ -35,12 +53,14 @@ if (!databaseUrl) {
 let count: number | undefined;
 
 if (countArg !== undefined) {
-  count = Number.parseInt(countArg, 10);
-
-  if (Number.isNaN(count)) {
-    console.error(`Invalid migration count: ${countArg}`);
+  // Digits only: `Number.parseInt` alone would read "1abc" as 1 and "--dry-run"
+  // is better reported as a bad argument than as a bad number.
+  if (!/^\d+$/.test(countArg)) {
+    console.error(`Invalid migration count: ${countArg}\n${USAGE}`);
     process.exit(1);
   }
+
+  count = Number.parseInt(countArg, 10);
 }
 
 // Values below mirror the CLI defaults so behaviour does not shift with this
