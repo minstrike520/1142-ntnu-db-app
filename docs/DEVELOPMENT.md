@@ -195,9 +195,41 @@ docker compose exec backend bun run db:seed
 
 ### Common Commands
 - **Create a new migration**: `docker compose exec backend bun run migrate:create <name>`
-- **Run migrations**: `docker compose exec backend bun run migrate:up`
-- **Rollback migrations**: `docker compose exec backend bun run migrate:down`
+- **Run migrations**: `docker compose exec backend bun run migrate:up` (optionally `migrate:up <count>`)
+- **Rollback migrations**: `docker compose exec backend bun run migrate:down` (one migration; `migrate:down <count>` for more)
 - **Seed database**: `docker compose exec backend bun run db:seed`
+
+### About the Migration Runner
+Migrations are applied by `backend/scripts/migrate.ts`, a small runner built on
+`Bun.SQL`. It replaced `node-pg-migrate` in #421 so the backend depends on Bun
+alone — no Node runtime, no `pg` driver.
+
+What it does:
+
+- Applies every `.sql` file in `backend/migrations/`, ordered by the numeric
+  prefix in the file name, and records each one by name in the `pgmigrations`
+  table. A file already recorded there is never re-applied.
+- Splits each file on its `-- Up Migration` and `-- Down Migration` headers.
+- Runs a whole invocation in **one transaction**. If any migration fails,
+  nothing from that run is committed and the error names the file that failed.
+- Takes a PostgreSQL advisory lock first, so two containers starting at once
+  cannot migrate concurrently — the second exits with
+  `Another migration is already running.`
+- Refuses to start if `backend/migrations/` contains a non-`.sql` file, rather
+  than skipping it silently.
+- Stops with `Not run migration … is preceding already run migration …` when a
+  branch merge leaves a new migration ordered before one already applied. Rename
+  the file with a higher prefix so it sorts last.
+
+The `pgmigrations` table, the recorded names, the ordering rules and the
+advisory lock id are all unchanged from `node-pg-migrate`, so databases migrated
+by the old tool continue from exactly where they left off.
+
+Set `MIGRATE_VERBOSE=1` to print each migration's SQL before it runs.
+
+Migrations are SQL only. `migrate:create` writes
+`backend/migrations/<YYYYMMDD><counter>_<name>.sql` containing both section
+headers, choosing a prefix that always sorts after the existing migrations.
 
 ### Repairing a Broken Dev Database
 If you encounter `relation ... already exists` errors during migration, or migration state goes out of sync:
