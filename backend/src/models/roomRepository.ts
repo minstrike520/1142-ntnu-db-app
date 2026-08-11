@@ -121,6 +121,32 @@ export class RoomRepository implements IRoomRepository {
     return rows.length === 0 ? null : mapRowToRoom(rows[0]);
   }
 
+  /**
+   * The private room these two share, but only while a block between them is
+   * still recorded. Read-only on purpose: the `blocks` insert trigger is the
+   * single owner of the block → read-only invariant, so the block flow must
+   * not write room state itself. This exists so that flow can find the room
+   * whose sockets need revoking, and so a request whose block was already
+   * lifted by a concurrent unblock stops short instead of revoking access to
+   * a room that is legitimately open again.
+   */
+  async findPrivateRoomIdIfBlocked(userA: string, userB: string): Promise<string | null> {
+    const rows = await this.sql<{ room_id: string }[]>`
+      SELECT r.room_id FROM chat_rooms r
+      JOIN room_members rm1 ON r.room_id = rm1.room_id AND rm1.user_id = ${userA}
+      JOIN room_members rm2 ON r.room_id = rm2.room_id AND rm2.user_id = ${userB}
+      WHERE r.type = 'private'
+        AND EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE (b.blocker_id = ${userA} AND b.blocked_id = ${userB})
+             OR (b.blocker_id = ${userB} AND b.blocked_id = ${userA})
+        )
+      ORDER BY r.is_archived ASC, r.created_at DESC
+      LIMIT 1
+    `;
+    return rows.length === 0 ? null : rows[0].room_id;
+  }
+
   async reopenPrivateRoomIfUnblocked(roomId: string, userA: string, userB: string): Promise<Room | null> {
     const rows = await this.sql<RoomRow[]>`
       UPDATE chat_rooms cr

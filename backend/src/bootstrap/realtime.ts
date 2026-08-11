@@ -28,15 +28,19 @@ export const createRealtime = ({
   repositories,
   publisher,
 }: CreateRealtimeDeps): RealtimeRuntime => {
+  // CORS must be configured on the engine, not on the Socket.IO server: once
+  // `io.bind(engine)` is used, Socket.IO never sees the raw handshake request,
+  // so its own `cors` option is dead configuration. The polling handshake is
+  // the first transport a browser tries, and it is a cross-origin request from
+  // the frontend origin, so without these headers no session is ever created.
   const engine = new Engine({
     path: '/socket.io/',
     pingInterval: 25_000,
     pingTimeout: 20_000,
     maxHttpBufferSize: 1_000_000,
-  });
-  const io = new Server<ClientToServerEvents, ServerToClientEvents>({
     cors: { origin: config.corsOrigins, credentials: true },
-  }) as ChatServer;
+  });
+  const io = new Server<ClientToServerEvents, ServerToClientEvents>() as ChatServer;
 
   io.bind(engine);
   publisher.bind(io);
@@ -74,14 +78,23 @@ export const createBunRuntimeServer = ({
   idleTimeout = 60,
 }: CreateBunRuntimeServerDeps): BunRuntimeServer => {
   let bunServer: Bun.Server<unknown> | undefined;
+  // The socket keeps its port during the drain window. Tracking that window
+  // explicitly is what lets `listening` report "not accepting new work" while
+  // `address()` still reports the port that is genuinely still bound.
+  let draining = false;
   const engineHandler = engine.handler();
 
   return {
     get listening() {
-      return bunServer !== undefined;
+      return bunServer !== undefined && !draining;
     },
 
     listen(port, hostname = '0.0.0.0', callback) {
+      if (draining) {
+        // Binding again before the previous socket has released the port would
+        // fail with EADDRINUSE at a point where the caller cannot recover.
+        throw new Error('Cannot listen while the server is shutting down');
+      }
       if (bunServer) {
         callback?.();
         return;
@@ -105,17 +118,21 @@ export const createBunRuntimeServer = ({
 
     close(callback) {
       const current = bunServer;
-      bunServer = undefined;
       if (!current) {
         callback?.();
         return;
       }
       // Drain active HTTP work first. A hard stop remains as a bounded
       // fallback so a stuck websocket cannot hold deployment forever.
+      // The reference is kept until the drain resolves so the facade never
+      // claims the port is free while it is still bound.
+      draining = true;
       let finished = false;
       const finish = () => {
         if (finished) return;
         finished = true;
+        if (bunServer === current) bunServer = undefined;
+        draining = false;
         callback?.();
       };
       void current.stop().finally(finish);

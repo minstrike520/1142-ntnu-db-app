@@ -26,6 +26,19 @@ const typingTtlMs = (): number => {
 };
 
 /**
+ * How long a handshake may hold its reserved session slot before the slot is
+ * assumed abandoned. Socket.IO defers the rest of the connection setup past
+ * the middleware, so a transport that dies in that window never reaches the
+ * `connection` handler and never registers the `disconnect` listener that
+ * would return the slot. Without an expiry those slots accumulate until the
+ * user can no longer connect at all.
+ */
+const sessionReservationTtlMs = (): number => {
+  const configured = Number(process.env.SESSION_RESERVATION_TTL_MS ?? 10_000);
+  return Number.isFinite(configured) && configured > 0 ? configured : 10_000;
+};
+
+/**
  * Attach only the ephemeral realtime surface. Durable commands deliberately
  * have no Socket.IO listeners: REST owns idempotency, optimistic concurrency,
  * authorization and the transaction that creates the durable event.
@@ -34,6 +47,30 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
   const sessionLimit = maxSessionsPerUser();
   const sessionCounts = new Map<string, number>();
   const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Handshakes whose slot was already reserved by the middleware below, so the
+  // connection handler does not count the same session twice. Each reservation
+  // is a lease: if the connection never arrives, the timer returns the slot.
+  const reservedSessions = new WeakSet<object>();
+  const reservationTimers = new WeakMap<object, ReturnType<typeof setTimeout>>();
+  const reservationTtl = sessionReservationTtlMs();
+
+  const settleReservation = (socket: object): boolean => {
+    const timer = reservationTimers.get(socket);
+    if (timer) {
+      clearTimeout(timer);
+      reservationTimers.delete(socket);
+    }
+    return reservedSessions.delete(socket);
+  };
+
+  const acquireSession = (userId: string): void => {
+    sessionCounts.set(userId, (sessionCounts.get(userId) ?? 0) + 1);
+  };
+  const releaseSession = (userId: string): void => {
+    const count = (sessionCounts.get(userId) ?? 1) - 1;
+    if (count > 0) sessionCounts.set(userId, count);
+    else sessionCounts.delete(userId);
+  };
 
   // The auth middleware runs first and stores socket.data.user. Test doubles
   // without `use` still exercise the connection handlers below.
@@ -44,10 +81,23 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
         next(new Error('Authentication error'));
         return;
       }
+      // Check and reserve in the same synchronous step. Counting only once the
+      // connection handler runs would let every concurrent handshake read the
+      // same pre-connection total and pass a limit that is already exhausted.
       if ((sessionCounts.get(userId) ?? 0) >= sessionLimit) {
         next(new Error('Session limit reached'));
         return;
       }
+      acquireSession(userId);
+      reservedSessions.add(socket);
+      const expiry = setTimeout(() => {
+        reservationTimers.delete(socket);
+        // Only release when the connection handler has not already claimed
+        // this reservation, otherwise a live session would lose its slot.
+        if (reservedSessions.delete(socket)) releaseSession(userId);
+      }, reservationTtl);
+      expiry.unref?.();
+      reservationTimers.set(socket, expiry);
       next();
     });
   }
@@ -55,7 +105,9 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
   io.on('connection', (socket) => {
     const userId = socket.data.user.userId;
     let disconnected = false;
-    sessionCounts.set(userId, (sessionCounts.get(userId) ?? 0) + 1);
+    // A reservation that already expired has given its slot back, so this
+    // connection has to take one of its own.
+    if (!settleReservation(socket)) acquireSession(userId);
     socket.join(`user_${userId}`);
 
     const clearTypingTimers = () => {
@@ -122,9 +174,7 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
     socket.on('disconnect', () => {
       disconnected = true;
       clearTypingTimers();
-      const count = (sessionCounts.get(userId) ?? 1) - 1;
-      if (count > 0) sessionCounts.set(userId, count);
-      else sessionCounts.delete(userId);
+      releaseSession(userId);
 
       if (deps.friendRepository) {
         trackUserDisconnection(io, userId, socket.id, deps.friendRepository).catch((err) => {

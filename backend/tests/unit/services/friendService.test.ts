@@ -20,6 +20,70 @@ describe('friendService', () => {
     await expect(service.respondFriendRequest('u1', 'u2', 'rejected')).rejects.toThrow(AppError);
   });
 
+  it('blockUser writes the durable block before revoking the room', async () => {
+    const order: string[] = [];
+    const mockRepo = {
+      blockUser: mock(async () => { order.push('blockUser'); }),
+    } as any;
+    const privateRooms = {
+      markPrivateReadOnly: mock(),
+      findPrivateRoomIdIfBlocked: mock(async () => { order.push('findPrivateRoomIdIfBlocked'); return 'room-1'; }),
+    };
+    const removeUserFromRoom = mock(async () => { order.push('removeUserFromRoom'); });
+    const service = makeFriendService(mockRepo, undefined, privateRooms as any, removeUserFromRoom as any);
+
+    const result = await service.blockUser('u1', 'u2');
+
+    expect(result).toEqual({ status: 'blocked' });
+    expect(order[0]).toBe('blockUser');
+    expect(order).toEqual([
+      'blockUser',
+      'findPrivateRoomIdIfBlocked',
+      'removeUserFromRoom',
+      'removeUserFromRoom',
+    ]);
+    // The blocks insert trigger owns the read-only flag; this flow must not
+    // write it a second time.
+    expect(privateRooms.markPrivateReadOnly).not.toHaveBeenCalled();
+  });
+
+  it('blockUser skips socket revocation when a concurrent unblock already lifted the block', async () => {
+    const mockRepo = {
+      blockUser: mock().mockResolvedValue(undefined),
+    } as any;
+    // A concurrent unblock committed between blockUser and the lookup, so no
+    // room is reported and the reopened room keeps its subscribers.
+    const privateRooms = {
+      markPrivateReadOnly: mock(),
+      findPrivateRoomIdIfBlocked: mock().mockResolvedValue(null),
+    };
+    const removeUserFromRoom = mock();
+    const service = makeFriendService(mockRepo, undefined, privateRooms as any, removeUserFromRoom as any);
+
+    const result = await service.blockUser('u1', 'u2');
+
+    expect(result).toEqual({ status: 'blocked' });
+    expect(privateRooms.findPrivateRoomIdIfBlocked).toHaveBeenCalledWith('u1', 'u2');
+    expect(privateRooms.markPrivateReadOnly).not.toHaveBeenCalled();
+    expect(removeUserFromRoom).not.toHaveBeenCalled();
+  });
+
+  it('blockUser leaves the room usable when the durable block fails', async () => {
+    const mockRepo = {
+      blockUser: mock(async () => { throw new Error('write failed'); }),
+    } as any;
+    const privateRooms = { markPrivateReadOnly: mock(), findPrivateRoomIdIfBlocked: mock() };
+    const removeUserFromRoom = mock();
+    const service = makeFriendService(mockRepo, undefined, privateRooms as any, removeUserFromRoom as any);
+
+    await expect(service.blockUser('u1', 'u2')).rejects.toThrow('write failed');
+    // Without a block row there is nothing to undo, so the room must not have
+    // been left read-only and unsubscribed.
+    expect(privateRooms.markPrivateReadOnly).not.toHaveBeenCalled();
+    expect(privateRooms.findPrivateRoomIdIfBlocked).not.toHaveBeenCalled();
+    expect(removeUserFromRoom).not.toHaveBeenCalled();
+  });
+
   it('unblockUser calls repo.unblockUser', async () => {
     const mockRepo = {
       unblockUser: mock().mockResolvedValue(true),

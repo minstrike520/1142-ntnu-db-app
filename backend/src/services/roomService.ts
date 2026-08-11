@@ -156,6 +156,23 @@ export const makeRoomService = (
       return null;
     },
 
+    /**
+     * Used by the block flow to locate the room whose sockets need revoking.
+     * It deliberately does not touch room state: the `blocks` insert trigger
+     * already closes the room inside the same transaction as the block row,
+     * and a second writer for that invariant is what let a concurrent unblock
+     * leave a room read-only with no block to undo it. Returning null when the
+     * block is gone also stops a stale request from revoking access to a room
+     * that has legitimately reopened.
+     */
+    async findPrivateRoomIdIfBlocked(userA: string, userB: string): Promise<string | null> {
+      if (repo.findPrivateRoomIdIfBlocked) {
+        return repo.findPrivateRoomIdIfBlocked(userA, userB);
+      }
+      const existing = await repo.findPrivateRoomByMembers(userA, userB);
+      return existing ? existing.roomId : null;
+    },
+
     async reopenPrivateRoom(userA: string, userB: string): Promise<void> {
       const existing = await repo.findPrivateRoomByMembers(userA, userB);
       if (existing && existing.isReadonly) {

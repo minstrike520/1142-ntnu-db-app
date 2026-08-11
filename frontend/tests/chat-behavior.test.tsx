@@ -5,10 +5,17 @@
  * switching so the render-performance fixes cannot change semantics.
  */
 import { describe, expect, test } from "vitest";
+import { useEffect } from "react";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { mountChatApp } from "./harness";
 import { ME_ID, makeMessage, messageId } from "./fixtures";
-import { __getApiCallLog } from "./mocks/api";
+import {
+  __failNextListMessages,
+  __failNextRevisionCommand,
+  __gateNextSync,
+  __getApiCallLog,
+} from "./mocks/api";
+import { useChat } from "@/context/ChatContext";
 
 describe("opening and switching rooms", () => {
   test("shows the active room's messages and members panel", async () => {
@@ -109,6 +116,54 @@ describe("receiving and sending messages", () => {
   });
 });
 
+describe("message revision conflicts", () => {
+  let recall: ((messageId: string) => void) | null = null;
+
+  function ConflictProbe(): React.ReactElement {
+    const { handleRecallMessage } = useChat();
+    useEffect(() => {
+      recall = handleRecallMessage;
+    }, [handleRecallMessage]);
+    return <div data-testid="conflict-probe" />;
+  }
+
+  test("tells the user and reloads the room when the server rejects a stale revision", async () => {
+    const target = messageId("room-1", 40);
+    const app = await mountChatApp("/chat/room-1", { probe: <ConflictProbe /> });
+
+    __failNextRevisionCommand(target);
+    act(() => {
+      recall!(target);
+    });
+    await app.settle();
+
+    // A 409 used to be logged and swallowed, leaving the user staring at a
+    // message the server had already changed.
+    expect(screen.getByText(/message changed elsewhere/i)).toBeTruthy();
+    expect(__getApiCallLog("recallMessage").length).toBe(1);
+
+    fireEvent.click(screen.getByText("Dismiss"));
+    await app.settle();
+    expect(screen.queryByText(/message changed elsewhere/i)).toBeNull();
+  });
+
+  test("does not claim the message was reloaded when the reload itself fails", async () => {
+    const target = messageId("room-1", 40);
+    const app = await mountChatApp("/chat/room-1", { probe: <ConflictProbe /> });
+
+    __failNextRevisionCommand(target);
+    __failNextListMessages();
+    act(() => {
+      recall!(target);
+    });
+    await app.settle();
+
+    // The stale revision is still on screen, so the notice must say so rather
+    // than promise a refresh that never landed.
+    expect(screen.getByText(/could not be reloaded/i)).toBeTruthy();
+  });
+});
+
 describe("typing indicator", () => {
   test("appears while a member types and clears afterwards", async () => {
     const app = await mountChatApp("/chat/room-1");
@@ -163,6 +218,94 @@ describe("read receipts", () => {
     await app.settle();
 
     expect(screen.getByTitle("Member Two")).toBeTruthy();
+  });
+});
+
+describe("realtime sync recovery", () => {
+  let readStates: Record<string, Record<string, string>> = {};
+  let observedRooms: Array<{ id: string; unreadCount?: number }> = [];
+
+  function ReadStateProbe(): React.ReactElement {
+    const { groupReadStates, rooms } = useChat();
+    useEffect(() => {
+      readStates = groupReadStates;
+    }, [groupReadStates]);
+    useEffect(() => {
+      observedRooms = rooms;
+    }, [rooms]);
+    return <div data-testid="read-state-probe" />;
+  }
+
+  test("keeps a read receipt that arrived while a failing sync was in flight", async () => {
+    const app = await mountChatApp("/chat/room-1", { probe: <ReadStateProbe /> });
+    const target = messageId("room-1", 40);
+    expect(readStates["room-1"]?.["m-2"]).not.toBe(target);
+
+    // Reconnect with the sync held open, so the read receipt lands in the
+    // buffer rather than being applied directly.
+    const failing = __gateNextSync();
+    act(() => {
+      app.socket().disconnect();
+      app.socket().connect();
+    });
+    act(() => {
+      app.socket().serverEmit("read_update", {
+        roomId: "room-1",
+        userId: "m-2",
+        messageId: target,
+      });
+    });
+
+    // Precondition: the receipt is buffered, not applied live.
+    expect(readStates["room-1"]?.["m-2"]).not.toBe(target);
+
+    // The sync fails. New-message events are dropped because the retry
+    // re-delivers them; a read receipt never is, so it has to survive.
+    await act(async () => {
+      failing.fail();
+      await Promise.resolve();
+    });
+    await app.settle();
+
+    act(() => {
+      app.socket().connect();
+    });
+    await app.settle();
+
+    expect(readStates["room-1"]?.["m-2"]).toBe(target);
+  });
+
+  test("replays a buffered new message for its side effects without double-counting unread", async () => {
+    const app = await mountChatApp("/chat/room-1", { probe: <ReadStateProbe /> });
+    const incoming = makeMessage("room-2", 99, "m-3", { content: "Buffered while syncing" });
+
+    const failing = __gateNextSync();
+    act(() => {
+      app.socket().disconnect();
+      app.socket().connect();
+    });
+    act(() => {
+      app.socket().serverEmit("new_message", incoming);
+    });
+
+    await act(async () => {
+      failing.fail();
+      await Promise.resolve();
+    });
+    await app.settle();
+
+    act(() => {
+      app.socket().connect();
+    });
+    await app.settle();
+
+    // The sender's read receipt rides on new_message and is never re-delivered
+    // by sync, so the task has to be replayed rather than dropped.
+    expect(readStates["room-2"]?.["m-3"]).toBe(incoming.messageId);
+    expect(screen.getAllByText("Buffered while syncing").length).toBeGreaterThan(0);
+    // The retry's canonical room projection already counted this message, so
+    // the replay must not add to it. room-2 is unread 3 in the fixtures.
+    expect(observedRooms.find((room) => room.id === "room-2")?.unreadCount).toBe(3);
   });
 });
 

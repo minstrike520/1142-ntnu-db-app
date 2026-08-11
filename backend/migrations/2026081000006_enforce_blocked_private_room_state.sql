@@ -1,3 +1,4 @@
+-- Up Migration
 -- Keep the durable room state safe even when block/create-private requests
 -- race across backend processes. The trigger runs in the same transaction as
 -- the block or membership insert, so a concurrent reopen can only commit
