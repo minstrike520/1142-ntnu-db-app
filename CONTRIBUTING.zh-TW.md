@@ -60,11 +60,14 @@
 ## 3. GitHub 語言規範
 
 為了保持專案溝通的一致性，請遵守以下規則：
-1. **GitHub 介面文字**：所有供人閱讀的 GitHub 內容均必須使用 **繁體中文 (Traditional Chinese)** 撰寫。這包括：
-   - PR 標題（位於 conventional-commit 類型前綴之後的中文描述）
-   - PR 內容與說明
-   - Issue 標題、說明與留言
-2. **程式碼與 Commit 訊息**：程式碼識別字（類別、變數、函數等）以及 Git Commit 訊息本身，請維持使用**英文**。
+1. **PR 標題**：使用**英文**，遵循 Conventional Commits 格式（例如 `feat(vimeo): add batch thumbnail download`）。
+2. **PR 內容 / PR 留言 / Review 留言**：使用**繁體中文 (Traditional Chinese)**。
+3. **Issue 標題 / 內容 / 留言**：使用**繁體中文 (Traditional Chinese)**。
+4. **Git Commit 訊息**：使用**英文**，遵循 Conventional Commits 格式。
+5. **分支名稱 (Branch name)**：使用**英文**。
+6. **程式碼識別字**（類別、函數、變數、型別、介面、enum、常數、檔案／目錄名稱、API 及其他程式碼識別字）：使用**英文**。
+
+技術名詞、程式碼識別字、CLI 指令、API 名稱、套件名稱與無適當中文譯名的專有名詞，即使出現在繁體中文內容中，也應保留原始英文。
 
 ---
 
