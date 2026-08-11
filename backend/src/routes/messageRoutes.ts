@@ -2,6 +2,7 @@ import type { MessageWithSender } from '@shared/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validate } from '../middlewares/validator';
+import { readPositionSchema } from './messageSchemas';
 import { ValidationError } from '../utils/AppError';
 
 export interface MessageService {
@@ -125,14 +126,16 @@ export const makeMessageRoutes = (service: MessageService) => {
     return c.json(recalled, 200);
   });
 
-  app.put('/:roomId/read-position', async (c) => {
+  app.put('/:roomId/read-position', validate('json', readPositionSchema), async (c) => {
     if (!service.markRead) return c.body(null, 404);
-    const body = await c.req.json().catch(() => ({}));
-    if (typeof body.messageId !== 'string') throw new ValidationError('messageId must be a string');
+    // Cast for the same reason as the query validator above: `validate` takes a
+    // bare ZodSchema, so Hono cannot infer the parsed shape. The schema is what
+    // guarantees it.
+    const { messageId } = c.req.valid('json') as { messageId: string };
     const member = await service.markRead(
       c.get('user').userId,
       c.req.param('roomId'),
-      body.messageId,
+      messageId,
       requiredCommandId(c),
     );
     return c.json(member, 200);

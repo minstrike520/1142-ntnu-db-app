@@ -167,6 +167,18 @@ describe('Realtime recovery REST contract', () => {
     expect(readRetry.body.readPosition).toBe(read.body.readPosition);
   });
 
+  it('rejects a malformed read-position messageId as a validation error', async () => {
+    // Without a schema this string reaches a `uuid` comparison, PostgreSQL
+    // raises 22P02, and the generic handler reports a client mistake as a 500.
+    const response = await request(app)
+      .put(`/api/v1/rooms/${roomId}/read-position`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'read-command-malformed')
+      .send({ messageId: 'not-a-uuid' });
+
+    expect(response.status).toBe(400);
+  });
+
   it('keeps a no-op recall key out of the create and edit namespaces', async () => {
     const created = await request(app)
       .post(`/api/v1/rooms/${roomId}/messages`)
