@@ -66,6 +66,15 @@
 `mentions` 與 `attachments` 是同一交易寫入的 JSONB snapshot，復原不會把舊訊息版本
 與目前 relations 混在一起。`(actor_id, command_id)` 的 partial unique index 讓編輯／收回重試成為 no-op。
 
+#### `message_command_receipts`
+保存「確實沒有產生任何變更」的持久化訊息命令的 `(actor_id, command_id)` 收據；
+目前唯一的情況是對已收回訊息再次執行收回。這類命令不會寫入 `message_changes`
+（收回不得配發第二個 `change_sequence`，也不得再發布一次事件），若沒有這張表，
+該 key 就會繼續可被建立或編輯重複使用，但建立、編輯與收回共用同一個 idempotency
+namespace。每個命令查詢 key 時都會同時讀取本表與 `message_changes`。
+`change_sequence` 指向該命令收斂到的變更，可為 NULL：在持久化 migration 之前
+就被收回的訊息沒有對應的 `recalled` 列可指。
+
 #### `attachments` (附件)
 | 欄位名稱 | 類型 | 說明 | 條件約束 |
 | :--- | :--- | :--- | :--- |

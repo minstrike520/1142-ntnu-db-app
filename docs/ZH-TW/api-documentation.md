@@ -1212,6 +1212,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 - **說明**: 收回訊息。
 - **標頭**: 必須提供 `Idempotency-Key` 與 `If-Match`。
 - **回應**: `200 OK`，回傳收回後的訊息投影。
+- **重試規則**: 對已收回的訊息再次收回會直接成功，不會配發新的變更，也不會再發布事件；但該 key 仍算已使用。建立、編輯與收回共用同一個 idempotency namespace，把同一個 key 用於其他操作會得到 `409 CONFLICT`。
 
 #### `PUT /rooms/:roomId/read-position`
 - **說明**: 將呼叫者的持久化已讀位置推進至指定訊息。

@@ -400,10 +400,17 @@ export class MessageRepository implements IMessageRepository {
         await tx`
           SELECT pg_advisory_xact_lock(hashtextextended(${`${data.senderId}:${data.commandId}`}, 0))
         `;
-        const prior = await tx<{ message_id: string; change_type: string; change_sequence: number | string }[]>`
+        const prior = await tx<{ message_id: string; change_type: string; change_sequence: number | string | null }[]>`
           SELECT message_id, change_type, change_sequence
-          FROM message_changes
-          WHERE actor_id = ${data.senderId} AND command_id = ${data.commandId}
+          FROM (
+            SELECT message_id, change_type, change_sequence
+            FROM message_changes
+            WHERE actor_id = ${data.senderId} AND command_id = ${data.commandId}
+            UNION ALL
+            SELECT message_id, change_type, change_sequence
+            FROM message_command_receipts
+            WHERE actor_id = ${data.senderId} AND command_id = ${data.commandId}
+          ) receipts
           ORDER BY change_sequence ASC
           LIMIT 1
         `;
@@ -608,15 +615,28 @@ export class MessageRepository implements IMessageRepository {
       // the same command must observe the first transaction's receipt after
       // waiting for that lock, rather than failing on the unique index.
       if (commandId && actorId) {
-        const prior = await tx<{ message_id: string; change_type: string; change_sequence: number | string }[]>`
-          SELECT message_id, change_type, change_sequence FROM message_changes
-          WHERE actor_id = ${actorId} AND command_id = ${commandId}
-          ORDER BY change_sequence DESC LIMIT 1
+        const prior = await tx<{ message_id: string; change_type: string; change_sequence: number | string | null }[]>`
+          SELECT message_id, change_type, change_sequence
+          FROM (
+            SELECT message_id, change_type, change_sequence
+            FROM message_changes
+            WHERE actor_id = ${actorId} AND command_id = ${commandId}
+            UNION ALL
+            SELECT message_id, change_type, change_sequence
+            FROM message_command_receipts
+            WHERE actor_id = ${actorId} AND command_id = ${commandId}
+          ) receipts
+          ORDER BY change_sequence DESC NULLS LAST LIMIT 1
         `;
         if (prior.length > 0) {
           if (prior[0].message_id !== messageId) throw new ConflictError('Idempotency-Key was already used for another message');
           if (prior[0].change_type !== 'recalled') throw new ConflictError('Idempotency-Key was already used for another operation');
-          responseChangeSequence = Number(prior[0].change_sequence);
+          // A no-op receipt for a message recalled before the durability
+          // migration has no change row to project from; fall back to the
+          // current message state, exactly as the first response did.
+          responseChangeSequence = prior[0].change_sequence === null
+            ? undefined
+            : Number(prior[0].change_sequence);
           replayedCommand = true;
           return;
         }
@@ -628,7 +648,30 @@ export class MessageRepository implements IMessageRepository {
       if (current[0].is_recalled) {
         // A durable retry (or a second recall command) is a no-op and must not
         // publish a fresh event when no new Message Change was committed.
-        replayedCommand = Boolean(commandId && actorId);
+        //
+        // It still consumed the key, though. Without a receipt the caller could
+        // hand the same Idempotency-Key to a create or an edit afterwards and
+        // have it accepted, because the cross-operation checks read receipts
+        // out of `message_changes` and a no-op writes none. Record it in the
+        // side table the lookup above also reads, pointing at the recall this
+        // command converged on.
+        if (commandId && actorId) {
+          await tx`
+            INSERT INTO message_command_receipts (
+              actor_id, command_id, message_id, change_type, change_sequence
+            )
+            VALUES (
+              ${actorId}, ${commandId}, ${messageId}, 'recalled',
+              (
+                SELECT change_sequence FROM message_changes
+                WHERE message_id = ${messageId} AND change_type = 'recalled'
+                ORDER BY change_sequence DESC LIMIT 1
+              )
+            )
+            ON CONFLICT (actor_id, command_id) DO NOTHING
+          `;
+          replayedCommand = true;
+        }
         return;
       }
 
@@ -741,10 +784,18 @@ export class MessageRepository implements IMessageRepository {
       // See markRecalled: the row lock serializes concurrent retries so the
       // second request can return the already-recorded canonical change.
       if (commandId && actorId) {
-        const prior = await tx<{ message_id: string; change_type: string; change_sequence: number | string }[]>`
-          SELECT message_id, change_type, change_sequence FROM message_changes
-          WHERE actor_id = ${actorId} AND command_id = ${commandId}
-          ORDER BY change_sequence DESC LIMIT 1
+        const prior = await tx<{ message_id: string; change_type: string; change_sequence: number | string | null }[]>`
+          SELECT message_id, change_type, change_sequence
+          FROM (
+            SELECT message_id, change_type, change_sequence
+            FROM message_changes
+            WHERE actor_id = ${actorId} AND command_id = ${commandId}
+            UNION ALL
+            SELECT message_id, change_type, change_sequence
+            FROM message_command_receipts
+            WHERE actor_id = ${actorId} AND command_id = ${commandId}
+          ) receipts
+          ORDER BY change_sequence DESC NULLS LAST LIMIT 1
         `;
         if (prior.length > 0) {
           if (prior[0].message_id !== messageId) throw new ConflictError('Idempotency-Key was already used for another message');

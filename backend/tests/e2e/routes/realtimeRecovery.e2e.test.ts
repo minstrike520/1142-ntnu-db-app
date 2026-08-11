@@ -166,4 +166,70 @@ describe('Realtime recovery REST contract', () => {
     expect(readRetry.status).toBe(200);
     expect(readRetry.body.readPosition).toBe(read.body.readPosition);
   });
+
+  it('keeps a no-op recall key out of the create and edit namespaces', async () => {
+    const created = await request(app)
+      .post(`/api/v1/rooms/${roomId}/messages`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'noop-target-create')
+      .send({ content: 'recall me' });
+    const messageId = created.body.messageId;
+
+    const firstRecall = await request(app)
+      .post(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', String(created.body.revision))
+      .set('Idempotency-Key', 'noop-recall-first');
+    expect(firstRecall.status).toBe(200);
+
+    // A second recall under a *different* key. The message is already recalled,
+    // so nothing is committed and no Message Change is published — but the key
+    // is spent all the same.
+    const secondRecall = await request(app)
+      .post(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', String(firstRecall.body.revision))
+      .set('Idempotency-Key', 'noop-recall-second');
+    expect(secondRecall.status).toBe(200);
+    expect(secondRecall.body.isRecalled).toBe(true);
+    expect(secondRecall.body.revision).toBe(firstRecall.body.revision);
+
+    // Replaying it stays a success and still reports the same message.
+    const secondRecallRetry = await request(app)
+      .post(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', String(firstRecall.body.revision))
+      .set('Idempotency-Key', 'noop-recall-second');
+    expect(secondRecallRetry.status).toBe(200);
+    expect(secondRecallRetry.body.messageId).toBe(messageId);
+    expect(secondRecallRetry.body.isRecalled).toBe(true);
+
+    // Create, edit and recall share one idempotency namespace, so the spent key
+    // must not be usable for another operation.
+    const reusedForCreate = await request(app)
+      .post(`/api/v1/rooms/${roomId}/messages`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'noop-recall-second')
+      .send({ content: 'should not be created' });
+    expect(reusedForCreate.status).toBe(409);
+
+    const other = await request(app)
+      .post(`/api/v1/rooms/${roomId}/messages`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'noop-other-create')
+      .send({ content: 'edit me' });
+    const reusedForEdit = await request(app)
+      .patch(`/api/v1/rooms/${roomId}/messages/${other.body.messageId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-Match', String(other.body.revision))
+      .set('Idempotency-Key', 'noop-recall-second')
+      .send({ content: 'should not be edited' });
+    expect(reusedForEdit.status).toBe(409);
+
+    const listed = await request(app)
+      .get(`/api/v1/rooms/${roomId}/messages`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(listed.body.map((message: { messageId: string }) => message.messageId).sort())
+      .toEqual([messageId, other.body.messageId].sort());
+  });
 });

@@ -1213,6 +1213,7 @@ All errors return the following JSON structure:
 - **Description**: Recall a message.
 - **Headers**: `Idempotency-Key` and `If-Match` are required.
 - **Response**: `200 OK` with the recalled message projection.
+- **Retry rule**: Recalling an already-recalled message succeeds without allocating another change or publishing another event. The key is still consumed: create, edit and recall share one idempotency namespace, and reusing it for a different operation returns `409 CONFLICT`.
 
 #### `PUT /rooms/:roomId/read-position`
 - **Description**: Advance the caller's durable read position to a message.
