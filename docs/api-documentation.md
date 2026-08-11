@@ -1433,6 +1433,8 @@ All errors return the following JSON structure:
 - **Namespace**: `/`
 - **Authentication**: Connection requires the access token in the Socket.IO `auth.token` handshake field.
 - **Subscriptions**: Upon connection, the server adds the socket to `user_<userId>` and to every non-pending room in `room_members`. Membership revocation removes every session from that room.
+- **Deployment scope**: Events are published through the process-local Socket.IO server, so the backend runs as a **single instance**. Two or more instances would silently drop events for clients connected to a different one — those sockets stay connected, so no recovery is triggered. Horizontal scaling requires a cross-process Socket.IO adapter (Redis or PostgreSQL) first.
+- **Deployment scope**: Events are published through the process-local Socket.IO server, so the backend runs as a **single instance**. Two or more instances would silently drop events for clients connected to a different one — those sockets stay connected, so no recovery is triggered. Horizontal scaling requires a cross-process Socket.IO adapter (Redis or PostgreSQL) first.
 - **Recovery**: Clients wait for the server's `realtime_ready` event, then call `GET /sync` after every connection and token refresh. `connectionStateRecovery` is disabled; Sync Cursor is the single recovery path. If subscription restoration fails, the server disconnects the socket without sending `realtime_ready`, so the client retries the handshake. The server may also send `realtime_ready` again mid-session after it restores a subscription it had revoked (a kick that lost its conditional delete), because a restored subscription replays nothing that was published while it was gone.
 
 ### Client-to-Server Events

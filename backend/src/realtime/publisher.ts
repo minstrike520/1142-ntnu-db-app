@@ -8,6 +8,15 @@ export type RealtimeEventName = keyof ServerToClientEvents;
  *
  * The composition root binds the concrete Socket.IO server once it has been
  * assembled. Business code only knows about destinations and typed events.
+ *
+ * Single-process only. Every publish here goes through the local `io`, whose
+ * room registry holds just the sockets connected to *this* process. Running two
+ * or more backend instances therefore drops events for anyone connected to a
+ * different one: those sockets do not disconnect, so nothing triggers recovery,
+ * and their state stays stale. That matches the documented deployment — one
+ * backend container behind Cloudflare Tunnel — and scaling horizontally means
+ * first fitting a cross-process Socket.IO adapter (Redis or PostgreSQL) here,
+ * not just raising a replica count.
  */
 export interface RealtimePublisher {
   bind(io: ChatServer): void;
