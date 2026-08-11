@@ -188,6 +188,47 @@ describe('roomService', () => {
     expect(mockRepo.create).not.toHaveBeenCalled();
   });
 
+  it('createPrivate deletes the room when a racing block closes it mid-create', async () => {
+    const socialRepo = {
+      isBlocked: mock().mockResolvedValue(false),
+      areFriends: mock().mockResolvedValue(true),
+    };
+    const created = { ...room, roomId: 'room-new', type: 'private' as const };
+    mockRepo.findPrivateRoomByMembers.mockResolvedValue(null);
+    mockRepo.create.mockResolvedValue(created as Room);
+    mockMemberRepo.findMember.mockResolvedValue(null);
+    mockMemberRepo.add.mockResolvedValue(ownerMember);
+    // The block landed between the isBlocked check and the second membership
+    // insert; the insert trigger closed the room.
+    mockRepo.findById.mockResolvedValue({ ...created, isReadonly: true } as Room);
+    roomService = makeRoomService(mockRepo, mockMemberRepo, undefined, socialRepo);
+
+    await expect(roomService.createPrivate('user-1', 'user-2')).rejects.toThrow(ForbiddenError);
+
+    // Both the create and the two adds are already committed, so the rejection
+    // has to take the room with it — otherwise a later unblock reopens a room
+    // whose creation failed.
+    expect(mockRepo.delete).toHaveBeenCalledWith('room-new');
+  });
+
+  it('createPrivate still reports the rejection when the cleanup delete fails', async () => {
+    const socialRepo = {
+      isBlocked: mock().mockResolvedValue(false),
+      areFriends: mock().mockResolvedValue(true),
+    };
+    const created = { ...room, roomId: 'room-new', type: 'private' as const };
+    mockRepo.findPrivateRoomByMembers.mockResolvedValue(null);
+    mockRepo.create.mockResolvedValue(created as Room);
+    mockMemberRepo.findMember.mockResolvedValue(null);
+    mockMemberRepo.add.mockResolvedValue(ownerMember);
+    mockRepo.findById.mockResolvedValue({ ...created, isReadonly: true } as Room);
+    mockRepo.delete.mockRejectedValue(new Error('delete failed'));
+    roomService = makeRoomService(mockRepo, mockMemberRepo, undefined, socialRepo);
+
+    // The caller must learn why the request was refused, not how the cleanup went.
+    await expect(roomService.createPrivate('user-1', 'user-2')).rejects.toThrow(ForbiddenError);
+  });
+
   it('markPrivateReadOnly sets isReadonly to true', async () => {
     const privateRoom = { ...room, type: 'private' as const };
     mockRepo.findPrivateRoomByMembers.mockResolvedValue(privateRoom as Room);

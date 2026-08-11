@@ -130,6 +130,20 @@ export const makeRoomService = (
         await ensureMember(room.roomId, targetUserId);
         const canonicalRoom = await repo.findById(room.roomId);
         if (!canonicalRoom || canonicalRoom.isReadonly) {
+          // A block committed between the `isBlocked` check above and the second
+          // membership insert, and the trigger on that insert closed the room.
+          // The create and both `add` calls are already committed in their own
+          // transactions, so throwing alone would leave a fully-formed private
+          // room behind — one that a later unblock would happily reopen, even
+          // though the request that created it failed. Delete it here; the
+          // pair lock means nothing else can have written to it yet.
+          try {
+            await repo.delete(room.roomId);
+          } catch (cleanupError) {
+            // Reported, not rethrown: the caller must still see why the request
+            // was rejected, not how the cleanup went.
+            console.error('Failed to remove a private room rejected by a block:', cleanupError);
+          }
           throw new ForbiddenError('Cannot create a private room with a blocked user');
         }
         await onMembershipGranted?.(creatorId, room.roomId);
