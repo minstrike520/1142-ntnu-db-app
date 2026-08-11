@@ -73,7 +73,7 @@
 * **原生 SQL 存取**：本專案已完全移除 Prisma。所有的資料庫存取皆使用原生 SQL 查詢（Raw SQL）。
 * **資料庫遷移 (Migrations)**：
   - 請勿直接在資料庫中手動執行 SQL 來變更 Schema。
-  - 所有 Schema 的變更都必須透過在 `backend/migrations/` 底下使用 `node-pg-migrate` 撰寫遷移檔來完成。
+  - 所有 Schema 的變更都必須透過在 `backend/migrations/` 底下撰寫純 SQL 遷移檔來完成，並以 `-- Up migration` 與 `-- Down migration` 區分正向與回滾。
   - 欄位結構、預設值與外鍵條件請參考 [docs/database-design.md](docs/database-design.md)。
 * **Migration 相關指令**（請於後端容器內執行）：
   - **建立遷移檔**：`docker compose exec backend pnpm run migrate:create <name>`
