@@ -155,8 +155,13 @@ docker compose exec backend bun run db:seed
 ### 常見指令
 - **建立新的遷移檔**：`docker compose exec backend bun run migrate:create <name>`
 - **執行資料庫遷移**：`docker compose exec backend bun run migrate:up`
-- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`
+- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`（預設只回滾最近一筆遷移；可加上數量回滾更多筆，例如 `migrate:down 3`）
 - **寫入種子資料**：`docker compose exec backend bun run db:seed`
+
+遷移檔是 `backend/migrations/` 底下的純 SQL 檔案，每個檔案以 `-- Up migration`
+與 `-- Down migration` 兩個區段區隔。執行遷移的是 `backend/src/models/migrate.ts`
+這個 Bun.SQL runner：它會在單一交易中套用所有待執行的遷移，以 PostgreSQL advisory
+lock 避免並行執行，並將已套用的遷移記錄在 `pgmigrations` 資料表。
 
 ### 修復損壞的開發資料庫
 如果遷移過程中遇到 `relation ... already exists` 錯誤，或者遷移狀態發生混亂：

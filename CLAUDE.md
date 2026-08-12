@@ -38,7 +38,7 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 
 ### 1. Database Operations & Schema Integrity
 - Prisma has been **completely removed**. The database is accessed via raw SQL.
-- When modifying schemas, do not run arbitrary SQL manually on the DB. You must write migrations under [backend/migrations/](backend/migrations/) using `node-pg-migrate`.
+- When modifying schemas, do not run arbitrary SQL manually on the DB. You must write migrations under [backend/migrations/](backend/migrations/) as plain SQL files, applied by [backend/src/models/migrate.ts](backend/src/models/migrate.ts).
 - Refer to [docs/database-design.md](docs/database-design.md) for actual column structures, default values, and foreign keys.
 
 ### 2. API Contract Verification

@@ -168,8 +168,14 @@ docker compose exec backend bun run db:seed
 ### Common Commands
 - **Create a new migration**: `docker compose exec backend bun run migrate:create <name>`
 - **Run migrations**: `docker compose exec backend bun run migrate:up`
-- **Rollback migrations**: `docker compose exec backend bun run migrate:down`
+- **Rollback migrations**: `docker compose exec backend bun run migrate:down` (rolls back the single most recent migration; pass a count to undo more, e.g. `migrate:down 3`)
 - **Seed database**: `docker compose exec backend bun run db:seed`
+
+Migrations are plain SQL files under `backend/migrations/`, each split into an
+`-- Up migration` and a `-- Down migration` section. They are applied by
+`backend/src/models/migrate.ts`, a Bun.SQL runner: it applies every pending
+migration in one transaction, guards concurrent runs with a PostgreSQL advisory
+lock, and records what it applied in the `pgmigrations` table.
 
 ### Repairing a Broken Dev Database
 If you encounter `relation ... already exists` errors during migration, or migration state goes out of sync:
