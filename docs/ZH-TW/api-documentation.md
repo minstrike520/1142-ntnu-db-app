@@ -67,7 +67,6 @@
 | | `room_update` | 連線需驗證 | 房間設定變更、成員變動或被剔除之通知。詳見 [room_update 子類型](#room_update-子類型)。 |
 | | `friend_request` | 連線需驗證 | 好友請求狀態變更的即時通知（已送出、已接受、已拒絕） |
 | | `user_status` | 連線需驗證 | 好友的上線 / 下線狀態變更 |
-| | `emergency_alert` | 連線需驗證 | 收到緊急聯絡人發送之警報通知 |
 | | `error` | 連線需驗證 | 事件處理失敗之錯誤回報 |
 
 ---
@@ -1385,7 +1384,23 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
   }
   ```
 - **回應**:
-  - `200 OK`: 檢查完成。
+  - `200 OK`: 檢查完成，回應內容說明實際送達狀況。
+- **回應欄位**:
+  | 欄位 | 型別 | 說明 |
+  | :--- | :--- | :--- |
+  | `alerted` | 布林值 | 至少有一位聯絡人取得已持久化的警報時為 `true` |
+  | `recipients` | 字串陣列 | 警報已寫入資料庫的聯絡人 |
+  | `failedRecipients` | 字串陣列 | 警報未送達的聯絡人；全部送達時不會出現此欄位 |
+  | `reason` | 字串 | 未發出警報的原因，僅在 `alerted` 為 `false` 時出現：`WARNING_DISABLED`、`INVALID_THRESHOLD`、`BELOW_THRESHOLD`、`ALREADY_ALERTED`、`NO_CONTACTS`、`DELIVERY_FAILED` |
+- **回應範例**:
+  ```json
+  {
+    "alerted": true,
+    "recipients": ["d3b07384-d113-4956-a5cc-4847841c2c31"],
+    "failedRecipients": ["9f8e7d6c-5b4a-4321-8765-1a2b3c4d5e6f"]
+  }
+  ```
+- **送達語意**: 警報一律以私聊房間中的一般聊天訊息形式送出，因此離線的聯絡人重新連線後可透過既有的歷史訊息與 `new_message` 路徑取得，不需特殊處理。系統不再提供瞬時的警報事件：列於 `failedRecipients` 的聯絡人代表**完全未收到**任何通知。
 
 ---
 
@@ -1420,7 +1435,6 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | 房間或成員狀態變更。`type` 欄位決定子類型，詳見 [`room_update` 子類型](#room_update-子類型)。 |
 | `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected', createdAt: string }` | 好友請求狀態變更通知。**收件方**（新邀請）與**發送方**（被接受／拒絕）都會收到此事件。客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
 | `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。 |
-| `emergency_alert` | `{ userId: string, message: string }` | 收到緊急聯絡人的警報通知 |
 | `error` | `ApiError` | 事件處理失敗的錯誤回報 |
 
 ---

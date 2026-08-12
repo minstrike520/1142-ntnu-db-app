@@ -92,20 +92,29 @@ export class EmergencyContactRepository implements IEmergencyContactRepository {
   }
 
   async recordAlertIfNew(userId: string, lastActivity: Date): Promise<boolean> {
-    const existingRes = await this.sql<{ exists: number }[]>`
-      SELECT 1 as exists
-      FROM emergency_alert_logs
-      WHERE user_id = ${userId} AND last_activity_at = ${lastActivity}
-    `;
-
-    if (existingRes.length > 0) {
-      return false;
-    }
-
-    await this.sql`
+    // Claimed in one statement. The previous SELECT-then-INSERT let a second
+    // concurrent run pass the existence check and then fail on the
+    // (user_id, last_activity_at) primary key with a unique violation, which
+    // nothing handled.
+    const rows = await this.sql<{ claimed: number }[]>`
       INSERT INTO emergency_alert_logs (user_id, last_activity_at)
       VALUES (${userId}, ${lastActivity})
+      ON CONFLICT (user_id, last_activity_at) DO NOTHING
+      RETURNING 1 as claimed
     `;
-    return true;
+    return rows.length > 0;
+  }
+
+  /**
+   * Hands the claim back so a later run can retry this `lastActivity` window.
+   *
+   * Only called when nothing durable reached a contact. Once even one alert is
+   * persisted the claim must stand, or the retry would write a duplicate.
+   */
+  async releaseAlert(userId: string, lastActivity: Date): Promise<void> {
+    await this.sql`
+      DELETE FROM emergency_alert_logs
+      WHERE user_id = ${userId} AND last_activity_at = ${lastActivity}
+    `;
   }
 }

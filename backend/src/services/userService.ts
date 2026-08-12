@@ -27,6 +27,7 @@ import {
 import { getRefreshTokenTtlMs } from '../utils/refreshTokenTtl';
 
 import type { IRefreshTokenRepository } from '../models/IRefreshTokenRepository';
+import type { EmergencyDeliveryOutcome } from './emergencyNotifier';
 
 interface JwtHelper {
   signToken(payload: JwtPayload): Promise<string>;
@@ -34,9 +35,13 @@ interface JwtHelper {
   hashToken(token: string): string;
 }
 
-interface EmergencyAlertResult {
+export interface EmergencyAlertResult {
   alerted: boolean;
+  /** Contacts whose alert was durably written. */
   recipients: string[];
+  /** Contacts the alert did not reach. Omitted when every contact was reached. */
+  failedRecipients?: string[];
+  /** Why nothing was alerted. Only set when `alerted` is false. */
   reason?: string;
 }
 
@@ -78,33 +83,84 @@ export const makeUserService = (
   emergencyContactRepo: IEmergencyContactRepository,
   refreshTokenRepo: IRefreshTokenRepository,
   jwt: JwtHelper,
-  notifyEmergencyContact?: (contactId: string, payload: { userId: string; message: string }) => void | Promise<void>,
+  /**
+   * Delivers one alert. Reports an {@link EmergencyDeliveryOutcome} so this
+   * service can tell a durable write apart from a failure; returning nothing
+   * means delivered. A throw is treated as a retryable failure.
+   */
+  notifyEmergencyContact?: (
+    contactId: string,
+    payload: { userId: string; message: string },
+  ) => void | EmergencyDeliveryOutcome | Promise<void | EmergencyDeliveryOutcome>,
   friendRepo?: { getFriends(userId: string): Promise<FriendResponse[]> },
   onUserUpdated?: (userId: string, data: { name?: string; avatarUrl?: string }) => void | Promise<void>,
   avatarStore: AvatarStore = defaultAvatarStore,
 ) => {
-  const notifyContacts = async (userId: string, fallbackMessage: string): Promise<EmergencyAlertResult> => {
+  const notifyContacts = async (
+    userId: string,
+    fallbackMessage: string,
+  ): Promise<{ outcome: EmergencyAlertResult; releaseMarker: boolean }> => {
     const user = await repo.findById(userId);
     if (!user) throw new NotFoundError('user', userId);
 
     const contacts = await emergencyContactRepo.findByUserId(userId);
     if (contacts.length === 0) {
-      return { alerted: false, recipients: [], reason: 'NO_CONTACTS' };
+      // Nothing was attempted, so the dedupe marker must not be spent — the
+      // user may add a contact before the next run reaches this same window.
+      return {
+        outcome: { alerted: false, recipients: [], reason: 'NO_CONTACTS' },
+        releaseMarker: true,
+      };
     }
 
     const recipients: string[] = [];
+    const failedRecipients: string[] = [];
+    let hasRetryableFailure = false;
+
     for (const contact of contacts) {
       const msg = contact.message || fallbackMessage;
-      if (notifyEmergencyContact) {
-        await notifyEmergencyContact(contact.contactId, {
-          userId,
-          message: msg,
-        });
+
+      let outcome: EmergencyDeliveryOutcome | undefined;
+      try {
+        // `void` is `undefined` at runtime. A notifier that returns nothing —
+        // the injected test stubs, and any caller predating the outcome
+        // contract — counts as delivered.
+        const returned = notifyEmergencyContact
+          ? await notifyEmergencyContact(contact.contactId, { userId, message: msg })
+          : undefined;
+        outcome = returned as EmergencyDeliveryOutcome | undefined;
+      } catch (err) {
+        console.error(`Emergency alert delivery threw for contact ${contact.contactId}:`, err);
+        outcome = { delivered: false, retryable: true, code: 'DELIVERY_ERROR' };
       }
-      recipients.push(contact.contactId);
+
+      if (!outcome || outcome.delivered) {
+        recipients.push(contact.contactId);
+        continue;
+      }
+
+      console.error(
+        `Emergency alert for user ${userId} did not reach contact ${contact.contactId}: ${outcome.code}`,
+      );
+      failedRecipients.push(contact.contactId);
+      hasRetryableFailure = hasRetryableFailure || outcome.retryable;
     }
 
-    return { alerted: true, recipients };
+    if (recipients.length === 0) {
+      return {
+        outcome: { alerted: false, recipients: [], failedRecipients, reason: 'DELIVERY_FAILED' },
+        // A contact that can never succeed (blocked, deleted) must not put this
+        // window back on the queue for every future run.
+        releaseMarker: hasRetryableFailure,
+      };
+    }
+
+    return {
+      outcome: failedRecipients.length > 0
+        ? { alerted: true, recipients, failedRecipients }
+        : { alerted: true, recipients },
+      releaseMarker: false,
+    };
   };
 
   const issueRefreshToken = async (userId: string): Promise<string> => {
@@ -336,7 +392,22 @@ export const makeUserService = (
         return { alerted: false, recipients: [], reason: 'ALREADY_ALERTED' };
       }
 
-      return notifyContacts(userId, 'User has exceeded their inactivity warning threshold');
+      const { outcome, releaseMarker } = await notifyContacts(
+        userId,
+        'User has exceeded their inactivity warning threshold',
+      );
+
+      if (releaseMarker) {
+        // Best effort: a failed release must not mask the delivery result the
+        // caller is waiting on. Losing it only costs one retry opportunity.
+        try {
+          await emergencyContactRepo.releaseAlert(userId, user.lastActivity);
+        } catch (err) {
+          console.error(`Failed to release emergency alert marker for user ${userId}:`, err);
+        }
+      }
+
+      return outcome;
     },
 
 

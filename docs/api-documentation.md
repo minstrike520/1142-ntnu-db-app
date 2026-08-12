@@ -67,7 +67,6 @@ This document defines the RESTful API and Socket.IO real-time communication inte
 | | `room_update` | Yes (On connection) | Room settings changes, member changes, or kick notifications. See [room_update subtypes](#room_update-subtypes). |
 | | `friend_request` | Yes (On connection) | Real-time notification for friend request status changes (sent, accepted, rejected) |
 | | `user_status` | Yes (On connection) | Online/offline presence change of a friend |
-| | `emergency_alert` | Yes (On connection) | Receive emergency alert notification from contact |
 | | `error` | Yes (On connection) | Error report for failed event processing |
 
 ---
@@ -1385,7 +1384,23 @@ All errors return the following JSON structure:
   }
   ```
 - **Response**:
-  - `200 OK`: Check completed.
+  - `200 OK`: Check completed. The body reports what was actually delivered.
+- **Response Fields**:
+  | Field | Type | Description |
+  | :--- | :--- | :--- |
+  | `alerted` | Boolean | `true` when at least one contact received a durably stored alert |
+  | `recipients` | String[] | Contacts whose alert was written to the database |
+  | `failedRecipients` | String[] | Contacts the alert did not reach. Omitted when every contact was reached |
+  | `reason` | String | Why nothing was alerted. Only present when `alerted` is `false`: `WARNING_DISABLED`, `INVALID_THRESHOLD`, `BELOW_THRESHOLD`, `ALREADY_ALERTED`, `NO_CONTACTS`, `DELIVERY_FAILED` |
+- **Response Example**:
+  ```json
+  {
+    "alerted": true,
+    "recipients": ["d3b07384-d113-4956-a5cc-4847841c2c31"],
+    "failedRecipients": ["9f8e7d6c-5b4a-4321-8765-1a2b3c4d5e6f"]
+  }
+  ```
+- **Delivery Semantics**: An alert is delivered as a regular chat message in the private room shared with the contact, so an offline contact receives it through the normal history and `new_message` paths on reconnect. There is no separate transient alert event: a contact listed in `failedRecipients` was **not** notified by any channel.
 
 ---
 
@@ -1420,7 +1435,6 @@ All errors return the following JSON structure:
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | Room or membership state change. `type` determines the subtype. See [`room_update` Subtypes](#room_update-subtypes). |
 | `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected', createdAt: string }` | Friend request status change notification. Delivered to **both** the addressee (new request) and the requester (accepted / rejected). The client should refresh friend and pending-request lists upon receiving this event regardless of `status`. |
 | `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | Presence update for a friend. Delivered when a friend connects or disconnects. |
-| `emergency_alert` | `{ userId: string, message: string }` | Receive emergency alert from contact |
 | `error` | `ApiError` | Error report for failed event processing |
 
 ---
