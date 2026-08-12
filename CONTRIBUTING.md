@@ -73,7 +73,7 @@ To ensure consistent project communications:
 * **Raw SQL Database Access**: Prisma has been completely removed from this project. We access the database using raw SQL queries.
 * **Database Migrations**:
   - Do not run arbitrary SQL directly on the database to make schema changes.
-  - All schema modifications must be done by writing migrations under `backend/migrations/` using `node-pg-migrate`.
+  - All schema modifications must be done by writing migrations under `backend/migrations/` as plain SQL, split into `-- Up migration` and `-- Down migration` sections.
   - Refer to [docs/database-design.md](docs/database-design.md) for actual column structures, constraints, and relationships.
 * **Migration Commands** (Execute inside the backend container):
   - **Create migration**: `docker compose exec backend pnpm run migrate:create <name>`
