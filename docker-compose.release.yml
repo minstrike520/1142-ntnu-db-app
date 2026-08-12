@@ -63,14 +63,20 @@ services:
     # output, so the previous `node dist/backend/src/index.js` pointed at both a
     # runtime and a path that the runner stage does not contain.
     #
-    # Spelled out rather than left to the image's default CMD because that CMD is
-    # `bun run migrate:up && bun src/index.ts` — it exists for docker-compose.prod.yml,
-    # which has no migrate service. Here the migrate service above already applied
-    # the schema, and re-running it on every backend restart would take the
-    # migration advisory lock for no reason. This is also why it is not
-    # `bun run start`: `bun run` would interpose a wrapper process between the
-    # container and the app, so a restart or `docker compose down` would no longer
-    # deliver SIGTERM straight to the server.
+    # Spelled out rather than left to the image's default CMD, which is
+    # `bun run migrate:up && bun src/index.ts` — the right default for a plain
+    # `docker run` and for docker-compose.prod.yml, neither of which has a migrate
+    # service. Here one already ran, and migrate:up takes an advisory lock that
+    # throws "Another migration is already running" while it is held, so a backend
+    # that restarts during a migration would fail to start.
+    #
+    # Written as the file rather than `bun run start` only to match the image CMD
+    # byte for byte and skip bun run's wrapper process. It makes no difference to
+    # shutdown: bun installs no SIGTERM handler and neither does the app, so as
+    # PID 1 the server ignores SIGTERM and waits out the stop grace period either
+    # way. Giving it a real handler, or `init: true` here, is the fix for that —
+    # it is pre-existing behaviour shared with docker-compose.prod.yml, not
+    # something this command choice affects.
     command: ["bun", "src/index.ts"]
 
   frontend:

@@ -50,12 +50,12 @@ function runnerStage(): { baseImage: string; lines: string[] } {
 }
 
 /**
- * Maps each path the runner stage creates, relative to its WORKDIR, back to the
- * repository path it was copied from. `COPY --from=builder` entries are
+ * The runner stage's final WORKDIR plus every path it creates, mapped back to
+ * the repository path it was copied from. `COPY --from=builder` entries are
  * build-stage artifacts with no repo-side source, so they map to null: present
  * in the image, but not something a test can resolve on disk.
  */
-function runnerPaths(): Map<string, string | null> {
+function runnerLayout(): { workdir: string; paths: Map<string, string | null> } {
   const { lines } = runnerStage();
   const paths = new Map<string, string | null>();
   let workdir = '/';
@@ -81,7 +81,7 @@ function runnerPaths(): Map<string, string | null> {
     // the image path is the destination joined with each source's basename.
     // `COPY a ./src` renames, so the destination is itself the image path.
     const destIsDir = destination.endsWith('/') || destination === '.';
-    const absolute = (p: string) => (p.startsWith('/') ? p : path.posix.join(workdir, p));
+    const absolute = (p: string) => (path.posix.isAbsolute(p) ? p : path.posix.join(workdir, p));
 
     for (const source of sources) {
       const imagePath = destIsDir
@@ -91,7 +91,35 @@ function runnerPaths(): Map<string, string | null> {
     }
   }
 
-  return paths;
+  return { workdir, paths };
+}
+
+/**
+ * Resolve a path as the container would see it, relative to the runner's own
+ * WORKDIR rather than a hardcoded /app, and report whether the runner stage
+ * really contains it. Matching the longest known prefix means a file deep
+ * inside a copied directory resolves through that directory's mapping.
+ */
+function resolveInRunner(target: string): { inImage: boolean; onDisk: boolean } {
+  const { workdir, paths } = runnerLayout();
+  const imagePath = path.posix.isAbsolute(target) ? target : path.posix.join(workdir, target);
+
+  let matched: string | null = null;
+  for (const key of paths.keys()) {
+    const covers = imagePath === key || imagePath.startsWith(`${key}/`);
+    if (covers && (matched === null || key.length > matched.length)) matched = key;
+  }
+  if (matched === null) return { inImage: false, onDisk: false };
+
+  const source = paths.get(matched)!;
+  // Copied from the builder stage: it exists in the image, but there is no
+  // repository file to stat.
+  if (source === null) return { inImage: true, onDisk: true };
+
+  return {
+    inImage: true,
+    onDisk: existsSync(path.join(source, path.posix.relative(matched, imagePath))),
+  };
 }
 
 function composeServices(file: string): Record<string, { image?: string; command?: unknown }> {
@@ -102,8 +130,8 @@ function composeServices(file: string): Record<string, { image?: string; command
 }
 
 /** Services that run the backend production image, keyed by `<file>:<service>`. */
-function backendImageCommands(): Array<{ id: string; command: string[] }> {
-  const found: Array<{ id: string; command: string[] }> = [];
+function backendImageCommands(): Array<{ id: string; command: unknown }> {
+  const found: Array<{ id: string; command: unknown }> = [];
 
   for (const file of ['docker-compose.release.yml', 'docker-compose.prod.yml']) {
     for (const [name, service] of Object.entries(composeServices(file))) {
@@ -111,14 +139,23 @@ function backendImageCommands(): Array<{ id: string; command: string[] }> {
       // ${BACKEND_IMAGE}. Either way only the backend/migrate services run it.
       const usesBackendImage = service.image?.includes('BACKEND_IMAGE') ?? ['backend', 'migrate'].includes(name);
       if (!usesBackendImage) continue;
-      // No `command:` means the image's own CMD runs, which is by construction
-      // in sync with the Dockerfile and needs no guarding here.
-      if (!Array.isArray(service.command)) continue;
-      found.push({ id: `${file}:${name}`, command: service.command as string[] });
+      // No `command:` at all means the image's own CMD runs, which is by
+      // construction in sync with the Dockerfile and needs no guarding here.
+      if (service.command === undefined) continue;
+      found.push({ id: `${file}:${name}`, command: service.command });
     }
   }
 
   return found;
+}
+
+/** `bun run migrate:up` -> the path inside `migrate:up`, so scripts are checked too. */
+function scriptPathArgument(scriptBody: string): string | undefined {
+  return scriptBody
+    .trim()
+    .split(/\s+/)
+    .slice(1)
+    .find((token) => !token.startsWith('-') && token.includes('/'));
 }
 
 describe('backend production runner stage', () => {
@@ -134,7 +171,7 @@ describe('backend production runner stage', () => {
   });
 
   it('ships no build output for a compose command to point at', () => {
-    expect([...runnerPaths().keys()]).not.toContain('/app/dist');
+    expect(resolveInRunner('dist').inImage).toBe(false);
   });
 });
 
@@ -148,34 +185,62 @@ describe('compose commands against the backend production image', () => {
 
   for (const { id, command } of backendImageCommands()) {
     describe(id, () => {
+      // Compose also accepts `command: node dist/...` as a bare string, which
+      // would slip past an array-only check. Reject it outright rather than
+      // skipping it, so the failure names the real problem.
+      it('uses the exec form, which is the only form this suite can check', () => {
+        expect(Array.isArray(command)).toBe(true);
+      });
+
+      const argv = (Array.isArray(command) ? command : []) as string[];
+
       it('invokes bun, the only interpreter in the runner stage', () => {
-        expect(command[0]).toBe('bun');
+        expect(argv[0]).toBe('bun');
       });
 
       it('resolves to a package script or a file the runner stage contains', () => {
-        const paths = runnerPaths();
-
-        if (command[1] === 'run') {
-          const script = command[2]!;
+        if (argv[1] === 'run') {
+          const script = argv[2]!;
           expect(Object.keys(backendPackageJson.scripts)).toContain(script);
+
           // The script itself must also be bun-only: `bun run migrate:up` is no
           // better than `pnpm run migrate:up` if migrate:up shells out to node.
-          expect(backendPackageJson.scripts[script]).toMatch(/^bun\s/);
+          const body = backendPackageJson.scripts[script]!;
+          expect(body).toMatch(/^bun\s/);
+
+          // And the path *inside* the script has to ship too, or moving
+          // src/models/migrate.ts would break the container while this test
+          // stayed green.
+          const scriptTarget = scriptPathArgument(body);
+          expect(scriptTarget).toBeDefined();
+          expect(resolveInRunner(scriptTarget!)).toEqual({ inImage: true, onDisk: true });
           return;
         }
 
-        // Otherwise bun is handed a path, which must live under a directory the
-        // runner stage actually copied in. `dist/backend/src/index.js` failed
-        // exactly here: nothing in the runner stage creates /app/dist.
-        const target = command[1]!;
-        const workdirPath = path.posix.join('/app', target);
-        const root = `/app/${target.split('/')[0]}`;
-        expect(paths.has(root)).toBe(true);
-
-        const repoPath = paths.get(root);
-        expect(repoPath).not.toBeNull();
-        expect(existsSync(path.join(repoPath!, path.posix.relative(root, workdirPath)))).toBe(true);
+        // Otherwise bun is handed a path directly, which must live under a
+        // directory the runner stage actually copied in. `dist/backend/src/index.js`
+        // failed exactly here: nothing in the runner stage creates a dist/.
+        expect(resolveInRunner(argv[1]!)).toEqual({ inImage: true, onDisk: true });
       });
     });
   }
+});
+
+/**
+ * The ordering guarantee the commands depend on. Without it the backend can
+ * boot against a schema the migrate service has not finished applying.
+ */
+describe('release compose migrate ordering', () => {
+  const services = composeServices('docker-compose.release.yml') as Record<
+    string,
+    { restart?: string; depends_on?: Record<string, { condition?: string }> }
+  >;
+
+  it('runs migrate once rather than restarting it', () => {
+    expect(services.migrate?.restart).toBe('no');
+  });
+
+  it('holds the backend until migrate has completed successfully', () => {
+    expect(services.backend?.depends_on?.migrate?.condition).toBe('service_completed_successfully');
+  });
 });
