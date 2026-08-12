@@ -7,9 +7,9 @@
     "dev": "bun --watch src/index.ts",
     "build": "tsc",
     "start": "bun src/index.ts",
-    "migrate:up": "bun scripts/migrate.ts up",
-    "migrate:down": "bun scripts/migrate.ts down",
-    "migrate:create": "bun scripts/migrate.ts create",
+    "migrate:up": "bun src/models/migrate.ts up",
+    "migrate:down": "bun src/models/migrate.ts down",
+    "migrate:create": "bun src/models/migrate.ts create",
     "test": "bun test tests/unit && bun test tests/integration && bun test tests/e2e",
     "db:seed": "bun src/models/seed.ts",
     "test:unit": "bun test tests/unit",
@@ -19,8 +19,8 @@
     "test:e2e:local": "pnpm run test:db:up && bun test tests/e2e",
     "test:db:up": "docker compose -f ../docker-compose.test.yml up -d --wait && pnpm run migrate:test",
     "test:db:down": "docker compose -f ../docker-compose.test.yml down",
-    "migrate:test": "DATABASE_URL=postgresql://postgres:postgres@localhost:5436/ntnu_test bun scripts/migrate.ts up",
-    "lint": "eslint src scripts && tsc --noEmit"
+    "migrate:test": "DATABASE_URL=postgresql://postgres:postgres@localhost:5436/ntnu_test bun src/models/migrate.ts up",
+    "lint": "eslint src && tsc --noEmit"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.9.0",

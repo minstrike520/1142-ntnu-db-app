@@ -181,12 +181,12 @@ docker compose exec backend bun run db:seed
 
 ### 常見指令
 - **建立新的遷移檔**：`docker compose exec backend bun run migrate:create <name>`
-- **執行資料庫遷移**：`docker compose exec backend bun run migrate:up`（可加上數量：`migrate:up <count>`）
-- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`（預設回滾一個；`migrate:down <count>` 可指定數量）
+- **執行資料庫遷移**：`docker compose exec backend bun run migrate:up`
+- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`（預設只回滾最近一筆遷移；可加上數量回滾更多筆，例如 `migrate:down 3`）
 - **寫入種子資料**：`docker compose exec backend bun run db:seed`
 
 ### 關於 Migration Runner
-遷移由 `backend/scripts/migrate.ts` 執行，這是一個以 `Bun.SQL` 實作的最小 runner。
+遷移由 `backend/src/models/migrate.ts` 執行，這是一個以 `Bun.SQL` 實作的最小 runner。
 它在 #421 取代了 `node-pg-migrate`，讓後端只依賴 Bun — 不再需要 Node 執行環境，也不再需要 `pg` driver。
 
 它的行為：
@@ -206,11 +206,8 @@ docker compose exec backend bun run db:seed
 `pgmigrations` 表、記錄的名稱、排序規則與 advisory lock id 都與 `node-pg-migrate` 相同，
 因此由舊工具遷移過的資料庫可以無縫接續。
 
-設定 `MIGRATE_VERBOSE=1` 可在執行前印出每個遷移的 SQL。
-
-遷移檔一律為 SQL。`migrate:create` 會產生
-`backend/migrations/<YYYYMMDD><序號>_<name>.sql`，內含兩個區段標頭，
-並自動選擇一定會排在既有遷移之後的前綴。
+遷移檔一律為 SQL。`migrate:create <name>` 會在 `backend/migrations/` 底下產生新檔案，
+內含兩個區段標頭，並自動選擇一定會排在既有遷移之後的數字前綴。
 
 ### 修復損壞的開發資料庫
 如果遷移過程中遇到 `relation ... already exists` 錯誤，或者遷移狀態發生混亂：

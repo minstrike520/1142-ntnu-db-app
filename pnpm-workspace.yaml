@@ -69,6 +69,6 @@ overrides:
   # other's major. Both lines carry GHSA-rgw5-rvv9-x895; the 1.x line also
   # carries GHSA-3jxr-9vmj-r5cp and GHSA-mh99-v99m-4gvg.
   #   1.x: eslint 9 -> minimatch@3, fixed in 1.1.18
-  #   5.x: eslint 10 / typescript-eslint -> minimatch@10, fixed in 5.0.9
+  #   5.x: eslint 10 -> minimatch@10, fixed in 5.0.9
   "brace-expansion@<2": "^1.1.18"
   "brace-expansion@>=5": "^5.0.9"

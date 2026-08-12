@@ -195,12 +195,12 @@ docker compose exec backend bun run db:seed
 
 ### Common Commands
 - **Create a new migration**: `docker compose exec backend bun run migrate:create <name>`
-- **Run migrations**: `docker compose exec backend bun run migrate:up` (optionally `migrate:up <count>`)
-- **Rollback migrations**: `docker compose exec backend bun run migrate:down` (one migration; `migrate:down <count>` for more)
+- **Run migrations**: `docker compose exec backend bun run migrate:up`
+- **Rollback migrations**: `docker compose exec backend bun run migrate:down` (rolls back the single most recent migration; pass a count to undo more, e.g. `migrate:down 3`)
 - **Seed database**: `docker compose exec backend bun run db:seed`
 
 ### About the Migration Runner
-Migrations are applied by `backend/scripts/migrate.ts`, a small runner built on
+Migrations are applied by `backend/src/models/migrate.ts`, a small runner built on
 `Bun.SQL`. It replaced `node-pg-migrate` in #421 so the backend depends on Bun
 alone — no Node runtime, no `pg` driver.
 
@@ -225,11 +225,9 @@ The `pgmigrations` table, the recorded names, the ordering rules and the
 advisory lock id are all unchanged from `node-pg-migrate`, so databases migrated
 by the old tool continue from exactly where they left off.
 
-Set `MIGRATE_VERBOSE=1` to print each migration's SQL before it runs.
-
-Migrations are SQL only. `migrate:create` writes
-`backend/migrations/<YYYYMMDD><counter>_<name>.sql` containing both section
-headers, choosing a prefix that always sorts after the existing migrations.
+Migrations are SQL only. `migrate:create <name>` writes a new file under
+`backend/migrations/` containing both section headers, with a numeric prefix
+chosen so it always sorts after the existing migrations.
 
 ### Repairing a Broken Dev Database
 If you encounter `relation ... already exists` errors during migration, or migration state goes out of sync:

@@ -32,10 +32,6 @@ COPY tsconfig.base.json ./
 COPY shared/ ./shared/
 COPY backend/tsconfig.json ./backend/
 COPY backend/src ./backend/src
-# Typechecked here as well as in CI: the runner stage runs migrate:up at
-# startup, so a type error in scripts/ would surface as a failed container boot
-# rather than a failed build.
-COPY backend/scripts ./backend/scripts
 
 WORKDIR /workspace/backend
 # `pnpm exec`, not `bun exec`: the binary lives in pnpm's
@@ -69,8 +65,6 @@ COPY --chown=bun:bun backend/package.json ./
 
 COPY --chown=bun:bun backend/src ./src
 COPY --chown=bun:bun backend/migrations ./migrations
-# CMD runs `migrate:up`, which is scripts/migrate.ts.
-COPY --chown=bun:bun backend/scripts ./scripts
 COPY --chown=bun:bun shared /shared
 COPY --chown=bun:bun tsconfig.base.json /tsconfig.base.json
 COPY --chown=bun:bun backend/tsconfig.json ./tsconfig.json

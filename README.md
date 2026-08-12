@@ -46,7 +46,7 @@ A real-time group chat application built as an NTNU Database Theories course pro
 .
 ├── backend/                # Hono API backend
 │   ├── src/                # Backend TypeScript source code (routes, services, models, middlewares, realtime, utils)
-│   ├── migrations/         # PostgreSQL schema migrations (Bun runner)
+│   ├── migrations/         # PostgreSQL schema migrations (plain SQL)
 │   └── Dockerfile          # Backend container configurations
 ├── frontend/               # Next.js frontend web app
 │   ├── app/                # React App Router pages and layouts
