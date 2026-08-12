@@ -25,7 +25,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: ["pnpm", "run", "migrate:up"]
+    # Bun, not pnpm: Dockerfile.prod's runner stage is a bun-only image. node and
+    # pnpm exist solely in the builder stage, so the previous
+    # `pnpm run migrate:up` could never have resolved here.
+    command: ["bun", "run", "migrate:up"]
 
   backend:
     image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
@@ -56,7 +59,19 @@ services:
         condition: service_completed_successfully
     volumes:
       - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/app/uploads
-    command: ["node", "dist/backend/src/index.js"]
+    # The image ships TypeScript sources run directly by bun; there is no build
+    # output, so the previous `node dist/backend/src/index.js` pointed at both a
+    # runtime and a path that the runner stage does not contain.
+    #
+    # Spelled out rather than left to the image's default CMD because that CMD is
+    # `bun run migrate:up && bun src/index.ts` — it exists for docker-compose.prod.yml,
+    # which has no migrate service. Here the migrate service above already applied
+    # the schema, and re-running it on every backend restart would take the
+    # migration advisory lock for no reason. This is also why it is not
+    # `bun run start`: `bun run` would interpose a wrapper process between the
+    # container and the app, so a restart or `docker compose down` would no longer
+    # deliver SIGTERM straight to the server.
+    command: ["bun", "src/index.ts"]
 
   frontend:
     image: ${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}

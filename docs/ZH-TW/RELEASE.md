@@ -78,7 +78,7 @@ cp near-chat.env.example .env
 docker compose --env-file .env -f docker-compose.release.yml up -d
 ```
 
-Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行一次 `pnpm run migrate:up`，再啟動 backend 與 frontend。PostgreSQL 資料與使用者上傳檔案仍由部署環境的 volume 持有，不會放入 image 或 Release archive。
+Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行一次 `bun run migrate:up`，再以 `bun src/index.ts` 啟動 backend 與 frontend。兩個命令都只使用 bun：backend production image 以 bun runtime 直接執行 TypeScript 原始碼，其中沒有 `node`、沒有 `pnpm`，也沒有建置產物。PostgreSQL 資料與使用者上傳檔案仍由部署環境的 volume 持有，不會放入 image 或 Release archive。
 
 正式部署應把 `BACKEND_IMAGE` 與 `FRONTEND_IMAGE` 固定為 manifest 記錄的 digest 參照。Frontend image 預設以 `http://localhost:4005` 建置 API URL；現有前端 runtime 邏輯會對標準 `3005`／`4005` host port 做對應，若公開拓撲不同，需另行設定建置參數。
 

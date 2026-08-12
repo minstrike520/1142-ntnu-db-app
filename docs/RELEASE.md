@@ -78,7 +78,7 @@ cp near-chat.env.example .env
 docker compose --env-file .env -f docker-compose.release.yml up -d
 ```
 
-The Compose bundle starts PostgreSQL, runs `pnpm run migrate:up` once from the pinned backend image, then starts the backend and frontend. PostgreSQL data and uploaded files remain in deployment-managed volumes; they are never included in the image or Release archive.
+The Compose bundle starts PostgreSQL, runs `bun run migrate:up` once from the pinned backend image, then starts the backend with `bun src/index.ts`. Both commands are bun-only because the backend production image ships TypeScript sources on a bun runtime — it contains no `node`, no `pnpm`, and no build output. PostgreSQL data and uploaded files remain in deployment-managed volumes; they are never included in the image or Release archive.
 
 For production deployments, keep `BACKEND_IMAGE` and `FRONTEND_IMAGE` pinned to the manifest's digest references. The frontend image is built with `http://localhost:4005` as the default API URL; the existing frontend runtime logic maps the standard `3005`/`4005` host ports, while a different public topology requires a separately configured build.
 
