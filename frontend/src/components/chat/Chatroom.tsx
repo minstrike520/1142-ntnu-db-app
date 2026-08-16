@@ -9,6 +9,7 @@ import {
   getAvatarForUser,
   Message,
 } from "@/context/ChatContext";
+import { useRoomWorkspace } from "@/context/RoomWorkspaceContext";
 import { resolveAssetUrl } from "@/lib/assets";
 import { Button } from "@/components/ui/Button";
 import { Dropdown } from "@/components/ui/Dropdown";
@@ -51,6 +52,48 @@ const EVERYONE_MENTION = "everyone";
 const reportActionError = (error: unknown, fallback: string) => {
   console.error(error);
   alert(error instanceof Error ? error.message : fallback);
+};
+
+/**
+ * Topmost message still visible in the scroll viewport, with its distance from
+ * the top of that viewport. Used to restore a scroll position by content rather
+ * than by pixel offset: attachment images replace a fixed-size skeleton with the
+ * real image after an async fetch, so anything above a raw offset can grow after
+ * the restore (issue #539). Returns null when nothing is measurable, which is
+ * the case in jsdom — callers fall back to the raw offset there.
+ */
+const findTopVisibleMessage = (
+  container: HTMLElement,
+): { messageId: string; offset: number } | null => {
+  const viewportTop = container.getBoundingClientRect().top;
+  for (const row of container.querySelectorAll<HTMLElement>("[data-msg-id]")) {
+    const rect = row.getBoundingClientRect();
+    if (rect.height === 0) continue;
+    if (rect.bottom > viewportTop) {
+      const messageId = row.getAttribute("data-msg-id");
+      if (!messageId) return null;
+      return { messageId, offset: rect.top - viewportTop };
+    }
+  }
+  return null;
+};
+
+/**
+ * Drops a restored reply/edit target that no longer refers to a live message —
+ * it may have been recalled or removed while the user was away, and sending
+ * against it would emit a stale message id (issue #539). While the room's
+ * messages are not loaded yet the target is kept, so a slow fetch does not
+ * discard a valid draft.
+ */
+const restoreMessageTarget = (
+  target: Message | null | undefined,
+  roomId: string,
+  messages: Message[],
+): Message | null => {
+  if (!target) return null;
+  const roomMessages = messages.filter((m) => m.roomId === roomId);
+  if (roomMessages.length === 0) return target;
+  return roomMessages.some((m) => m.id === target.id && !m.isRecalled) ? target : null;
 };
 
 const formatFileSize = (bytes: number) => {
@@ -276,15 +319,26 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     markRoomAsRead,
   } = useChat();
   const { showRightPanel, setShowRightPanel } = useRightPanel();
+  const { readWorkspace, writeWorkspace, clearWorkspace } = useRoomWorkspace();
 
-  const [inputText, setInputText] = useState("");
+  // Lazy initialisers restore the draft when the chat route remounts after a
+  // trip to /friends, /settings or /emergency (issue #539). They run on the
+  // first render only. Room *switches* go through the roomId-change block
+  // further down instead, because the component stays mounted there.
+  const [inputText, setInputText] = useState(() => readWorkspace(roomId)?.inputText ?? "");
   const [mentionDraft, setMentionDraft] = useState<MentionDraft | null>(null);
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
-  const [replyTarget, setReplyTarget] = useState<Message | null>(null);
-  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [replyTarget, setReplyTarget] = useState<Message | null>(() =>
+    restoreMessageTarget(readWorkspace(roomId)?.replyTarget, roomId, messages),
+  );
+  const [editingMessage, setEditingMessage] = useState<Message | null>(() =>
+    restoreMessageTarget(readWorkspace(roomId)?.editingMessage, roomId, messages),
+  );
   const [isModifyNickOpen, setIsModifyNickOpen] = useState(false);
   const [nickInputValue, setNickInputValue] = useState("");
-  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<File[]>(
+    () => readWorkspace(roomId)?.pendingAttachments ?? [],
+  );
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [msgSearchQuery, setMsgSearchQuery] = useState("");
@@ -346,15 +400,33 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
   const [prevRoomId, setPrevRoomId] = useState(roomId);
   if (prevRoomId !== roomId) {
     setPrevRoomId(roomId);
+    // Search is explicitly *not* preserved (issue #539); everything else is
+    // restored from the room the user is switching into, defaulting to empty
+    // for a room with no draft yet.
+    const restored = readWorkspace(roomId);
     setIsSearchOpen(false);
     setMsgSearchQuery("");
-    setPendingAttachments([]);
     setIsUploadingAttachment(false);
-    setInputText("");
-    setReplyTarget(null);
+    setPendingAttachments(restored?.pendingAttachments ?? []);
+    setInputText(restored?.inputText ?? "");
+    setReplyTarget(restoreMessageTarget(restored?.replyTarget, roomId, messages));
+    // Previously left untouched on room switch, which leaked an in-progress
+    // edit (and its banner) into the next room — and, because handleSend sends
+    // editingMessage.id against the *current* room, could edit a message that
+    // belongs to the room the user just left.
+    setEditingMessage(restoreMessageTarget(restored?.editingMessage, roomId, messages));
     setHasInitializedUnread(false);
     setCurrentRoomUnreadId(null);
   }
+
+  // Mirror the live composer state into the session store on every change, so
+  // that unmounting (navigating off the chat route) needs no teardown work and
+  // the unsaved-attachment guard in RoomWorkspaceProvider always sees current
+  // data. Writes go into a ref-held Map and never re-render anything.
+  useEffect(() => {
+    writeWorkspace(roomId, { inputText, replyTarget, editingMessage, pendingAttachments });
+  }, [roomId, inputText, replyTarget, editingMessage, pendingAttachments, writeWorkspace]);
+
 
   // Track whether the user is at the bottom of the message list
   useEffect(() => {
@@ -368,10 +440,22 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
       } else if (!atBottom) {
         isAtBottomRef.current = false;
       }
+      // Persist the offset as it changes rather than reading it back during
+      // effect cleanup (issue #539). A room *switch* does not unmount this
+      // component, so a cleanup would run after the commit that already swapped
+      // in the new room's rows and would record the incoming room's clamped
+      // offset; on unmount the node may already be detached, recording 0.
+      const anchor = findTopVisibleMessage(el);
+      writeWorkspace(roomId, {
+        scrollTop: el.scrollTop,
+        wasAtBottom: atBottom,
+        anchorMessageId: anchor?.messageId ?? null,
+        anchorOffset: anchor?.offset ?? 0,
+      });
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, [roomId, markRoomAsRead]);
+  }, [roomId, markRoomAsRead, writeWorkspace]);
 
   // Track user interactions to mark room as read when at the bottom
   useEffect(() => {
@@ -442,6 +526,40 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     if (!room) return;
 
     if (lastScrolledRoomIdRef.current !== roomId) {
+      // A room the user scrolled away from earlier in this session resumes
+      // exactly where it was left. This runs *before* the hasInitializedUnread
+      // gate on purpose: the saved offset makes the unread scan unnecessary,
+      // and that scan defers a tick (setTimeout above), which would paint the
+      // list at offset 0 first and show a visible jump. Its messages are
+      // already in ChatContext from the earlier visit, so the list is fully
+      // rendered in this first layout pass and assigning scrollTop here lands
+      // before paint — instant, with no scroll animation, as issue #539 asks.
+      //
+      // Only applies when the user had scrolled *off* the bottom. Someone who
+      // left while pinned to the newest message falls through to the unread
+      // logic below instead, so messages that arrived while they were away
+      // still raise the "New Messages" divider rather than being silently
+      // scrolled past and marked read.
+      const saved = readWorkspace(roomId);
+      const el = scrollAreaRef.current;
+      if (saved && !saved.wasAtBottom && saved.scrollTop !== null && el) {
+        lastScrolledRoomIdRef.current = roomId;
+        const anchor = saved.anchorMessageId
+          ? el.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(saved.anchorMessageId)}"]`)
+          : null;
+        if (anchor) {
+          const delta =
+            anchor.getBoundingClientRect().top -
+            el.getBoundingClientRect().top -
+            saved.anchorOffset;
+          el.scrollTop += delta;
+        } else {
+          el.scrollTop = saved.scrollTop;
+        }
+        isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        return;
+      }
+
       if (!hasInitializedUnread) {
         return;
       }
@@ -476,7 +594,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
       messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
       markRoomAsRead(roomId);
     }
-  }, [roomId, rooms, markRoomAsRead, currentRoomUnreadId, hasInitializedUnread]);
+  }, [roomId, rooms, markRoomAsRead, currentRoomUnreadId, hasInitializedUnread, readWorkspace]);
 
 
 
@@ -615,6 +733,15 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
           replyTarget,
         });
         setPendingAttachments([]);
+        // Clear the stored draft imperatively too. If the user navigated off
+        // the chat route while the upload was in flight, this component is
+        // already unmounted and the setState calls are no-ops — the snapshot
+        // would keep the files and offer them for a second send on return.
+        writeWorkspace(activeRoom.id, {
+          pendingAttachments: [],
+          inputText: "",
+          replyTarget: null,
+        });
       } else {
         handleSendMessage(activeRoom.id, inputText, replyTarget);
       }
@@ -675,6 +802,9 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     if (confirm(t("chatroom.confirmLeaveOrBlock", { action, name: activeRoom.name }))) {
       const { isDeleted, newActiveId } = await handleLeaveOrBlock(activeRoom.id);
       if (isDeleted) {
+        // Drop the draft with the room, so its files stop holding the
+        // unsaved-attachment guard open for a room the user can no longer see.
+        clearWorkspace(activeRoom.id);
         if (newActiveId) {
           router.push(`/chat/${newActiveId}`);
         } else {
