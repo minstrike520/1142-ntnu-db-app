@@ -121,10 +121,21 @@ export const makeMessageService = (
       // The cursor update is a separate side effect: if it fails after the
       // message transaction commits, peers must still receive the live event.
       if (!wasCommandReplayed(message)) publish?.(parsed.data.roomId, 'new_message', message);
-      if (roomMemberRepo.markRead) {
-        await roomMemberRepo.markRead(parsed.data.roomId, userId, message.messageId);
-      } else {
-        await roomMemberRepo.update(parsed.data.roomId, userId, { lastReadId: message.messageId });
+      // A failed cursor update must not turn a committed, published message into
+      // an error response: the client would retry with a fresh Idempotency-Key
+      // and create a duplicate message. The sender's own read position is
+      // self-healing through the next /sync, send or room entry.
+      try {
+        if (roomMemberRepo.markRead) {
+          await roomMemberRepo.markRead(parsed.data.roomId, userId, message.messageId);
+        } else {
+          await roomMemberRepo.update(parsed.data.roomId, userId, { lastReadId: message.messageId });
+        }
+      } catch (readCursorError) {
+        console.error(
+          `Failed to advance the sender read cursor after creating message ${message.messageId}:`,
+          readCursorError,
+        );
       }
       return message;
     },
