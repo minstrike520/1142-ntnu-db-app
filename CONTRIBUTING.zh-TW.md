@@ -76,8 +76,14 @@
 * **原生 SQL 存取**：本專案已完全移除 Prisma。所有的資料庫存取皆使用原生 SQL 查詢（Raw SQL）。
 * **資料庫遷移 (Migrations)**：
   - 請勿直接在資料庫中手動執行 SQL 來變更 Schema。
-  - 所有 Schema 的變更都必須透過在 `backend/migrations/` 底下撰寫純 SQL 遷移檔來完成，並以 `-- Up migration` 與 `-- Down migration` 區分正向與回滾。
   - 欄位結構、預設值與外鍵條件請參考 [docs/database-design.md](docs/database-design.md)。
+* **上線前的 Schema 變更**（目前階段）：服務尚未部署至任何正式環境，沒有需要保留的資料。
+  因此 Schema 變更一律直接修改 `backend/migrations/1716300000000_init.sql` 的基準定義，
+  **不新增 migration 檔**。這讓 Schema 保持為單一份可讀的定義，而不是「基準檔 + 一疊補丁」。
+  本機已有 volume 的人需執行一次 `docker compose down -v` 才會套用；CI 每次都建立全新資料庫，不受影響。
+* **首次正式部署之後**：`init.sql` 即凍結。自此每次 Schema 變更都必須是
+  `backend/migrations/` 底下的 additive SQL migration（由 `backend/src/models/migrate.ts` 這個 Bun runner 套用），基準檔不再修改。
+  執行首次部署的人負責回來翻轉本文件的這條規則。
 * **Migration 相關指令**（請於後端容器內執行）：
   - **建立遷移檔**：`docker compose exec backend pnpm run migrate:create <name>`
   - **執行資料庫遷移**：`docker compose exec backend pnpm run migrate:up`

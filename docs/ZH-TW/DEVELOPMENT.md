@@ -82,6 +82,33 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 NEXT_PUBLIC_API_URL=http://localhost:4005
 ```
 
+### 即時通訊 runtime 與 smoke check
+
+後端 production listener 是單一 `Bun.serve`。Hono 處理 REST，
+`@socket.io/bun-engine` 處理 `/socket.io/`；舊 Node HTTP adapter 只供
+supertest 相容測試使用。Socket.IO ping interval 為 25 秒、ping timeout 為
+20 秒，因此 Bun `idleTimeout` 必須大於此視窗。
+
+持久化訊息命令走 REST 並必須帶 `Idempotency-Key`；編輯與收回另需
+`If-Match`。連線後客戶端以最後 cursor 呼叫 `/api/v1/sync`。最小本機
+smoke check：
+
+```bash
+curl -sS http://localhost:4005/api/v1/health
+# 完成註冊／登入並建立聊天室後，使用相同 key 重送訊息：
+curl -sS -X POST http://localhost:4005/api/v1/rooms/<roomId>/messages \
+  -H "Authorization: Bearer <token>" \
+  -H "Idempotency-Key: smoke-create-1" \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"smoke"}'
+curl -sS "http://localhost:4005/api/v1/sync?cursor=0&limit=100" \
+  -H "Authorization: Bearer <token>"
+```
+
+`MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS` 分別控制單機
+session、presence 重連寬限與 typing indication TTL。多節點 presence、全域
+限流與跨節點 change fan-out 仍不在本服務範圍內。
+
 ### 正式環境入口拓撲與代理信任
 
 `docker-compose.prod.yml` 的所有主機連接埠都綁定在 `127.0.0.1`，因此文件記載的本機
@@ -158,10 +185,29 @@ docker compose exec backend bun run db:seed
 - **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`（預設只回滾最近一筆遷移；可加上數量回滾更多筆，例如 `migrate:down 3`）
 - **寫入種子資料**：`docker compose exec backend bun run db:seed`
 
-遷移檔是 `backend/migrations/` 底下的純 SQL 檔案，每個檔案以 `-- Up migration`
-與 `-- Down migration` 兩個區段區隔。執行遷移的是 `backend/src/models/migrate.ts`
-這個 Bun.SQL runner：它會在單一交易中套用所有待執行的遷移，以 PostgreSQL advisory
-lock 避免並行執行，並將已套用的遷移記錄在 `pgmigrations` 資料表。
+### 關於 Migration Runner
+遷移由 `backend/src/models/migrate.ts` 執行，這是一個以 `Bun.SQL` 實作的最小 runner。
+它在 #421 取代了 `node-pg-migrate`，讓後端只依賴 Bun — 不再需要 Node 執行環境，也不再需要 `pg` driver。
+
+它的行為：
+
+- 套用 `backend/migrations/` 底下所有 `.sql` 檔，依檔名的數字前綴排序，並將每個檔案以名稱記錄在
+  `pgmigrations` 表中。已記錄的檔案不會重複套用。
+- 依 `-- Up Migration` 與 `-- Down Migration` 標頭切分每個檔案。
+- 單次執行是**一個交易**。任何一個遷移失敗時，該次執行不會提交任何內容，
+  且錯誤訊息會指出失敗的檔案名稱。
+- 執行前先取得 PostgreSQL advisory lock，因此兩個同時啟動的容器不會並行遷移；
+  後者會以 `Another migration is already running.` 結束。
+- 若 `backend/migrations/` 中出現非 `.sql` 檔案，會直接失敗，而不是靜默略過。
+- 當分支合併導致新的遷移排在已套用的遷移之前時，會以
+  `Not run migration … is preceding already run migration …` 中止。
+  請將該檔案改名為更大的前綴，使其排在最後。
+
+`pgmigrations` 表、記錄的名稱、排序規則與 advisory lock id 都與 `node-pg-migrate` 相同，
+因此由舊工具遷移過的資料庫可以無縫接續。
+
+遷移檔一律為 SQL。`migrate:create <name>` 會在 `backend/migrations/` 底下產生新檔案，
+內含兩個區段標頭，並自動選擇一定會排在既有遷移之後的數字前綴。
 
 ### 修復損壞的開發資料庫
 如果遷移過程中遇到 `relation ... already exists` 錯誤，或者遷移狀態發生混亂：

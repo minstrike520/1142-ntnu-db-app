@@ -54,6 +54,9 @@ services:
       - ATTACHMENT_ALLOWED_MIME_TYPES=${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
       - ATTACHMENT_ALLOWED_EXTENSIONS=${ATTACHMENT_ALLOWED_EXTENSIONS:-.jpg,.jpeg,.png,.gif,.pdf,.zip,.txt}
       - ATTACHMENT_MAX_BYTES=${ATTACHMENT_MAX_BYTES:-10485760}
+      - MAX_SESSIONS_PER_USER=${MAX_SESSIONS_PER_USER:-5}
+      - PRESENCE_GRACE_MS=${PRESENCE_GRACE_MS:-3000}
+      - TYPING_TTL_MS=${TYPING_TTL_MS:-3000}
       - CI=true
     depends_on:
       db:

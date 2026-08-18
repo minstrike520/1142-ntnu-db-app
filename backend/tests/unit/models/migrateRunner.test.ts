@@ -148,6 +148,16 @@ describe('loadMigrationFiles', () => {
     '2026061502000_add_demo_warning_fields',
     '2026061600000_add_room_order_field',
     '2026063000000_remove_demo_warning_fields',
+    '2026080900000_add_realtime_durability',
+    '2026081000000_harden_realtime_command_receipts',
+    '2026081000001_snapshot_message_relations',
+    '2026081000002_harden_emergency_alert_delivery',
+    '2026081000003_backfill_legacy_realtime_sequences',
+    '2026081000004_reconcile_legacy_member_cursors',
+    '2026081000005_rebuild_legacy_realtime_order',
+    '2026081000006_enforce_blocked_private_room_state',
+    '2026081100000_record_noop_command_receipts',
+    '2026081100001_record_emergency_alert_deliveries',
   ];
 
   it('reproduces the migration order node-pg-migrate recorded', async () => {

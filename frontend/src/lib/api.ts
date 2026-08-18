@@ -16,7 +16,24 @@ import type {
   SearchUserResult,
   UserProfile,
   UserSettings,
+  SyncResponse,
 } from '@shared/types';
+
+/**
+ * A failed HTTP response. Callers that have to react to a specific status —
+ * a 409 revision conflict, for instance — need it, and a bare `Error` throws
+ * that away.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
 
 export const getApiBaseUrl = (): string => {
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -228,8 +245,12 @@ const request = async (
       });
     }
 
-    const payload = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(payload?.message ?? `Request failed with status ${response.status}`);
+    const payload = (await response.json().catch(() => null)) as { message?: string; code?: string } | null;
+    throw new ApiError(
+      payload?.message ?? `Request failed with status ${response.status}`,
+      response.status,
+      payload?.code,
+    );
   }
 
   return response;
@@ -519,6 +540,99 @@ export const listMessages = (
 
   return requestJson<MessageWithSender[]>(`/rooms/${roomId}/messages${suffix}`, {}, { token });
 };
+
+export const newIdempotencyKey = (): string => {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+export const createMessage = (
+  token: string,
+  roomId: string,
+  data: { content: string; replyToId?: string; attachmentIds?: string[] },
+  commandId = newIdempotencyKey(),
+): Promise<MessageWithSender> =>
+  requestJson<MessageWithSender>(
+    `/rooms/${roomId}/messages`,
+    {
+      method: 'POST',
+      ...withJsonBody(data),
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': commandId,
+      },
+    },
+    { token },
+  );
+
+export const editMessage = (
+  token: string,
+  roomId: string,
+  messageId: string,
+  content: string,
+  revision: number,
+  commandId = newIdempotencyKey(),
+): Promise<MessageWithSender> =>
+  requestJson<MessageWithSender>(
+    `/rooms/${roomId}/messages/${messageId}`,
+    {
+      method: 'PATCH',
+      ...withJsonBody({ content }),
+      headers: {
+        'Content-Type': 'application/json',
+        'If-Match': String(revision),
+        'Idempotency-Key': commandId,
+      },
+    },
+    { token },
+  );
+
+export const recallMessage = (
+  token: string,
+  roomId: string,
+  messageId: string,
+  revision: number,
+  commandId = newIdempotencyKey(),
+): Promise<MessageWithSender> =>
+  requestJson<MessageWithSender>(
+    `/rooms/${roomId}/messages/${messageId}/recall`,
+    {
+      method: 'POST',
+      ...withJsonBody({}),
+      headers: {
+        'Content-Type': 'application/json',
+        'If-Match': String(revision),
+        'Idempotency-Key': commandId,
+      },
+    },
+    { token },
+  );
+
+export const markRoomRead = (
+  token: string,
+  roomId: string,
+  messageId: string,
+  commandId = newIdempotencyKey(),
+): Promise<RoomMember> =>
+  requestJson<RoomMember>(
+    `/rooms/${roomId}/read-position`,
+    {
+      method: 'PUT',
+      ...withJsonBody({ messageId }),
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': commandId,
+      },
+    },
+    { token },
+  );
+
+export const syncChanges = (
+  token: string,
+  cursor: number,
+  limit = 100,
+): Promise<SyncResponse> =>
+  requestJson<SyncResponse>(`/sync?cursor=${cursor}&limit=${limit}`, {}, { token });
 
 export const listFolders = (token: string): Promise<ApiFolder[]> =>
   requestJson<ApiFolder[]>('/folders', {}, { token });

@@ -10,13 +10,13 @@ This directory contains the TypeScript source code for the backend service built
 
 | Directory | Layer & Role | Code Standards & Guidelines |
 |-----------|--------------|----------------------------|
-| [bootstrap/](bootstrap/) | **Assembly Layer** | One factory per stage of startup — `config`, `repositories`, `services`, `httpApp`, `realtime`, `jobs`, `start` — called in dependency order by [index.ts](index.ts). Wiring only: no business rules, no SQL, no route handlers. Services are built before Socket.IO exists, so they receive a `getIo` accessor rather than the server itself; see the comment in `bootstrap/services.ts` before changing that order. |
+| [bootstrap/](bootstrap/) | **Assembly Layer** | One factory per stage of startup — `config`, `repositories`, `services`, `httpApp`, `realtime`, `jobs`, `start` — called in dependency order by [index.ts](index.ts). Wiring only: no business rules, no SQL, no route handlers. Services publish through the transport-independent `RealtimePublisher`; the composition root binds that publisher to Socket.IO after the Bun engine is assembled. |
 | [routes/](routes/) | **Routing Layer** | Defines Hono HTTP endpoints, mounts validation middleware via `zValidator`, extracts auth context (`c.get('user')`), and delegates to the Service layer. Also holds the Zod schemas validating each route's payloads (e.g. `userSchemas.ts`, `roomSchemas.ts`, `folderSchemas.ts`, `messageSchemas.ts`). |
 | [services/](services/) | **Business Logic Layer** | Domain orchestration and permission checking. Throws `AppError` subclasses. |
 | [models/](models/) | **Data Access Layer** | Executes raw SQL statements, and holds the shared `Bun.SQL` client in `db.ts`. Repositories must conform to corresponding interfaces (e.g., `IRoomRepository.ts`) to allow mock testing. |
 | [utils/](utils/) | **Shared Utilities** | Cross-cutting helpers: `AppError.ts` / `mapError.ts`, JWT and cookie handling, upload path resolution, and the `inactivityJob.ts` emergency-alert scheduler. |
 | [middlewares/](middlewares/) | **Middlewares** | Intercepts HTTP requests (JWT validation in `authMiddleware.ts`, security headers, global exception catching in `errorHandler.ts`). |
-| [realtime/](realtime/) | **WebSocket layer** | Handles Socket.IO connection handshakes, JWT authorization via Socket middlewares, and registers listeners for instant messages, typing indicators, and read receipts. |
+| [realtime/](realtime/) | **Realtime layer** | Handles Socket.IO connection handshakes, JWT authorization, durable room subscriptions, presence, and ephemeral typing. Durable message commands and read positions use REST; the publisher sends their committed events to sockets. |
 
 ## AI Agent Guidelines
 

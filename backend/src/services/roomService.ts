@@ -24,7 +24,11 @@ export const makeRoomService = (
   repo: IRoomRepository,
   roomMemberRepo: IRoomMemberRepository,
   emitRoomEvent?: (roomId: string, eventName: string, payload: unknown) => void,
-  socialRepo?: { isBlocked(userA: string, userB: string): Promise<boolean>; areFriends(userA: string, userB: string): Promise<boolean> },
+  socialRepo?: {
+    isBlocked(userA: string, userB: string): Promise<boolean>;
+    areFriends(userA: string, userB: string): Promise<boolean>;
+    withUserPairLock?<T>(userA: string, userB: string, operation: () => Promise<T>): Promise<T>;
+  },
   userRepo?: IUserRepository,
   messageRepo?: IMessageRepository,
   // Emits an event directly to a specific user's personal socket room (user_${userId}).
@@ -32,6 +36,8 @@ export const makeRoomService = (
   // approved into a group they haven't joined yet).
   emitToUser?: (userId: string, eventName: string, payload: unknown) => void,
   avatarStore: AvatarStore = defaultAvatarStore,
+  onMembershipRevoked?: (userId: string, roomId: string) => void | Promise<void>,
+  onMembershipGranted?: (userId: string, roomId: string) => void | Promise<void>,
 ) => {
   const ensureMember = async (roomId: string, userId: string) => {
     const existing = await roomMemberRepo.findMember(roomId, userId);
@@ -55,6 +61,7 @@ export const makeRoomService = (
 
       const room = await repo.create({ ...parsed.data, inviteCode });
       await roomMemberRepo.add({ roomId: room.roomId, userId: creatorId, role: 'owner' });
+      await onMembershipGranted?.(creatorId, room.roomId);
       return room;
     },
 
@@ -83,57 +90,112 @@ export const makeRoomService = (
       if (creatorId === targetUserId) {
         throw new ValidationError('Cannot create a private room with yourself');
       }
-      if (!bypassFriendCheck) {
+      const openPrivateRoom = async (): Promise<{ room: Room; created: boolean }> => {
         if (!socialRepo) {
-          throw new ForbiddenError('Private rooms require friendship validation');
+          if (!bypassFriendCheck) throw new ForbiddenError('Private rooms require friendship validation');
+        } else {
+          if (await socialRepo.isBlocked(creatorId, targetUserId)) {
+            throw new ForbiddenError('Cannot create a private room with a blocked user');
+          }
+          if (!bypassFriendCheck && !(await socialRepo.areFriends(creatorId, targetUserId))) {
+            throw new ForbiddenError('Private rooms require an accepted friendship');
+          }
         }
-        if (await socialRepo.isBlocked(creatorId, targetUserId)) {
+
+        const existing = await repo.findPrivateRoomByMembers(creatorId, targetUserId);
+        if (existing) {
+          if (existing.isReadonly) {
+            const room = repo.reopenPrivateRoomIfUnblocked
+              ? await repo.reopenPrivateRoomIfUnblocked(existing.roomId, creatorId, targetUserId)
+              : await repo.update(existing.roomId, { isReadonly: false });
+            if (!room) throw new ForbiddenError('Cannot reopen a blocked private room');
+            await onMembershipGranted?.(creatorId, existing.roomId);
+            await onMembershipGranted?.(targetUserId, existing.roomId);
+            if (emitToUser) {
+              emitToUser(creatorId, 'room_update', { type: 'ROOM_JOINED', roomId: existing.roomId, data: {} });
+              emitToUser(targetUserId, 'room_update', { type: 'ROOM_JOINED', roomId: existing.roomId, data: {} });
+            }
+            return { room, created: false };
+          }
+          return { room: existing, created: false };
+        }
+
+        const room = await repo.create({
+          type: 'private',
+          name: undefined,
+          requireApproval: false,
+          viewHistory: true,
+        });
+        await ensureMember(room.roomId, creatorId);
+        await ensureMember(room.roomId, targetUserId);
+        const canonicalRoom = await repo.findById(room.roomId);
+        if (!canonicalRoom || canonicalRoom.isReadonly) {
+          // A block committed between the `isBlocked` check above and the second
+          // membership insert, and the trigger on that insert closed the room.
+          // The create and both `add` calls are already committed in their own
+          // transactions, so throwing alone would leave a fully-formed private
+          // room behind — one that a later unblock would happily reopen, even
+          // though the request that created it failed. Delete it here; the
+          // pair lock means nothing else can have written to it yet.
+          try {
+            await repo.delete(room.roomId);
+          } catch (cleanupError) {
+            // Reported, not rethrown: the caller must still see why the request
+            // was rejected, not how the cleanup went.
+            console.error('Failed to remove a private room rejected by a block:', cleanupError);
+          }
           throw new ForbiddenError('Cannot create a private room with a blocked user');
         }
-        if (!(await socialRepo.areFriends(creatorId, targetUserId))) {
-          throw new ForbiddenError('Private rooms require an accepted friendship');
+        await onMembershipGranted?.(creatorId, room.roomId);
+        await onMembershipGranted?.(targetUserId, room.roomId);
+        if (emitToUser) {
+          emitToUser(creatorId, 'room_update', { type: 'ROOM_JOINED', roomId: room.roomId, data: {} });
+          emitToUser(targetUserId, 'room_update', { type: 'ROOM_JOINED', roomId: room.roomId, data: {} });
         }
-      }
+        return { room: canonicalRoom, created: true };
+      };
 
-      const existing = await repo.findPrivateRoomByMembers(creatorId, targetUserId);
-      if (existing) {
-        if (existing.isReadonly) {
-          const room = await repo.update(existing.roomId, { isReadonly: false });
-          if (emitToUser) {
-            emitToUser(creatorId, 'room_update', { type: 'ROOM_JOINED', roomId: existing.roomId, data: {} });
-            emitToUser(targetUserId, 'room_update', { type: 'ROOM_JOINED', roomId: existing.roomId, data: {} });
-          }
-          return { room, created: false };
-        }
-        return { room: existing, created: false };
+      if (socialRepo?.withUserPairLock) {
+        return socialRepo.withUserPairLock(creatorId, targetUserId, openPrivateRoom);
       }
-
-      const room = await repo.create({
-        type: 'private',
-        name: undefined,
-        requireApproval: false,
-        viewHistory: true,
-      });
-      await ensureMember(room.roomId, creatorId);
-      await ensureMember(room.roomId, targetUserId);
-      if (emitToUser) {
-        emitToUser(creatorId, 'room_update', { type: 'ROOM_JOINED', roomId: room.roomId, data: {} });
-        emitToUser(targetUserId, 'room_update', { type: 'ROOM_JOINED', roomId: room.roomId, data: {} });
-      }
-      return { room, created: true };
+      return openPrivateRoom();
     },
 
-    async markPrivateReadOnly(userA: string, userB: string): Promise<void> {
+    async markPrivateReadOnly(userA: string, userB: string): Promise<string | null> {
       const existing = await repo.findPrivateRoomByMembers(userA, userB);
       if (existing) {
         await repo.update(existing.roomId, { isReadonly: true });
+        return existing.roomId;
       }
+      return null;
+    },
+
+    /**
+     * Used by the block flow to locate the room whose sockets need revoking.
+     * It deliberately does not touch room state: the `blocks` insert trigger
+     * already closes the room inside the same transaction as the block row,
+     * and a second writer for that invariant is what let a concurrent unblock
+     * leave a room read-only with no block to undo it. Returning null when the
+     * block is gone also stops a stale request from revoking access to a room
+     * that has legitimately reopened.
+     */
+    async findPrivateRoomIdIfBlocked(userA: string, userB: string): Promise<string | null> {
+      if (repo.findPrivateRoomIdIfBlocked) {
+        return repo.findPrivateRoomIdIfBlocked(userA, userB);
+      }
+      const existing = await repo.findPrivateRoomByMembers(userA, userB);
+      return existing ? existing.roomId : null;
     },
 
     async reopenPrivateRoom(userA: string, userB: string): Promise<void> {
       const existing = await repo.findPrivateRoomByMembers(userA, userB);
       if (existing && existing.isReadonly) {
-        await repo.update(existing.roomId, { isReadonly: false });
+        const reopened = repo.reopenPrivateRoomIfUnblocked
+          ? await repo.reopenPrivateRoomIfUnblocked(existing.roomId, userA, userB)
+          : await repo.update(existing.roomId, { isReadonly: false });
+        if (!reopened) return;
+        await onMembershipGranted?.(userA, existing.roomId);
+        await onMembershipGranted?.(userB, existing.roomId);
         if (emitToUser) {
           emitToUser(userA, 'room_update', { type: 'ROOM_JOINED', roomId: existing.roomId, data: {} });
           emitToUser(userB, 'room_update', { type: 'ROOM_JOINED', roomId: existing.roomId, data: {} });
@@ -203,6 +265,7 @@ export const makeRoomService = (
       }
 
       if (role === 'member') {
+        await onMembershipGranted?.(userId, room.roomId);
         // Notify existing room members that someone new joined.
         if (emitRoomEvent) {
           emitRoomEvent(room.roomId, 'room_update', { type: 'MEMBER_JOINED', data: { userId } });
@@ -238,7 +301,27 @@ export const makeRoomService = (
       if (member.role === 'owner') {
         throw new ForbiddenError('Owner cannot leave room. Transfer ownership first.');
       }
-      await roomMemberRepo.remove(roomId, userId);
+      // Same boundary as `kickMember` and the demotion path: the subscription
+      // goes before the membership write, never after. `remove` commits in its
+      // own transaction, so revoking afterwards leaves a window in which a peer's
+      // message is published to a socket that is still in `room_<roomId>` but no
+      // longer a member.
+      await onMembershipRevoked?.(userId, roomId);
+      try {
+        await roomMemberRepo.remove(roomId, userId);
+      } catch (error) {
+        // Still a member, so the subscription has to go back — plus the standing
+        // recovery signal, because a restored subscription replays nothing that
+        // was published while it was gone.
+        await onMembershipGranted?.(userId, roomId);
+        emitToUser?.(userId, 'realtime_ready', undefined);
+        throw error;
+      }
+      emitToUser?.(userId, 'room_update', {
+        type: 'MEMBER_LEFT',
+        roomId,
+        data: { userId },
+      });
 
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_LEFT', data: { userId } });
@@ -275,8 +358,14 @@ export const makeRoomService = (
         throw new ValidationError('Cannot transfer ownership to a pending member');
       }
 
-      await roomMemberRepo.update(roomId, callerId, { role: 'admin' });
-      await roomMemberRepo.update(roomId, targetUserId, { role: 'owner' });
+      if (repo.transferOwnership) {
+        await repo.transferOwnership(roomId, callerId, targetUserId);
+      } else {
+        // Kept for lightweight service doubles; the production repository
+        // always uses the transaction above.
+        await roomMemberRepo.update(roomId, callerId, { role: 'admin' });
+        await roomMemberRepo.update(roomId, targetUserId, { role: 'owner' });
+      }
 
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'OWNERSHIP_TRANSFERRED', data: { oldOwner: callerId, newOwner: targetUserId } });
@@ -293,7 +382,16 @@ export const makeRoomService = (
         throw new ForbiddenError('Only the owner can delete the group');
       }
 
+      const members = (await roomMemberRepo.findByRoom(roomId)) ?? [];
       await repo.delete(roomId);
+      for (const member of members) {
+        emitToUser?.(member.userId, 'room_update', {
+          type: 'ROOM_DELETED',
+          roomId,
+          data: { roomId },
+        });
+        await onMembershipRevoked?.(member.userId, roomId);
+      }
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'ROOM_DELETED', data: { roomId } });
       }
@@ -312,6 +410,7 @@ export const makeRoomService = (
       if (target.role !== 'pending') throw new ValidationError('Member is not pending approval');
 
       await roomMemberRepo.update(roomId, targetUserId, { role: 'member' });
+      await onMembershipGranted?.(targetUserId, roomId);
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_APPROVED', data: { userId: targetUserId } });
       }
@@ -361,7 +460,40 @@ export const makeRoomService = (
         }
       }
 
-      await roomMemberRepo.update(roomId, targetUserId, data as Parameters<typeof roomMemberRepo.update>[2]);
+      const demotingToPending = target.role !== 'pending' && data.role === 'pending';
+
+      // Revoked before the state change, never after. `roomMemberRepo.update`
+      // commits in its own transaction, so revoking afterwards leaves a window
+      // where the demoted member is still in `room_<roomId>` and a peer's
+      // message is published straight to them — content they have just lost
+      // access to. `kickMember` already draws the boundary this way.
+      if (demotingToPending) {
+        await onMembershipRevoked?.(targetUserId, roomId);
+      }
+
+      try {
+        await roomMemberRepo.update(roomId, targetUserId, data as Parameters<typeof roomMemberRepo.update>[2]);
+      } catch (error) {
+        // The demotion never landed, so the subscription has to go back. A
+        // restored subscription replays nothing, hence the same recovery
+        // signal the failed-kick path sends: the client re-runs `/sync` and
+        // picks up whatever was published while it was out.
+        if (demotingToPending) {
+          await onMembershipGranted?.(targetUserId, roomId);
+          emitToUser?.(targetUserId, 'realtime_ready', undefined);
+        }
+        throw error;
+      }
+
+      if (target.role === 'pending' && data.role && data.role !== 'pending') {
+        await onMembershipGranted?.(targetUserId, roomId);
+      } else if (demotingToPending) {
+        emitToUser?.(targetUserId, 'room_update', {
+          type: 'MEMBER_UPDATED',
+          roomId,
+          data: { userId: targetUserId, ...data as Record<string, unknown> },
+        });
+      }
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_UPDATED', data: { userId: targetUserId, ...data as Record<string, unknown> } });
       }
@@ -386,7 +518,31 @@ export const makeRoomService = (
         throw new ForbiddenError('Owner cannot be kicked');
       }
 
-      await roomMemberRepo.remove(roomId, targetUserId);
+      // Revoke the live subscription before the conditional delete. If the
+      // target's role changed after the initial checks, restore the
+      // subscription below and report a conflict rather than deleting a new
+      // owner/admin.
+      await onMembershipRevoked?.(targetUserId, roomId);
+      const removed = roomMemberRepo.removeIfAuthorized
+        ? await roomMemberRepo.removeIfAuthorized(roomId, callerId, targetUserId, target.role)
+        : (await roomMemberRepo.remove(roomId, targetUserId), true);
+      if (!removed) {
+        await onMembershipGranted?.(targetUserId, roomId);
+        // Restoring the subscription does not replay what it missed. Anything
+        // published to the room between the revoke above and this restore was
+        // broadcast while the target had no session in `room_<roomId>`, and a
+        // rejoin delivers nothing retroactively. `realtime_ready` is the
+        // client's standing recovery signal — it re-runs `/sync` from its
+        // cursor — so the durable changes committed inside that window are
+        // recovered instead of being lost for the rest of the session.
+        emitToUser?.(targetUserId, 'realtime_ready', undefined);
+        throw new ConflictError('Room membership changed; retry the kick');
+      }
+      emitToUser?.(targetUserId, 'room_update', {
+        type: 'MEMBER_KICKED',
+        roomId,
+        data: { userId: targetUserId },
+      });
       if (emitRoomEvent) {
         emitRoomEvent(roomId, 'room_update', { type: 'MEMBER_KICKED', data: { userId: targetUserId } });
       }

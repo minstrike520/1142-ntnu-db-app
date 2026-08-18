@@ -1,4 +1,4 @@
-import type { MessageWithSender } from '@shared/types';
+import type { MessageWithSender, RoomMember } from '@shared/types';
 import type { IMessageRepository } from '../models/IMessageRepository';
 import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
 import type { IRoomRepository } from '../models/IRoomRepository';
@@ -13,6 +13,9 @@ const validationMessage = (issues: { message: string }[]) =>
   issues[0]?.message ?? 'Invalid message payload';
 
 const EVERYONE_MENTION = 'everyone';
+
+const wasCommandReplayed = (message: MessageWithSender): boolean =>
+  Boolean((message as MessageWithSender & { __replayedCommand?: boolean }).__replayedCommand);
 
 const parseMentionNames = (content: string): string[] => {
   const mentionMatches = [...content.matchAll(/@([^\s@]+)/g)];
@@ -29,6 +32,7 @@ export const makeMessageService = (
   messageRepo: IMessageRepository,
   roomRepo: IRoomRepository,
   roomMemberRepo: IRoomMemberRepository,
+  publish?: (roomId: string, event: 'new_message' | 'message_updated' | 'message_recalled' | 'read_update', payload: unknown) => void,
 ) => {
   const assertRoomMembership = async (userId: string, roomId: string) => {
     const room = await roomRepo.findById(roomId);
@@ -52,7 +56,7 @@ export const makeMessageService = (
       userId: string,
       roomId: string,
       content: string,
-      opts: { replyToId?: string; attachmentIds?: string[] } = {},
+      opts: { replyToId?: string; attachmentIds?: string[]; commandId?: string } = {},
     ): Promise<MessageWithSender> {
       const parsed = sendMessageSchema.safeParse({
         roomId,
@@ -108,9 +112,31 @@ export const makeMessageService = (
       if (parsed.data.attachmentIds && parsed.data.attachmentIds.length > 0) {
         messageData.attachmentIds = parsed.data.attachmentIds;
       }
+      if (opts.commandId) {
+        messageData.commandId = opts.commandId;
+      }
 
       const message = await messageRepo.create(messageData);
-      await roomMemberRepo.update(parsed.data.roomId, userId, { lastReadId: message.messageId });
+      // Publish the durable message before the sender's read cursor update.
+      // The cursor update is a separate side effect: if it fails after the
+      // message transaction commits, peers must still receive the live event.
+      if (!wasCommandReplayed(message)) publish?.(parsed.data.roomId, 'new_message', message);
+      // A failed cursor update must not turn a committed, published message into
+      // an error response: the client would retry with a fresh Idempotency-Key
+      // and create a duplicate message. The sender's own read position is
+      // self-healing through the next /sync, send or room entry.
+      try {
+        if (roomMemberRepo.markRead) {
+          await roomMemberRepo.markRead(parsed.data.roomId, userId, message.messageId);
+        } else {
+          await roomMemberRepo.update(parsed.data.roomId, userId, { lastReadId: message.messageId });
+        }
+      } catch (readCursorError) {
+        console.error(
+          `Failed to advance the sender read cursor after creating message ${message.messageId}:`,
+          readCursorError,
+        );
+      }
       return message;
     },
 
@@ -134,6 +160,7 @@ export const makeMessageService = (
         beforeId: parsed.data.beforeId,
         limit: parsed.data.limit,
         after: room.viewHistory ? undefined : member.joinTime,
+        afterSequence: room.viewHistory ? undefined : member.joinBoundary,
       });
     },
 
@@ -141,6 +168,7 @@ export const makeMessageService = (
       userId: string,
       roomId: string,
       messageId: string,
+      opts: { expectedRevision?: number; commandId?: string } = {},
     ): Promise<MessageWithSender> {
       const parsed = recallMessageSchema.safeParse({ roomId, messageId });
       if (!parsed.success) {
@@ -167,7 +195,19 @@ export const makeMessageService = (
         }
       }
 
-      return messageRepo.markRecalled(parsed.data.messageId);
+      const recalled = opts.expectedRevision !== undefined || opts.commandId !== undefined
+        ? await messageRepo.markRecalled(parsed.data.messageId, opts.expectedRevision, opts.commandId, userId)
+        : await messageRepo.markRecalled(parsed.data.messageId);
+      if (!wasCommandReplayed(recalled)) {
+        publish?.(parsed.data.roomId, 'message_recalled', {
+          roomId: parsed.data.roomId,
+          messageId: recalled.messageId,
+          messageSequence: recalled.messageSequence,
+          changeSequence: recalled.changeSequence,
+          revision: recalled.revision,
+        });
+      }
+      return recalled;
     },
 
     async updateMessage(
@@ -175,6 +215,7 @@ export const makeMessageService = (
       roomId: string,
       messageId: string,
       content: string,
+      opts: { expectedRevision?: number; commandId?: string } = {},
     ): Promise<MessageWithSender> {
       const parsed = sendMessageSchema.safeParse({ roomId, content });
       if (!parsed.success) {
@@ -201,7 +242,7 @@ export const makeMessageService = (
         throw new ForbiddenError('Only the original sender can edit this message');
       }
 
-      if (existing.isRecalled) {
+      if (existing.isRecalled && opts.commandId === undefined) {
         throw new ValidationError('Cannot edit a recalled message');
       }
 
@@ -225,7 +266,47 @@ export const makeMessageService = (
         new Set([...directMentionedUserIds, ...everyoneMentionedUserIds]),
       );
 
-      return messageRepo.update(messageId, parsed.data.content, mentionedUserIds);
+      const updated = opts.expectedRevision !== undefined || opts.commandId !== undefined
+        ? await messageRepo.update(messageId, parsed.data.content, mentionedUserIds, opts.expectedRevision, opts.commandId, userId)
+        : await messageRepo.update(messageId, parsed.data.content, mentionedUserIds);
+      if (!wasCommandReplayed(updated)) publish?.(roomId, 'message_updated', updated);
+      return updated;
+    },
+
+    async markRead(userId: string, roomId: string, messageId: string, commandId?: string) {
+      const { room, member } = await assertRoomMembership(userId, roomId);
+      const message = await messageRepo.findById(messageId);
+      if (!message || message.roomId !== roomId) {
+        throw new NotFoundError('message', messageId);
+      }
+      const sequence = message.messageSequence ?? 0;
+      const visible = room.viewHistory
+        || (sequence > 0 && sequence > (member.joinBoundary ?? 0))
+        || (sequence === 0 && message.sentAt >= member.joinTime);
+      if (!visible) throw new ForbiddenError('Message is outside the room visibility boundary');
+      if (roomMemberRepo.markRead) {
+        const member = await roomMemberRepo.markRead(roomId, userId, messageId, commandId);
+        if (!(member as RoomMember & { __replayedCommand?: boolean }).__replayedCommand) {
+          publish?.(roomId, 'read_update', {
+            roomId,
+            userId,
+            messageId: member.lastReadId ?? messageId,
+            readPosition: member.readPosition,
+          });
+        }
+        return member;
+      }
+
+      const updatedMember = await roomMemberRepo.update(roomId, userId, { lastReadId: messageId });
+      publish?.(roomId, 'read_update', { roomId, userId, messageId });
+      return updatedMember;
+    },
+
+    async sync(userId: string, cursor: number, limit: number) {
+      if (!messageRepo.findChangesForUser) {
+        throw new ValidationError('Realtime sync is not available');
+      }
+      return messageRepo.findChangesForUser(userId, cursor, limit);
     },
   };
 };
