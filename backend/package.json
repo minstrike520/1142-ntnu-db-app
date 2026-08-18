@@ -23,8 +23,8 @@
     "lint": "eslint src && tsc --noEmit"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.0",
     "@hono/zod-validator": "^0.9.0",
+    "@socket.io/bun-engine": "^0.1.1",
     "hono": "^4.13.1",
     "hono-rate-limiter": "^0.5.3",
     "sharp": "^0.35.3",
@@ -32,6 +32,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@hono/node-server": "^2.1.0",
     "@types/node": "^26.2.0",
     "@types/supertest": "^7.2.1",
     "@typescript-eslint/eslint-plugin": "^8.66.0",

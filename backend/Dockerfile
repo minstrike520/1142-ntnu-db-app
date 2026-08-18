@@ -8,6 +8,11 @@ FROM oven/bun:1.3.14-slim
 # pnpm 11 requires `node:sqlite`, which bun does not implement, so pnpm cannot
 # execute on a bun-only image. Graft the node toolchain in rather than switching
 # the base image — bun stays the runtime and the test runner. (Approach from #419.)
+#
+# The package manager is now the ONLY reason node is here. #421 removed the
+# other one by replacing `node-pg-migrate` with a `Bun.SQL` runner, so nothing
+# the application itself runs needs node any more. This COPY can go when the
+# package manager does — see #416 for the bun-toolchain proposal.
 COPY --from=node:24-slim /usr/local/ /usr/local/
 
 RUN apt-get update -y \

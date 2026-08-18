@@ -49,6 +49,37 @@ This document defines the relational schema for the real-time group chat applica
 | `reply_to_id` | UUID | Replied message ID | FK(`messages`), SET NULL |
 | `is_recalled` | BOOLEAN | If message has been recalled | NOT NULL, DEFAULT FALSE |
 | `sent_at` | TIMESTAMPTZ | Sent timestamp | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+| `message_sequence` | BIGINT | Immutable room-visible creation order | NOT NULL, allocated while holding the counter row lock |
+| `change_sequence` | BIGINT | Latest global durable change order | NOT NULL, allocated for every create/edit/recall |
+| `revision` | INTEGER | Optimistic-concurrency version | NOT NULL, starts at 1 and increments per change |
+| `command_id` | VARCHAR(255) | Sender's create-command idempotency key | Partial unique index with `sender_id` |
+
+#### `realtime_counters`
+One singleton row stores `message_sequence` and `change_sequence`. Message and
+change writes lock this row inside their transaction and increment the required
+counter before committing. A rollback therefore consumes no sequence and a
+retry cannot create a gap.
+
+#### `message_changes`
+Durable change history for Sync Cursor recovery. Each row stores the complete
+message projection at one `change_sequence`, its immutable `message_sequence`,
+`revision`, `change_type` (`created`, `edited`, or `recalled`), actor and
+command idempotency key. `mentions` and `attachments` are JSONB snapshots
+captured in the same transaction, so recovery does not mix an old message
+revision with current relations. A partial unique index on `(actor_id,
+command_id)` makes edit/recall retries no-ops.
+
+#### `message_command_receipts`
+Stores `(actor_id, command_id)` receipts for durable message commands that
+legitimately commit no change, which is currently only a recall of an
+already-recalled message. Those write no `message_changes` row — the recall
+must not allocate a second `change_sequence` or publish a second event — so
+without this table the key would stay free for reuse as a create or an edit,
+even though create, edit and recall share one idempotency namespace. Every
+command's key lookup reads this table together with `message_changes`.
+`change_sequence` points at the change the command converged on and is
+nullable, because a message recalled before the durability migration has no
+`recalled` row to reference.
 
 #### `attachments`
 | Column Name | Type | Description | Constraints |
@@ -75,6 +106,18 @@ This document defines the relational schema for the real-time group chat applica
 | `is_muted` | BOOLEAN | Muted status | NOT NULL, DEFAULT FALSE |
 | `last_read_id` | UUID | ID of last read message | FK(`messages`), SET NULL |
 | `join_time` | TIMESTAMPTZ | Join timestamp | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+| `join_boundary` | BIGINT | Highest message sequence visible at activation | NOT NULL, DEFAULT 0 |
+| `read_position` | BIGINT | Highest message sequence acknowledged by the member | NOT NULL, DEFAULT 0 |
+
+`join_boundary` is captured while the counter row is locked. Sync and history
+queries apply it on every request, so a user cannot recover messages that were
+created before joining a room with hidden history. `read_position` is monotonic;
+`last_read_id` remains as the API compatibility projection.
+
+#### `read_position_commands`
+Stores `(user_id, command_id)` receipts for idempotent read-position commands;
+`message_id` records the command target. The table makes a retry safe while
+the position update itself uses `GREATEST(read_position, target_sequence)`.
 
 #### `friendships`
 | Column Name | Type | Description | Constraints |

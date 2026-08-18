@@ -34,6 +34,31 @@ import {
   roomSummaries,
 } from "../fixtures";
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+/** Message ids whose next edit/recall must fail with a 409 revision conflict. */
+const conflictingMessageIds = new Set<string>();
+
+export const __failNextRevisionCommand = (messageId: string): void => {
+  conflictingMessageIds.add(messageId);
+};
+
+/** When set, the next listMessages call rejects (simulates a failed reload). */
+let failNextListMessages = false;
+
+export const __failNextListMessages = (): void => {
+  failNextListMessages = true;
+};
+
 let activeAccessToken: string | null = TEST_TOKEN;
 let settingsState: UserSettings = { ...mySettings };
 
@@ -47,6 +72,10 @@ export const __resetApiMock = (): void => {
   activeAccessToken = TEST_TOKEN;
   settingsState = { ...mySettings };
   apiCallLog.length = 0;
+  conflictingMessageIds.clear();
+  failNextListMessages = false;
+  failMarkRoomRead = false;
+  syncGate = null;
 };
 
 export const getApiBaseUrl = (): string => "http://mock-api.test";
@@ -167,7 +196,10 @@ export const leaveRoom = async (): Promise<void> => undefined;
 export const listRoomMembers = async (
   _token: string,
   roomId: string,
-): Promise<RoomMember[]> => membersByRoom[roomId] ?? [];
+): Promise<RoomMember[]> => {
+  apiCallLog.push({ fn: "listRoomMembers", args: [roomId] });
+  return membersByRoom[roomId] ?? [];
+};
 
 export const approveRoomMember = async (): Promise<void> => undefined;
 export const updateRoomMember = async (): Promise<void> => undefined;
@@ -179,10 +211,108 @@ export const listMessages = async (
   roomId: string,
   options?: { limit?: number },
 ): Promise<MessageWithSender[]> => {
+  if (failNextListMessages) {
+    failNextListMessages = false;
+    throw new ApiError("Service unavailable", 503);
+  }
   const log = messagesByRoom[roomId] ?? [];
   const limit = options?.limit ?? 50;
   // The real API returns newest-first; ChatContext reverses it back.
   return [...log].slice(-limit).reverse();
+};
+
+export const createMessage = async (
+  _token: string,
+  roomId: string,
+  data: { content: string; replyToId?: string; attachmentIds?: string[] },
+): Promise<MessageWithSender> => {
+  apiCallLog.push({ fn: "createMessage", args: [roomId, data] });
+  return {
+    ...(messagesByRoom[roomId]?.at(-1) ?? messagesByRoom["room-1"]?.at(-1)),
+    messageId: "message-created",
+    roomId,
+    senderId: myProfile.userId,
+    content: data.content,
+    isRecalled: false,
+    sentAt: new Date(),
+    sender: { userId: myProfile.userId, name: myProfile.name },
+  } as MessageWithSender;
+};
+
+export const editMessage = async (
+  _token: string,
+  roomId: string,
+  messageId: string,
+  content: string,
+  revision: number,
+): Promise<MessageWithSender> => {
+  apiCallLog.push({ fn: "editMessage", args: [roomId, messageId, content, revision] });
+  if (conflictingMessageIds.delete(messageId)) {
+    throw new ApiError("Message revision is stale", 409);
+  }
+  const existing = (messagesByRoom[roomId] ?? []).find((message) => message.messageId === messageId);
+  return { ...(existing ?? messagesByRoom["room-1"]![0]), content, revision: revision + 1 };
+};
+
+export const recallMessage = async (
+  _token: string,
+  roomId: string,
+  messageId: string,
+  revision: number,
+): Promise<MessageWithSender> => {
+  apiCallLog.push({ fn: "recallMessage", args: [roomId, messageId, revision] });
+  if (conflictingMessageIds.delete(messageId)) {
+    throw new ApiError("Message revision is stale", 409);
+  }
+  const existing = (messagesByRoom[roomId] ?? []).find((message) => message.messageId === messageId);
+  return { ...(existing ?? messagesByRoom["room-1"]![0]), isRecalled: true, revision: revision + 1 };
+};
+
+/** Makes every markRoomRead call reject, the way an offline client sees it. */
+let failMarkRoomRead = false;
+
+export const __failMarkRoomRead = (fail: boolean): void => {
+  failMarkRoomRead = fail;
+};
+
+export const markRoomRead = async (
+  _token: string,
+  roomId: string,
+  messageId: string,
+): Promise<RoomMember> => {
+  apiCallLog.push({ fn: "markRoomRead", args: [roomId, messageId] });
+  if (failMarkRoomRead) throw new ApiError("Read position write failed", 503);
+  return { ...membersByRoom[roomId]![0], lastReadId: messageId };
+};
+
+/**
+ * Test control over the next syncChanges call: the returned promise stays
+ * pending until the test releases it, which is the only way to emit realtime
+ * events while ChatContext still considers a sync in flight.
+ */
+let syncGate: Promise<{ failed: boolean }> | null = null;
+
+export const __gateNextSync = (): { fail: () => void; succeed: () => void } => {
+  let release!: (outcome: { failed: boolean }) => void;
+  syncGate = new Promise<{ failed: boolean }>((resolve) => { release = resolve; });
+  return {
+    fail: () => release({ failed: true }),
+    succeed: () => release({ failed: false }),
+  };
+};
+
+export const syncChanges = async (
+  _token: string,
+  cursor: number,
+): Promise<{ changes: []; nextCursor: number; hasMore: false }> => {
+  apiCallLog.push({ fn: "syncChanges", args: [cursor] });
+  const gate = syncGate;
+  if (gate) {
+    syncGate = null;
+    const outcome = await gate;
+    if (outcome.failed) throw new ApiError("Sync failed", 503);
+  }
+  return { changes: [], nextCursor: cursor, hasMore: false };
 };
 
 export const listFolders = async (): Promise<Folder[]> => folders;

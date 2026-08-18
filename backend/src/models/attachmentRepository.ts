@@ -72,4 +72,44 @@ export class AttachmentRepository {
     `;
     return rows.length === 0 ? null : mapRowToAttachment(rows[0]);
   }
+
+  async findByIdForUser(attachmentId: string, userId: string): Promise<InternalAttachment | null> {
+    const rows = await this.sql<AttachmentRow[]>`
+      SELECT a.*, m.is_recalled AS message_is_recalled
+      FROM attachments a
+      LEFT JOIN messages m ON m.message_id = a.message_id
+      WHERE a.attachment_id = ${attachmentId}
+        AND (
+          (a.message_id IS NULL AND a.uploaded_by = ${userId})
+          OR EXISTS (
+            SELECT 1
+            FROM room_members rm
+            JOIN chat_rooms cr ON cr.room_id = rm.room_id
+            WHERE rm.room_id = m.room_id
+              AND rm.user_id = ${userId}
+              AND rm.role <> 'pending'
+              AND (
+                cr.view_history
+                OR m.message_sequence > rm.join_boundary
+                OR (m.message_sequence = 0 AND m.sent_at >= rm.join_time)
+              )
+              AND NOT (
+                cr.type = 'private'
+                AND EXISTS (
+                  SELECT 1
+                  FROM room_members other
+                  JOIN blocks b ON (
+                    (b.blocker_id = ${userId} AND b.blocked_id = other.user_id)
+                    OR (b.blocker_id = other.user_id AND b.blocked_id = ${userId})
+                  )
+                  WHERE other.room_id = rm.room_id
+                    AND other.user_id <> ${userId}
+                    AND other.role <> 'pending'
+                )
+              )
+          )
+        )
+    `;
+    return rows.length === 0 ? null : mapRowToAttachment(rows[0]);
+  }
 }

@@ -459,7 +459,7 @@ jobs:
             --arg frontend_sha "${REGISTRY}/${FRONTEND_IMAGE_NAME}:${IMAGE_SHA_TAG}" \
             --arg frontend_digest "${REGISTRY}/${FRONTEND_IMAGE_NAME}@${FRONTEND_DIGEST}" \
             --arg postgres "$POSTGRES_IMAGE" \
-            '{version:$version, sourceCommit:$commit, images:{backend:{versionTag:$backend_version,shaTag:$backend_sha,digest:$backend_digest},frontend:{versionTag:$frontend_version,shaTag:$frontend_sha,digest:$frontend_digest}}, database:{runtimeImage:$postgres, migrations:{runner:"backend image", command:"pnpm run migrate:up"}}, composeFile:"docker-compose.release.yml"}' \
+            '{version:$version, sourceCommit:$commit, images:{backend:{versionTag:$backend_version,shaTag:$backend_sha,digest:$backend_digest},frontend:{versionTag:$frontend_version,shaTag:$frontend_sha,digest:$frontend_digest}}, database:{runtimeImage:$postgres, migrations:{runner:"backend image", command:"bun run migrate:up"}}, composeFile:"docker-compose.release.yml"}' \
             > "$bundle_dir/release-manifest.json"
 
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
@@ -524,7 +524,7 @@ jobs:
              and .images.backend.digest == $backend_digest
              and .images.frontend.digest == $frontend_digest
              and .database.runtimeImage == $postgres
-             and .database.migrations.command == "pnpm run migrate:up"' \
+             and .database.migrations.command == "bun run migrate:up"' \
             "$bundle_root/release-manifest.json" >/dev/null
           grep -F "image: $POSTGRES_IMAGE" "$bundle_root/docker-compose.release.yml" >/dev/null
 
