@@ -46,7 +46,7 @@
 .
 ├── backend/                # Hono API 後端服務
 │   ├── src/                # 後端 TypeScript 源碼 (routes, services, models, middlewares, realtime, utils)
-│   ├── migrations/         # PostgreSQL node-pg-migrate 遷移腳本
+│   ├── migrations/         # PostgreSQL 遷移腳本（純 SQL）
 │   └── Dockerfile          # 後端映像檔配置
 ├── frontend/               # Next.js 前端網頁應用
 │   ├── app/                # React App Router 頁面與佈局

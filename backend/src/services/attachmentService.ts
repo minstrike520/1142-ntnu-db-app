@@ -130,8 +130,8 @@ export function makeAttachmentService(attachmentRepo: AttachmentRepository) {
         originalName,
       });
     },
-    async getAttachment(attachmentId: string) {
-      const attachment = await attachmentRepo.findById(attachmentId);
+    async getAttachment(userId: string, attachmentId: string) {
+      const attachment = await attachmentRepo.findByIdForUser(attachmentId, userId);
       const isRecalled = attachment?.messageIsRecalled;
       if (!attachment || isRecalled === true) {
         return null;

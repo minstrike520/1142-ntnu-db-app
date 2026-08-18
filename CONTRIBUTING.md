@@ -60,11 +60,14 @@ We follow the standard [Conventional Commits](https://www.conventionalcommits.or
 ## 3. Language Conventions
 
 To ensure consistent project communications:
-1. **GitHub Text**: Write all human-readable GitHub texts in **Traditional Chinese (繁體中文)**. This includes:
-   - PR titles (the description following the conventional-commit type prefix)
-   - PR bodies and descriptions
-   - Issue titles, descriptions, and comments
-2. **Code & Commit Messages**: Keep structural tokens, code identifiers (classes, variables, functions), and Git commit messages in **English**.
+1. **PR title**: **English**, following Conventional Commits (e.g. `feat(vimeo): add batch thumbnail download`).
+2. **PR body / PR comment / review comment**: **Traditional Chinese (繁體中文)**.
+3. **Issue title / body / comment**: **Traditional Chinese (繁體中文)**.
+4. **Git commit message**: **English**, following Conventional Commits.
+5. **Branch name**: **English**.
+6. **Code identifiers** (classes, functions, variables, types, interfaces, enums, constants, file/directory names, API and other code identifiers): **English**.
+
+Technical terms, code identifiers, CLI commands, API names, package names, and proper nouns without a suitable Chinese translation must stay in their original English form even inside Traditional Chinese text.
 
 ---
 
@@ -73,8 +76,18 @@ To ensure consistent project communications:
 * **Raw SQL Database Access**: Prisma has been completely removed from this project. We access the database using raw SQL queries.
 * **Database Migrations**:
   - Do not run arbitrary SQL directly on the database to make schema changes.
-  - All schema modifications must be done by writing migrations under `backend/migrations/` using `node-pg-migrate`.
   - Refer to [docs/database-design.md](docs/database-design.md) for actual column structures, constraints, and relationships.
+* **Pre-launch schema changes** (current phase): the service has not been deployed
+  to any real environment, so there is no data to preserve. Schema changes are made
+  by editing the baseline definition in `backend/migrations/1716300000000_init.sql`
+  directly, and **no new migration files are added**. This keeps the schema readable
+  as a single definition rather than a baseline plus a stack of patches. Anyone with
+  an existing local volume must run `docker compose down -v` to pick up the change;
+  CI creates a fresh database on every run and is unaffected.
+* **After the first real deployment**: `init.sql` is frozen. From that point on,
+  every schema modification is an additive migration under `backend/migrations/`
+  as plain SQL applied by the Bun runner in `backend/src/models/migrate.ts`, and the baseline is never edited again. Whoever performs
+  the first deployment is responsible for flipping this rule in this document.
 * **Migration Commands** (Execute inside the backend container):
   - **Create migration**: `docker compose exec backend pnpm run migrate:create <name>`
   - **Run migrations**: `docker compose exec backend pnpm run migrate:up`

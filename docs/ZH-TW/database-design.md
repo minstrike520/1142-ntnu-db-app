@@ -49,6 +49,31 @@
 | `reply_to_id` | UUID | 被引用的訊息 ID | FK(`messages`), 刪除時設為 SET NULL |
 | `is_recalled` | BOOLEAN | 訊息是否已被收回 | NOT NULL, 預設值: FALSE |
 | `sent_at` | TIMESTAMPTZ | 發送時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
+| `message_sequence` | BIGINT | 建立時固定的聊天室可見順序 | NOT NULL，於鎖定 counter row 時分配 |
+| `change_sequence` | BIGINT | 最近一次持久化變更的全域順序 | NOT NULL，每次建立、編輯、收回都分配 |
+| `revision` | INTEGER | optimistic concurrency 版本 | NOT NULL，從 1 開始，每次變更遞增 |
+| `command_id` | VARCHAR(255) | 建立命令的冪等 key | 與 `sender_id` 建立 partial unique index |
+
+#### `realtime_counters`
+單例資料列儲存 `message_sequence` 與 `change_sequence`。訊息變更交易
+會鎖定此資料列後才遞增，因此 rollback 不會消耗序號，重試也不會產生
+缺口。
+
+#### `message_changes`
+供 Sync Cursor 復原使用的持久化變更歷史。每列保存一個
+`change_sequence` 的完整訊息投影、固定的 `message_sequence`、`revision`、
+`change_type`（`created`、`edited`、`recalled`）、操作者與命令 key。
+`mentions` 與 `attachments` 是同一交易寫入的 JSONB snapshot，復原不會把舊訊息版本
+與目前 relations 混在一起。`(actor_id, command_id)` 的 partial unique index 讓編輯／收回重試成為 no-op。
+
+#### `message_command_receipts`
+保存「確實沒有產生任何變更」的持久化訊息命令的 `(actor_id, command_id)` 收據；
+目前唯一的情況是對已收回訊息再次執行收回。這類命令不會寫入 `message_changes`
+（收回不得配發第二個 `change_sequence`，也不得再發布一次事件），若沒有這張表，
+該 key 就會繼續可被建立或編輯重複使用，但建立、編輯與收回共用同一個 idempotency
+namespace。每個命令查詢 key 時都會同時讀取本表與 `message_changes`。
+`change_sequence` 指向該命令收斂到的變更，可為 NULL：在持久化 migration 之前
+就被收回的訊息沒有對應的 `recalled` 列可指。
 
 #### `attachments` (附件)
 | 欄位名稱 | 類型 | 說明 | 條件約束 |
@@ -75,6 +100,16 @@
 | `is_muted` | BOOLEAN | 成員在此聊天室是否被禁言 | NOT NULL, 預設值: FALSE |
 | `last_read_id` | UUID | 最後已讀的訊息 ID | FK(`messages`), 刪除時設為 SET NULL |
 | `join_time` | TIMESTAMPTZ | 加入聊天室時間 | NOT NULL, 預設值: CURRENT_TIMESTAMP |
+| `join_boundary` | BIGINT | 成員啟用時可見的最高訊息序號 | NOT NULL, 預設值: 0 |
+| `read_position` | BIGINT | 成員已確認的最高訊息序號 | NOT NULL, 預設值: 0 |
+
+`join_boundary` 會在鎖定 counter row 時擷取。歷史與 sync 查詢每次都套用
+此邊界，因此隱藏歷史的聊天室不會洩漏加入前訊息；`read_position` 只會
+向前移動，`last_read_id` 則保留作為 API 相容投影。
+
+#### `read_position_commands`
+儲存 `(user_id, command_id)` 的已讀命令 receipt，`message_id` 記錄命令目標，讓重試安全；
+位置更新使用 `GREATEST(read_position, target_sequence)`。
 
 #### `friendships` (好友關係)
 | 欄位名稱 | 類型 | 說明 | 條件約束 |

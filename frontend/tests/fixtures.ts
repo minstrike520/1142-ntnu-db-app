@@ -142,6 +142,7 @@ const summaryLatest = (roomId: string) => {
     senderId: last.senderId,
     content: last.content,
     sentAt: last.sentAt,
+    isRecalled: last.isRecalled,
   };
 };
 

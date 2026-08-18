@@ -218,7 +218,11 @@
     "messageRecalled": "訊息已收回",
     "downloadingAttachment": "正在下載附件",
     "downloadAttachment": "下載附件",
-    "newMessages": "新訊息"
+    "newMessages": "新訊息",
+    "editConflict": "這則訊息在別處已被更動，已載入最新版本，請重新編輯。",
+    "recallConflict": "這則訊息在別處已被更動，已載入最新版本，請重新收回。",
+    "dismissNotice": "關閉",
+    "conflictReloadFailed": "這則訊息在別處已被更動，且無法重新載入，請重新整理頁面後再試。"
   },
   "profileCard": {
     "myInfo": "我的資訊",

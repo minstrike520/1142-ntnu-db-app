@@ -60,11 +60,14 @@
 ## 3. GitHub 語言規範
 
 為了保持專案溝通的一致性，請遵守以下規則：
-1. **GitHub 介面文字**：所有供人閱讀的 GitHub 內容均必須使用 **繁體中文 (Traditional Chinese)** 撰寫。這包括：
-   - PR 標題（位於 conventional-commit 類型前綴之後的中文描述）
-   - PR 內容與說明
-   - Issue 標題、說明與留言
-2. **程式碼與 Commit 訊息**：程式碼識別字（類別、變數、函數等）以及 Git Commit 訊息本身，請維持使用**英文**。
+1. **PR 標題**：使用**英文**，遵循 Conventional Commits 格式（例如 `feat(vimeo): add batch thumbnail download`）。
+2. **PR 內容 / PR 留言 / Review 留言**：使用**繁體中文 (Traditional Chinese)**。
+3. **Issue 標題 / 內容 / 留言**：使用**繁體中文 (Traditional Chinese)**。
+4. **Git Commit 訊息**：使用**英文**，遵循 Conventional Commits 格式。
+5. **分支名稱 (Branch name)**：使用**英文**。
+6. **程式碼識別字**（類別、函數、變數、型別、介面、enum、常數、檔案／目錄名稱、API 及其他程式碼識別字）：使用**英文**。
+
+技術名詞、程式碼識別字、CLI 指令、API 名稱、套件名稱與無適當中文譯名的專有名詞，即使出現在繁體中文內容中，也應保留原始英文。
 
 ---
 
@@ -73,8 +76,14 @@
 * **原生 SQL 存取**：本專案已完全移除 Prisma。所有的資料庫存取皆使用原生 SQL 查詢（Raw SQL）。
 * **資料庫遷移 (Migrations)**：
   - 請勿直接在資料庫中手動執行 SQL 來變更 Schema。
-  - 所有 Schema 的變更都必須透過在 `backend/migrations/` 底下使用 `node-pg-migrate` 撰寫遷移檔來完成。
   - 欄位結構、預設值與外鍵條件請參考 [docs/database-design.md](docs/database-design.md)。
+* **上線前的 Schema 變更**（目前階段）：服務尚未部署至任何正式環境，沒有需要保留的資料。
+  因此 Schema 變更一律直接修改 `backend/migrations/1716300000000_init.sql` 的基準定義，
+  **不新增 migration 檔**。這讓 Schema 保持為單一份可讀的定義，而不是「基準檔 + 一疊補丁」。
+  本機已有 volume 的人需執行一次 `docker compose down -v` 才會套用；CI 每次都建立全新資料庫，不受影響。
+* **首次正式部署之後**：`init.sql` 即凍結。自此每次 Schema 變更都必須是
+  `backend/migrations/` 底下的 additive SQL migration（由 `backend/src/models/migrate.ts` 這個 Bun runner 套用），基準檔不再修改。
+  執行首次部署的人負責回來翻轉本文件的這條規則。
 * **Migration 相關指令**（請於後端容器內執行）：
   - **建立遷移檔**：`docker compose exec backend pnpm run migrate:create <name>`
   - **執行資料庫遷移**：`docker compose exec backend pnpm run migrate:up`

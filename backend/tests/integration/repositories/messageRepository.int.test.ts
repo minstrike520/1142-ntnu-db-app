@@ -17,16 +17,23 @@ describe('MessageRepository (pg)', () => {
     return res[0].user_id as string;
   }
 
-  async function createRoom() {
+  async function createRoom(userId?: string) {
     const res = await testPool`
       INSERT INTO chat_rooms (type, name) VALUES ('group', 'Message Repo Room') RETURNING room_id
     `;
-    return res[0].room_id as string;
+    const roomId = res[0].room_id as string;
+    if (userId) {
+      await testPool`
+        INSERT INTO room_members (room_id, user_id, role)
+        VALUES (${roomId}, ${userId}, 'owner')
+      `;
+    }
+    return roomId;
   }
 
   it('create -> findById -> findByRoom returns camelCase messages in reverse-chronological order', async () => {
     const userId = await createUser('message-user@test.com');
-    const roomId = await createRoom();
+    const roomId = await createRoom(userId);
 
     const first = await repo.create({
       roomId,
@@ -75,7 +82,7 @@ describe('MessageRepository (pg)', () => {
 
   it('findByRoom respects beforeId and limit', async () => {
     const userId = await createUser('pagination-user@test.com');
-    const roomId = await createRoom();
+    const roomId = await createRoom(userId);
 
     const first = await repo.create({ roomId, senderId: userId, content: 'one' });
     const second = await repo.create({ roomId, senderId: userId, content: 'two' });
@@ -96,7 +103,7 @@ describe('MessageRepository (pg)', () => {
   it('create stores mentions and reads them back with messages', async () => {
     const senderId = await createUser('mention-sender@test.com');
     const mentionedId = await createUser('mentioned-user@test.com');
-    const roomId = await createRoom();
+    const roomId = await createRoom(senderId);
 
     const created = await repo.create({
       roomId,
@@ -111,9 +118,30 @@ describe('MessageRepository (pg)', () => {
     expect(messages[0].mentions).toEqual([mentionedId]);
   });
 
+  it('sync keeps relation snapshots attached to their message revision', async () => {
+    const senderId = await createUser('snapshot-sender@test.com');
+    const mentionedId = await createUser('snapshot-mentioned@test.com');
+    const roomId = await createRoom(senderId);
+
+    const created = await repo.create({
+      roomId,
+      senderId,
+      content: 'hello @Message Tester',
+      mentions: [mentionedId],
+    });
+    await repo.update(created.messageId, 'edited without a mention', [], 1, 'snapshot-edit-1', senderId);
+
+    const changes = await repo.findChangesForUser(senderId, 0, 10);
+    expect(changes).toHaveLength(2);
+    expect(changes[0].message.content).toBe('hello @Message Tester');
+    expect(changes[0].message.mentions).toEqual([mentionedId]);
+    expect(changes[1].message.content).toBe('edited without a mention');
+    expect(changes[1].message.mentions).toEqual([]);
+  });
+
   it('create binds unassigned attachments once and returns attachment objects', async () => {
     const senderId = await createUser('attachment-sender@test.com');
-    const roomId = await createRoom();
+    const roomId = await createRoom(senderId);
     const filePath = 'uploads/test.txt';
     const fileType = 'text/plain';
     const originalName = 'test.txt';
@@ -161,7 +189,7 @@ describe('MessageRepository (pg)', () => {
 
   it('markRecalled sets isRecalled and findById returns null for missing messages', async () => {
     const userId = await createUser('recall-user@test.com');
-    const roomId = await createRoom();
+    const roomId = await createRoom(userId);
 
     const message = await repo.create({ roomId, senderId: userId, content: 'recall me' });
     const recalled = await repo.markRecalled(message.messageId);
@@ -183,7 +211,7 @@ describe('MessageRepository (pg)', () => {
 
   it('markRecalled hides attachments from the recalled message and future fetches', async () => {
     const senderId = await createUser('recall-attachment-sender@test.com');
-    const roomId = await createRoom();
+    const roomId = await createRoom(senderId);
     const filePath = 'uploads/recall-test.txt';
     const fileType = 'text/plain';
     const originalName = 'recall-test.txt';

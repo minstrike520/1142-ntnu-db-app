@@ -11,12 +11,17 @@ on:
     # act on that exact commit. The detect job below still skips expensive
     # lanes when only documentation or metadata changed.
   pull_request:
-    branches: [main]
-    # Deliberately no paths-ignore. `required-checks` is the single required
-    # status check, and a workflow skipped by a path filter never reports at
-    # all — the check would sit Pending forever and docs-only PRs could never
-    # merge. Jobs skipped by an `if` inside a workflow do report, so letting
-    # detect skip every lane is the only safe way to make docs-only cheap.
+    # Deliberately no `branches` filter and no paths-ignore. `required-checks`
+    # is the single required status check, and a workflow skipped by a branch
+    # or path filter never reports at all — the check would sit Pending
+    # forever and the PR could never merge. This includes PRs based on a
+    # non-main branch (e.g. a fix stacked on another open PR's branch): the
+    # `detect` job's `BASE_REF == "main"` check below already anticipated
+    # this and degrades run-build/security to false for those, it was just
+    # unreachable while this filter blocked the event entirely. Jobs skipped
+    # by an `if` inside a workflow do report, so letting detect skip every
+    # lane is the only safe way to make docs-only (or non-main-based) PRs
+    # cheap without leaving required-checks Pending.
   workflow_dispatch:
 
 concurrency:

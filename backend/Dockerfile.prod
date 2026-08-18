@@ -9,6 +9,12 @@ ENV CI=true
 # pnpm 11 requires `node:sqlite`, which bun does not implement, so pnpm cannot
 # execute on a bun-only image. Graft the node toolchain in rather than switching
 # the base image — bun stays the runtime. (Approach from #419.)
+#
+# The package manager is now the ONLY reason node is here, and only in this
+# builder stage — the runner stage below has always been bun-only. #421 removed
+# the other reason by replacing `node-pg-migrate` with a `Bun.SQL` runner, so
+# the migration step the runner executes at startup no longer needs node. This
+# COPY can go when the package manager does — see #416.
 COPY --from=node:24-slim /usr/local/ /usr/local/
 RUN corepack enable pnpm && corepack prepare pnpm@11.15.0 --activate
 
