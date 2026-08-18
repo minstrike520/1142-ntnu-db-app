@@ -98,8 +98,3 @@ A notification raised on a user's behalf to their designated contacts. Durable
 before it is ever announced, because a recipient who was offline must still
 receive it.
 _Avoid_: Panic, SOS, urgent message
-
-## Decisions
-
-Architectural decisions that shaped this language are recorded in
-[`docs/adr/`](./docs/adr/).
