@@ -342,6 +342,29 @@ pnpm --filter near-chat-frontend lint
 docker compose exec frontend pnpm run lint
 ```
 
+### Running Frontend Browser Tests (Playwright)
+These run on the host, not in Docker, and are separate from the Vitest suite in `frontend/tests/`. They exercise a real Chromium against a production build of the frontend; every `/api/v1` call is mocked in the browser, so no backend and no database are needed.
+
+Chromium is not bundled with the npm package. Install it once per machine:
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+```
+
+Then run the suite. `playwright.config.ts` builds and starts Next.js itself, so no server needs to be running first:
+
+```bash
+pnpm --filter near-chat-frontend test:browser
+```
+
+On failure, the HTML report, traces and screenshots land in `frontend/playwright-report/` and `frontend/test-results/`:
+
+```bash
+pnpm --filter near-chat-frontend exec playwright show-report
+```
+
+Specs live in `frontend/tests-browser/`, and the shared REST mock is `frontend/tests-browser/support/api-mock.ts`. Full-stack browser E2E against a real backend and Postgres is tracked separately in issue #544 and will get its own lane rather than extending this one.
+
 ### Running Unit Tests
 Unit tests do not require a database connection.
 ```bash
