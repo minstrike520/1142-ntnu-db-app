@@ -1,35 +1,61 @@
 # Documentation Directory Orientation for AI Agents
 
 <!-- Parent: ../CLAUDE.md -->
-<!-- Generated: 2026-06-14 | Updated: 2026-06-14 -->
 
 ## Purpose
-This directory contains the system architecture designs, database constraints, API route specifications, Socket.IO websocket event definitions, local environment setup instructions, and testing guidelines.
+Reference documentation for the application: local setup, the REST/Socket.IO API
+contract, and the PostgreSQL schema. Every document is maintained in English with
+a Traditional Chinese counterpart under `ZH-TW/`.
+
+[README.md](README.md) is the human-facing index; keep the two in agreement when
+adding or removing a document.
 
 ## Document Directory Map
 
-| Document Name (English) | Document Name (繁體中文) | Purpose & Content |
+| Document (English) | Document (繁體中文) | Purpose & Content |
 | :--- | :--- | :--- |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | [ZH-TW/DEVELOPMENT.md](ZH-TW/DEVELOPMENT.md) | Setup instructions for Docker Compose, port allocations, environment variables, seeding, TypeScript validation checks, and running integration tests. |
-| [database-design.md](database-design.md) | [ZH-TW/database-design.md](ZH-TW/database-design.md) | Aligned PostgreSQL 18 table structures, UUID primary keys, foreign key constraints, default values, and index definitions. |
-| [api-documentation.md](api-documentation.md) | [ZH-TW/api-documentation.md](ZH-TW/api-documentation.md) | Comprehensive specification of all HTTP REST routes, request parameters, JSON request/response examples, and Socket.IO real-time client/server events. |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | [ZH-TW/DEVELOPMENT.md](ZH-TW/DEVELOPMENT.md) | Docker Compose setup, port allocations, environment variables, seeding, TypeScript checks, and running the test suites. |
+| [api-documentation.md](api-documentation.md) | [ZH-TW/api-documentation.md](ZH-TW/api-documentation.md) | All HTTP REST routes, request parameters, JSON request/response examples, and Socket.IO client/server events. |
+| [database-design.md](database-design.md) | [ZH-TW/database-design.md](ZH-TW/database-design.md) | PostgreSQL 18 table structures, UUID primary keys, foreign key constraints, default values, and index definitions. |
+| [RELEASE.md](RELEASE.md) | [ZH-TW/RELEASE.md](ZH-TW/RELEASE.md) | Release and versioning process. |
 
-## Assets & Reports
+## Archive
 
-- **ER Diagram Visuals**:
-  - [ER_Digram.png](ER_Digram.png): PNG image of the system ER diagram.
-  - [ER_Digram.drawio](ER_Digram.drawio): Editable source draw.io XML file.
-- **Historical Snapshots**:
-  - [reports/](reports/): Directory hosting historical course project reports (`report-1.md`, `report-2.md`, `report-3.md`). **Reference only, do not modify these**.
+[archive/](archive/) holds the frozen course deliverables — ER diagram, graded
+reports, and their screenshots. **Reference only: never modify these, and never
+treat them as a current description of the system.** They describe the project as
+it stood at submission time.
 
 ## Guidelines for AI Agents
 
 ### 1. Document Sync Requirement
-- When updating database tables or schema constraints, you must write SQL migrations in `backend/migrations/` AND update both `database-design.md` and `ZH-TW/database-design.md` to keep documentation accurate.
-- When creating or modifying backend routes, controllers, or Socket.IO handlers, you must ensure that they conform exactly to `api-documentation.md` and `ZH-TW/api-documentation.md`.
-- **Note on Chinese API Docs**: For [ZH-TW/api-documentation.md](ZH-TW/api-documentation.md), all descriptions are in Traditional Chinese, but all JSON examples must remain in **pure English** (no Chinese characters inside JSON blocks).
+- When updating database tables or schema constraints, you must write the SQL
+  migration under `backend/migrations/` AND update both `database-design.md` and
+  `ZH-TW/database-design.md`.
+- When creating or modifying backend routes, controllers, or Socket.IO handlers,
+  they must conform exactly to `api-documentation.md` and
+  `ZH-TW/api-documentation.md`.
+- Never update one language without the other. An English-only change silently
+  makes the Chinese version wrong.
+- **Note on Chinese API Docs**: in [ZH-TW/api-documentation.md](ZH-TW/api-documentation.md)
+  all prose is Traditional Chinese, but JSON examples must remain **pure English**
+  (no Chinese characters inside JSON blocks).
 
-### 2. Setup Reference
-- If you run into database synchronization errors, connection timeouts, or package installer issues, always refer to the "Troubleshooting" section in [DEVELOPMENT.md](DEVELOPMENT.md).
+### 2. What Does Not Belong Here
+This directory holds documentation that describes the system as it currently is.
+Do **not** add:
+- **ADRs / design-decision records** — the reasoning belongs in the pull request
+  that makes the change, where it is reviewed alongside the diff.
+- **Investigation write-ups, spike results, benchmark runs, or analysis reports** —
+  point-in-time findings that go stale immediately and then never get updated.
+  Put the conclusion in the PR description, and the durable part (a config value,
+  a comment explaining a non-obvious choice) in the code itself.
+
+If a finding is worth keeping, fold it into one of the maintained documents above
+rather than filing it as a new standalone report.
+
+### 3. Setup Reference
+- For database synchronization errors, connection timeouts, or package installer
+  issues, see the "Troubleshooting" section in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
