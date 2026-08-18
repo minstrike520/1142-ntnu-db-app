@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import {
+  createMessageBodySchema,
   listMessagesSchema,
   recallMessageSchema,
   sendMessageSchema,
@@ -53,5 +54,35 @@ describe('message validation schemas', () => {
       roomId: 'room-1',
       messageId: '',
     }).success).toBe(false);
+  });
+
+  it('rejects create bodies whose optional fields have the wrong type', () => {
+    // These used to be coerced to `undefined` in the route, so the message was
+    // created without its reply or attachments and the client still got a 201.
+    expect(createMessageBodySchema.safeParse({ content: 'hello', replyToId: 123 }).success).toBe(false);
+    expect(createMessageBodySchema.safeParse({ content: 'hello', replyToId: 'msg-0' }).success).toBe(false);
+    expect(createMessageBodySchema.safeParse({ content: 'hello', attachmentIds: '550e8400-e29b-41d4-a716-446655440000' }).success).toBe(false);
+    expect(createMessageBodySchema.safeParse({ content: 'hello', attachmentIds: ['nope'] }).success).toBe(false);
+    expect(createMessageBodySchema.safeParse({ content: 42 }).success).toBe(false);
+    expect(createMessageBodySchema.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts create bodies with well-formed optional fields', () => {
+    expect(createMessageBodySchema.parse({ content: 'hello' })).toEqual({ content: 'hello' });
+    // The published request body spells the empty case with `null`.
+    expect(createMessageBodySchema.safeParse({
+      content: 'hello',
+      replyToId: null,
+      attachmentIds: [],
+    }).success).toBe(true);
+    expect(createMessageBodySchema.parse({
+      content: '',
+      replyToId: '550e8400-e29b-41d4-a716-446655440000',
+      attachmentIds: ['550e8400-e29b-41d4-a716-446655440000'],
+    })).toEqual({
+      content: '',
+      replyToId: '550e8400-e29b-41d4-a716-446655440000',
+      attachmentIds: ['550e8400-e29b-41d4-a716-446655440000'],
+    });
   });
 });

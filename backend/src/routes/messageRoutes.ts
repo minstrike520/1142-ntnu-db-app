@@ -2,7 +2,13 @@ import type { MessageWithSender } from '@shared/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validate } from '../middlewares/validator';
-import { messageParamSchema, readPositionSchema, roomParamSchema } from './messageSchemas';
+import {
+  createMessageBodySchema,
+  messageParamSchema,
+  readPositionSchema,
+  roomParamSchema,
+  type CreateMessageBody,
+} from './messageSchemas';
 import { ValidationError } from '../utils/AppError';
 
 export interface MessageService {
@@ -81,20 +87,27 @@ export const makeMessageRoutes = (service: MessageService) => {
     return c.json(messages, 200);
   });
 
-  app.post('/:roomId/messages', validate('param', roomParamSchema), async (c) => {
-    if (!service.sendMessage) return c.body(null, 404);
-    const userId = c.get('user').userId;
-    const roomId = c.req.param('roomId');
-    const body = await c.req.json().catch(() => ({}));
-    if (typeof body.content !== 'string') throw new ValidationError('content must be a string');
-    const commandId = requiredCommandId(c);
-    const message = await service.sendMessage(userId, roomId, body.content, {
-      replyToId: typeof body.replyToId === 'string' ? body.replyToId : undefined,
-      attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds : undefined,
-      commandId,
-    });
-    return c.json(message, 201);
-  });
+  app.post(
+    '/:roomId/messages',
+    validate('param', roomParamSchema),
+    validate('json', createMessageBodySchema),
+    async (c) => {
+      if (!service.sendMessage) return c.body(null, 404);
+      const userId = c.get('user').userId;
+      const roomId = c.req.param('roomId');
+      // Cast for the same reason as the query validator above: `validate` takes
+      // a bare ZodSchema, so Hono cannot infer the parsed shape. The schema is
+      // what guarantees it.
+      const body = c.req.valid('json') as CreateMessageBody;
+      const commandId = requiredCommandId(c);
+      const message = await service.sendMessage(userId, roomId, body.content, {
+        replyToId: body.replyToId ?? undefined,
+        attachmentIds: body.attachmentIds ?? undefined,
+        commandId,
+      });
+      return c.json(message, 201);
+    },
+  );
 
   app.patch('/:roomId/messages/:messageId', validate('param', messageParamSchema), async (c) => {
     const userId = c.get('user').userId;

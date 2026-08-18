@@ -34,6 +34,27 @@ export const readPositionSchema = z.object({
   messageId: z.string().uuid('messageId must be a valid UUID'),
 });
 
+// The REST create route used to read the body untyped and coerce anything that
+// was not the expected type to `undefined`. A client sending `replyToId: 123`
+// or a non-array `attachmentIds` then got a 201 for a message that silently
+// dropped its reply or attachment intent, where the old Socket.IO path
+// rejected the same payload through `sendMessageSchema`. Validating the whole
+// body keeps that a 400. Ids are UUIDs for the same reason as the param
+// schemas below.
+//
+// `null` is accepted for the optional fields because that is what the published
+// request body in `docs/api-documentation.md` shows; it means the same as
+// omitting them.
+export const createMessageBodySchema = z.object({
+  content: z.string({ message: 'content must be a string' }),
+  replyToId: z.string().uuid('replyToId must be a valid UUID').nullish(),
+  attachmentIds: z
+    .array(z.string().uuid('attachmentIds must contain valid UUIDs'), {
+      message: 'attachmentIds must be an array of UUIDs',
+    })
+    .nullish(),
+});
+
 export const roomParamSchema = z.object({
   roomId: z.string().uuid('roomId must be a valid UUID'),
 });
@@ -42,6 +63,7 @@ export const messageParamSchema = roomParamSchema.extend({
   messageId: z.string().uuid('messageId must be a valid UUID'),
 });
 
+export type CreateMessageBody = z.infer<typeof createMessageBodySchema>;
 export type SendMessageInput = z.input<typeof sendMessageSchema>;
 export type ListMessagesInput = z.input<typeof listMessagesSchema>;
 export type RecallMessageInput = z.input<typeof recallMessageSchema>;
