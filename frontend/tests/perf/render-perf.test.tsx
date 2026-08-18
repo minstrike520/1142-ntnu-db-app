@@ -12,7 +12,9 @@
  * typing re-renders none. Those are the regression guard; this file is the
  * measurement harness.
  *
- * Run with: cd frontend && pnpm test -- tests/perf/render-perf.test.tsx
+ * Run with: cd frontend && pnpm test tests/perf/render-perf.test.tsx
+ * (no `--` before the path: pnpm forwards it to vitest, which then ignores the
+ * filter and runs all three test files instead of this one)
  */
 import fs from "node:fs";
 import path from "node:path";
