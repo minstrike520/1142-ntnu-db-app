@@ -2,9 +2,15 @@
  * Fixed render-measurement scenarios for issue #383.
  *
  * These tests drive the three interaction scenarios and print commit counts /
- * render durations / bubble-subtree render counts. They only assert behaviour
- * loosely (the UI ends up in the right state); the numbers are the output and
- * are recorded in docs/frontend-react-render-optimization.md.
+ * render durations / bubble-subtree render counts. They assert behaviour only
+ * (the UI ends up in the right state) — the numbers are output for humans to
+ * compare, not thresholds, because durations are machine-dependent.
+ *
+ * The render-count guarantees these scenarios were built to protect are
+ * asserted for real in tests/chat-memoization.test.tsx: appending one message
+ * re-renders at most 3 rows, and a background room, local typing or remote
+ * typing re-renders none. Those are the regression guard; this file is the
+ * measurement harness.
  *
  * Run with: cd frontend && pnpm test -- tests/perf/render-perf.test.tsx
  */
