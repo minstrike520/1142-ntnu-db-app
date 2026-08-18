@@ -49,3 +49,9 @@ Do not bypass these layers (e.g., calling repositories directly from route handl
 
 ### 5. Running Tests
 - Execute `pnpm run test` or `docker compose exec backend bun run test` to run all unit, integration, and E2E tests.
+
+### 6. Frequently Used Commands
+- Run a single test file quietly: `bun test tests/unit/<file>.test.ts`
+- Fast feedback loop (skip integration/e2e): `pnpm run test:unit`
+- Type check without building: `pnpm exec tsc --noEmit`
+- Lint: `pnpm run lint`
