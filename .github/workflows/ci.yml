@@ -79,9 +79,14 @@ jobs:
           # There is deliberately no separate `database` filter: the database
           # lane is backend's integration verification and reuses the backend
           # filter. Two near-identical path lists would only drift apart.
+          # CLAUDE.md files are AI-agent orientation docs, not source: they carry
+          # no runtime behavior, so touching only them shouldn't require a full
+          # lint/typecheck/test/build lane. Negated after the broad glob so
+          # code changes anywhere else under frontend/backend are unaffected.
           filters: |
             frontend:
               - 'frontend/**'
+              - '!frontend/**/CLAUDE.md'
               - 'shared/**'
               - 'tsconfig.base.json'
               - 'package.json'
@@ -93,6 +98,7 @@ jobs:
               - '.github/actions/**'
             backend:
               - 'backend/**'
+              - '!backend/**/CLAUDE.md'
               - 'shared/**'
               - 'tsconfig.base.json'
               - 'package.json'
