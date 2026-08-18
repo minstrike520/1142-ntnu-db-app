@@ -1,0 +1,62 @@
+name: CI Browser
+
+# Real-Chromium smoke tests (issue #543). Deliberately a lane of its own rather
+# than another job inside ci-frontend.yml: that workflow's `test` job owns the
+# Vitest/jsdom suite, and folding a browser download plus a Next.js server into
+# it would make one job responsible for two unrelated kinds of failure.
+#
+# Phase 1 is frontend-only — no Postgres service, no Bun, no backend process.
+# Every /api/v1 call is fulfilled in-browser by tests-browser/support/api-mock.ts.
+# The full-stack browser lane is tracked separately in issue #544 and must land
+# as its own workflow, not as an extension of this one.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # frontend/next.config.ts derives NEXT_PUBLIC_APP_VERSION from
+          # `git rev-parse --short HEAD`, which needs a real .git directory.
+          # It falls back to the package version rather than failing, but the
+          # build log is misleading without this.
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-frontend
+
+      # `@playwright/test` ships no browser binary, and this repo has no
+      # postinstall hook that would fetch one (pnpm-workspace.yaml grants build
+      # scripts per package, and Playwright is not granted one). Without this
+      # step the run fails at launch with "Executable doesn't exist".
+      # `--with-deps` also installs the Linux shared libraries Chromium needs,
+      # which ubuntu-latest does not carry by default.
+      - name: Install Chromium and system dependencies
+        run: pnpm --filter near-chat-frontend exec playwright install --with-deps chromium
+
+      # playwright.config.ts owns starting Next.js via its `webServer` block, so
+      # this is a single command. The build runs inside that block; there is no
+      # separate build step to keep in sync with it.
+      - name: Run browser smoke tests
+        run: pnpm --filter near-chat-frontend test:browser
+
+      # `failure()` and not `always()`: a green run's report carries no
+      # information, and uploading it on every push would cost storage for
+      # nothing. Retries are enabled in CI, so a flaky-then-passing test still
+      # leaves its trace behind only when the whole job ends red.
+      - name: Upload Playwright diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore

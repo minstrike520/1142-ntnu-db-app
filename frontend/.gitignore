@@ -43,3 +43,9 @@ next-env.d.ts
 
 # render perf harness output
 /tests/perf/.last-results.txt
+
+# playwright browser lane output (report, traces, screenshots, videos)
+/playwright-report/
+/test-results/
+/blob-report/
+/playwright/.cache/
