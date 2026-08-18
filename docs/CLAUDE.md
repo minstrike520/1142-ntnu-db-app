@@ -4,11 +4,16 @@
 
 ## Purpose
 Reference documentation for the application: local setup, the REST/Socket.IO API
-contract, and the PostgreSQL schema. Every document is maintained in English with
-a Traditional Chinese counterpart under `ZH-TW/`.
+contract, and the PostgreSQL schema. Every document in the map below is
+maintained in English with a Traditional Chinese counterpart under `ZH-TW/`.
 
-[README.md](README.md) is the human-facing index; keep the two in agreement when
-adding or removing a document.
+The two exceptions are deliberate: this file (and its `AGENTS.md` symlink) is
+English-only because it is read by tooling, and `archive/` is frozen as
+submitted.
+
+[README.md](README.md) and [ZH-TW/README.md](ZH-TW/README.md) are the
+human-facing indexes; keep all three in agreement when adding or removing a
+document.
 
 ## Document Directory Map
 
