@@ -350,8 +350,8 @@ const ChatContext = createContext<ChatContextType | undefined>(undefined);
 // useChat() consumer — including every ChatBubble via useTranslation — to
 // re-render on each change. They still live in ChatProvider's state; only the
 // subscription channel is separate, so this is not a ChatContext re-
-// architecture (that is tracked separately, see
-// docs/frontend-react-render-optimization.md).
+// architecture — splitting rooms/messages/socket across providers and bucketing
+// messages per room is a larger change that was deliberately left out of scope.
 // ---------------------------------------------------------------------------
 
 const TypingUsersContext = createContext<Record<string, string[]> | undefined>(undefined);
