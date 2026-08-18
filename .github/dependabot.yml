@@ -18,9 +18,7 @@ updates:
     labels:
       - "dependencies"
     ignore:
-      - dependency-name: "typescript"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@babel/*"
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
     groups:
       minor-and-patch:
