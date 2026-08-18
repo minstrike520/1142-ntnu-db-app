@@ -66,4 +66,11 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 - **Code identifiers** (class, function, variable, type, interface, enum, constant, file/directory names, API and other code identifiers): English.
 - Technical terms, code identifiers, CLI commands, API names, package names, and proper nouns without a suitable Chinese translation must stay in their original English form even inside Traditional Chinese text.
 
+### 6. Frequently Used Commands
+Prefer these quieter forms over their default equivalents to keep session output focused on what matters:
+- `docker compose up -d` — start the stack detached instead of streaming build/boot logs.
+- `docker compose logs -f --tail=50 backend` — tail recent logs for one service instead of dumping full history.
+- `docker compose exec backend pnpm run db:seed` — reseed reproducible test data (wipes the DB first).
+- See [backend/CLAUDE.md](backend/CLAUDE.md) and [frontend/CLAUDE.md](frontend/CLAUDE.md) for the per-package test/lint/typecheck commands run most often.
+
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
