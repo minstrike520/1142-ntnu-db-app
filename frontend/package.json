@@ -37,7 +37,7 @@
     "eslint-plugin-react-compiler": "19.1.0-rc.2",
     "jsdom": "^30.0.1",
     "tailwindcss": "^4.3.2",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }
 }
