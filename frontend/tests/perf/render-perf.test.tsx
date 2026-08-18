@@ -14,6 +14,7 @@ import { afterAll, describe, expect, test } from "vitest";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { formatMeasurement, mountChatApp, type Measurement } from "../harness";
 import { ME_ID, makeMessage } from "../fixtures";
+import { __getApiCallLog } from "../mocks/api";
 
 const results: Measurement[] = [];
 
@@ -98,7 +99,7 @@ describe("scenario 2: receive and send messages", () => {
     await app.settle();
     results.push(app.measure("S2c send 1 msg + server echo"));
 
-    expect(socket.countEmitted("send_message")).toBe(1);
+    expect(__getApiCallLog("createMessage")).toHaveLength(1);
     expect(screen.getAllByText("Hello from me").length).toBeGreaterThan(0);
   });
 });

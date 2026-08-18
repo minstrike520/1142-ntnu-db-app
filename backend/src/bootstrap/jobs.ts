@@ -13,6 +13,7 @@ export interface StartJobsDeps {
  * Started only when this process is the entrypoint — importing the app (as the
  * E2E suite does) must not leave a live interval behind holding the runner open.
  */
-export const startJobs = ({ repositories, services }: StartJobsDeps): void => {
-  startInactivityJob(repositories.users, services.user);
+export const startJobs = ({ repositories, services }: StartJobsDeps): (() => void) => {
+  const interval = startInactivityJob(repositories.users, services.user);
+  return () => clearInterval(interval);
 };

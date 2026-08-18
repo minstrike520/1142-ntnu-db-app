@@ -6,10 +6,12 @@ export function makeFriendService(
   repo: ReturnType<typeof makeFriendRepository>,
   notifyUser?: (userId: string, eventName: string, payload: unknown) => void,
   privateRooms?: {
-    markPrivateReadOnly(userA: string, userB: string): Promise<void>;
+    markPrivateReadOnly(userA: string, userB: string): Promise<string | null>;
+    findPrivateRoomIdIfBlocked?(userA: string, userB: string): Promise<string | null>;
     createPrivate?(userA: string, userB: string): Promise<unknown>;
     reopenPrivateRoom?(userA: string, userB: string): Promise<void>;
-  }
+  },
+  removeUserFromRoom?: (userId: string, roomId: string) => void | Promise<void>,
 ) {
   return {
     async sendFriendRequest(requesterId: string, targetUserId: string) {
@@ -129,31 +131,70 @@ export function makeFriendService(
       if (userId === targetUserId) {
         throw new ValidationError('Cannot block yourself');
       }
-      await repo.blockUser(userId, targetUserId);
-      await privateRooms?.markPrivateReadOnly(userId, targetUserId);
-      if (notifyUser) {
-        notifyUser(targetUserId, 'friend_request', {
+      const block = async () => {
+        // Writing the block is the whole durable half of this operation: the
+        // `blocks` insert trigger closes the private room inside the same
+        // transaction, so this flow must not set the read-only flag itself.
+        // Two writers for one invariant is what previously let a concurrent
+        // unblock reopen the room and then have this request re-close it,
+        // leaving it read-only with no block row to undo it. Ordering the
+        // block first is also what makes the live transport safe: `blockUser`
+        // and message authorization take the same pair advisory lock, and
+        // authorization re-reads `blocks` in its own transaction, so once the
+        // block commits nothing further can be published to this room.
+        await repo.blockUser(userId, targetUserId);
+        // The pair mutex is process-local and `blockUser`'s advisory lock ends
+        // with its transaction, so the block can already be lifted by another
+        // process. A null here means exactly that, and the room keeps its
+        // subscriptions because it is legitimately open again.
+        //
+        // Known residual window: the block can also be lifted between this
+        // lookup and the revocation below, in which case both users are
+        // dropped from a room that has legitimately reopened. That is
+        // self-healing — reconnecting re-derives subscriptions from durable
+        // membership — and closing it properly needs a cross-process lock held
+        // across the whole flow, which is deliberately out of scope here.
+        const privateRoomId = privateRooms?.findPrivateRoomIdIfBlocked
+          ? await privateRooms.findPrivateRoomIdIfBlocked(userId, targetUserId)
+          : await privateRooms?.markPrivateReadOnly(userId, targetUserId);
+        if (privateRoomId) {
+          await removeUserFromRoom?.(userId, privateRoomId);
+          await removeUserFromRoom?.(targetUserId, privateRoomId);
+        }
+        notifyUser?.(targetUserId, 'friend_request', {
           requesterId: userId,
           addresseeId: targetUserId,
           status: 'blocked',
           createdAt: new Date(),
         });
-      }
-      return { status: 'blocked' };
+        return { status: 'blocked' as const };
+      };
+      if (repo.withUserPairLock) return repo.withUserPairLock(userId, targetUserId, block);
+      return block();
     },
 
     async unblockUser(userId: string, blockedId: string) {
-      await repo.unblockUser(userId, blockedId);
-      if (await repo.areFriends(userId, blockedId)) {
-        await privateRooms?.reopenPrivateRoom?.(userId, blockedId);
-      }
-      if (notifyUser) {
-        notifyUser(blockedId, 'friend_request', {
-          requesterId: userId,
-          addresseeId: blockedId,
-          status: 'unblocked',
-          createdAt: new Date(),
-        });
+      const unblock = async () => {
+        await repo.unblockUser(userId, blockedId);
+        if (await repo.areFriends(userId, blockedId)) {
+          await privateRooms?.reopenPrivateRoom?.(userId, blockedId);
+        }
+        if (notifyUser) {
+          notifyUser(blockedId, 'friend_request', {
+            requesterId: userId,
+            addresseeId: blockedId,
+            status: 'unblocked',
+            createdAt: new Date(),
+          });
+        }
+      };
+
+      // Keep removing the block and reopening the private room in the same
+      // pair-ordered critical section as createPrivate/blockUser.
+      if (repo.withUserPairLock) {
+        await repo.withUserPairLock(userId, blockedId, unblock);
+      } else {
+        await unblock();
       }
     },
 

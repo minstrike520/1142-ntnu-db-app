@@ -25,9 +25,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # Bun, not pnpm: Dockerfile.prod's runner stage is a bun-only image. node and
-    # pnpm exist solely in the builder stage, so the previous
-    # `pnpm run migrate:up` could never have resolved here.
     command: ["bun", "run", "migrate:up"]
 
   backend:
@@ -54,29 +51,14 @@ services:
       ATTACHMENT_ALLOWED_MIME_TYPES: ${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
       ATTACHMENT_ALLOWED_EXTENSIONS: ${ATTACHMENT_ALLOWED_EXTENSIONS:-.jpg,.jpeg,.png,.gif,.pdf,.zip,.txt}
       ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:-10485760}
+      MAX_SESSIONS_PER_USER: ${MAX_SESSIONS_PER_USER:-5}
+      PRESENCE_GRACE_MS: ${PRESENCE_GRACE_MS:-3000}
+      TYPING_TTL_MS: ${TYPING_TTL_MS:-3000}
     depends_on:
       migrate:
         condition: service_completed_successfully
     volumes:
       - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/app/uploads
-    # The image ships TypeScript sources run directly by bun; there is no build
-    # output, so the previous `node dist/backend/src/index.js` pointed at both a
-    # runtime and a path that the runner stage does not contain.
-    #
-    # Spelled out rather than left to the image's default CMD, which is
-    # `bun run migrate:up && bun src/index.ts` — the right default for a plain
-    # `docker run` and for docker-compose.prod.yml, neither of which has a migrate
-    # service. Here one already ran, and migrate:up takes an advisory lock that
-    # throws "Another migration is already running" while it is held, so a backend
-    # that restarts during a migration would fail to start.
-    #
-    # Written as the file rather than `bun run start` only to match the image CMD
-    # byte for byte and skip bun run's wrapper process. It makes no difference to
-    # shutdown: bun installs no SIGTERM handler and neither does the app, so as
-    # PID 1 the server ignores SIGTERM and waits out the stop grace period either
-    # way. Giving it a real handler, or `init: true` here, is the fix for that —
-    # it is pre-existing behaviour shared with docker-compose.prod.yml, not
-    # something this command choice affects.
     command: ["bun", "src/index.ts"]
 
   frontend:
