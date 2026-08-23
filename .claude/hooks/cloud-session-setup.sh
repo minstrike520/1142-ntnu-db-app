@@ -38,6 +38,16 @@ wait "$fpid" || echo "WARN: frontend dependency install failed" >&2
 {
   command -v docker >/dev/null 2>&1 || { echo "no docker available; skipping test DB"; exit 0; }
 
+  # A resumed session may already have a db-test container from a previous
+  # postgres:16 version of this hook. `docker start` succeeds on any existing
+  # container regardless of image, which would silently keep it on the old
+  # version, so recreate it when the image doesn't match.
+  existing_image="$(docker inspect -f '{{.Config.Image}}' db-test 2>/dev/null || true)"
+  if [ -n "$existing_image" ] && [ "$existing_image" != "postgres:18-alpine" ]; then
+    echo "db-test is running $existing_image, recreating on postgres:18-alpine"
+    docker rm -f db-test >/dev/null 2>&1
+  fi
+
   docker start db-test 2>/dev/null || docker run -d --name db-test -p 5436:5432 \
     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=ntnu_test \
     postgres:18-alpine
