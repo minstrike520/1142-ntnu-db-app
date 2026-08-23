@@ -14,6 +14,7 @@ import { makeSyncRoutes } from '../routes/syncRoutes';
 import { makeFolderRoutes } from '../routes/folderRoutes';
 import { makeAttachmentRoutes } from '../routes/attachmentRoutes';
 import { makeFriendRoutes, makeBlockRoutes, makeFriendRequestRoutes } from '../routes/friendRoutes';
+import { makeAdminRoutes } from '../routes/adminRoutes';
 import { AVATARS_UPLOAD_DIR, ensureUploadDirectories } from '../utils/uploads';
 import { avatarContentType } from '../utils/avatarUpload';
 
@@ -89,6 +90,10 @@ export const createHttpApp = ({ services, config }: CreateHttpAppDeps): Hono => 
   honoApp.route('/api/v1/friends', makeFriendRoutes(services.friend));
   honoApp.route('/api/v1/friend-requests', makeFriendRequestRoutes(services.friend));
   honoApp.route('/api/v1/blocks', makeBlockRoutes(services.friend));
+
+  // Auth and the admin gate are bound inside `makeAdminRoutes`, not here, so
+  // every route added to this namespace inherits both.
+  honoApp.route('/api/v1/admin', makeAdminRoutes());
 
   honoApp.onError(errorHandler);
 

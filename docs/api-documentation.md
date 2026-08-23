@@ -54,6 +54,7 @@ This document defines the RESTful API and Socket.IO real-time communication inte
 | | `POST` | [`/users/me/emergency-contacts`](#post-usersmeemergency-contacts) | Yes | Add or update emergency contact |
 | | `DELETE` | [`/users/me/emergency-contacts/:contactId`](#delete-usersmeemergency-contactscontactid) | Yes | Delete emergency contact |
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | Yes | Check inactivity to trigger alert automatically |
+| **Admin** | `GET` | [`/admin/health`](#get-adminhealth) | Yes (admin) | Liveness probe behind the admin gate |
 
 ### Socket.IO Real-Time Communication
 
@@ -1422,6 +1423,30 @@ All errors return the following JSON structure:
   ```
 - **Response**:
   - `200 OK`: Check completed.
+
+---
+
+### H. Admin
+
+Every route under `/api/v1/admin/*` sits behind two middlewares bound inside
+`makeAdminRoutes`: standard authentication, then an admin check that reads
+`users.is_admin` from the database on each request. The flag is not carried in
+the JWT, so revoking it takes effect on the caller's very next request. No
+endpoint sets the flag; see `docs/DEVELOPMENT.md` for the bootstrap procedure.
+
+#### `GET /admin/health`
+- **Description**: Liveness probe for the admin namespace. Its purpose is to make the admin gate reachable end to end; the monitoring endpoints themselves land in #566-#570.
+- **Authentication & Authorization**: Authentication required, and the caller's `users.is_admin` must be `true`.
+- **Response**:
+  - `200 OK`: Caller is an admin.
+  - `401 Unauthorized`: Missing, invalid, or deleted-account token.
+  - `403 Forbidden`: Authenticated, but not an admin (`code: "FORBIDDEN"`).
+- **Response Example**:
+  ```json
+  {
+    "status": "ok"
+  }
+  ```
 
 ---
 

@@ -185,6 +185,35 @@ docker compose exec backend bun run db:seed
 - **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`（預設只回滾最近一筆遷移；可加上數量回滾更多筆，例如 `migrate:down 3`）
 - **寫入種子資料**：`docker compose exec backend bun run db:seed`
 
+### 授予管理員權限
+
+`/api/v1/admin/*` 由 `users.is_admin` 欄位控管。所有帳號（含種子資料）建立時
+都是 `is_admin = false`，且刻意**不提供任何可設定此欄位的 HTTP endpoint** ——
+`is_admin` 不在 repository `update` 的允許清單內，因此無法透過
+`PATCH /api/v1/users/me` 變更。
+
+請直接以資料庫寫入提升權限：
+
+```bash
+docker compose exec db psql -U chatuser -d chatdb \
+  -c "UPDATE users SET is_admin = true WHERE email = 'alice@test.com';"
+```
+
+驗證守門機制（非管理員回 403，管理員回 200）：
+
+```bash
+curl -i -s http://localhost:4005/api/v1/admin/health -H "Authorization: Bearer <token>" | head -1
+```
+
+要撤銷權限，將欄位改回 `false` 即可；由於此旗標是每次請求都從資料庫讀取，
+而非存放於 JWT 中，因此下一個請求就會立即生效。
+
+此處刻意不提供 `SYSTEM_ADMIN_EMAILS` 這類環境變數允許清單。
+`PATCH /api/v1/users/me` 只做唯一性檢查就允許任何已登入使用者修改自己的
+email —— 不像修改密碼需要 `currentPassword` 確認 —— 且 `users.email` 是
+區分大小寫的一般 `UNIQUE` 欄位，`Ops@company.com` 可以與 `ops@company.com`
+並存。因此以 email 比對管理員等同於開放使用者自助提權。
+
 ### 關於 Migration Runner
 遷移由 `backend/src/models/migrate.ts` 執行，這是一個以 `Bun.SQL` 實作的最小 runner。
 它在 #421 取代了 `node-pg-migrate`，讓後端只依賴 Bun — 不再需要 Node 執行環境，也不再需要 `pg` driver。
