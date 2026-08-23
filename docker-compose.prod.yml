@@ -37,6 +37,8 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
+      # Pass-through only; the logger defaults to info when this is unset.
+      - LOG_LEVEL
       # One trusted hop: cloudflared, which appends the caller's address to
       # X-Forwarded-For. Without it every request through the tunnel is attributed
       # to the tunnel container, so a single caller exhausting the auth limiter
