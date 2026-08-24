@@ -185,9 +185,29 @@ export const instrumentSql = (sql: SQL, options: InstrumentSqlOptions = {}): SQL
           );
       }
 
-      // Everything else — `unsafe`, `close`, `reserve`, `file` — passes straight
-      // through. Migrations and the seeder run through `unsafe` and are expected
-      // to be slow; flagging them would be noise, not a signal.
+      // `unsafe` is a real query path, not an escape hatch nobody uses:
+      // `UserRepository.update()` builds its SET list dynamically and runs the
+      // profile/settings write through it, so leaving it out would silently
+      // exclude a user-facing write from the monitoring. (Migrations do not come
+      // through here at all — `migrate.ts` constructs its own unwrapped client.)
+      //
+      // Recording its text is as safe as the tagged-template path for the same
+      // structural reason: `unsafe(text, values)` keeps the bound values in a
+      // separate argument this code never reads, and every call site in this
+      // repository passes `$n` placeholders rather than interpolated literals.
+      if (prop === 'unsafe') {
+        return (...args: unknown[]) => {
+          const query = value.apply(target, args);
+          if (typeof query !== 'object' || query === null) return query;
+          const [text] = args;
+          return instrumentQuery(
+            query,
+            typeof text === 'string' ? describeQuery([text]) : 'unsafe statement',
+          );
+        };
+      }
+
+      // Everything else — `close`, `reserve`, `file` — passes straight through.
       return value.bind(target);
     },
   });

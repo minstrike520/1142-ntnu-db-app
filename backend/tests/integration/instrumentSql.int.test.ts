@@ -92,6 +92,19 @@ describe('instrumentSql (pg)', () => {
     expect(store.size()).toBe(before);
   });
 
+  it('measures an unsafe statement and keeps its parameters out of the record', async () => {
+    const before = store.size();
+    const secret = 'unsafe-secret-value-not-for-logs';
+
+    // The shape `UserRepository.update()` uses: text assembled at runtime, values
+    // passed separately as `$n` parameters.
+    await sql.unsafe('SELECT pg_sleep($1), $2::text AS v', [SLOW_SECONDS, secret]);
+
+    expect(store.size()).toBe(before + 1);
+    expect(store.recent(1)[0].query).toBe('SELECT pg_sleep($1), $2::text AS v');
+    expect(JSON.stringify([store.recent(), logStore.recent()])).not.toContain(secret);
+  });
+
   it('propagates a failing statement to the caller', async () => {
     let caught: unknown;
     try {

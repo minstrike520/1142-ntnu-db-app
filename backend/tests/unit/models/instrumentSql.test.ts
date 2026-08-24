@@ -224,17 +224,46 @@ describe('instrumentSql', () => {
     ]);
   });
 
-  it('forwards a non-transaction method to the underlying client', async () => {
+  it('measures an unsafe statement, which is how dynamic updates are written', async () => {
     const { sql: fake } = createFakeSql();
-    const seen: string[] = [];
-    (fake as unknown as { unsafe: unknown }).unsafe = (text: string) => {
-      seen.push(text);
-      return Promise.resolve([]);
+    const store = createSlowQueryStore({ capacity: 10 });
+    const { logger } = createTestLogger();
+    const seen: unknown[][] = [];
+
+    // Mirrors `UserRepository.update()`: a SET list assembled at runtime, with
+    // the values passed separately as `$n` parameters.
+    (fake as unknown as { unsafe: unknown }).unsafe = (...args: unknown[]) => {
+      seen.push(args);
+      return {
+        then: (onFulfilled?: (v: unknown) => unknown) => Promise.resolve([]).then(onFulfilled),
+      };
+    };
+
+    const sql = instrumentSql(fake, { logger, store, now: stepClock(150) });
+    const text = 'UPDATE users SET bio = $1, app_theme = $2 WHERE user_id = $3 RETURNING *';
+    await (sql.unsafe as (text: string, values: unknown[]) => Promise<unknown>)(text, [
+      'a bio',
+      'dark',
+      'user-1',
+    ]);
+
+    expect(store.recent().map((record) => record.query)).toEqual([text]);
+    // The bound values stay in the argument this code never reads.
+    expect(JSON.stringify(store.recent())).not.toContain('a bio');
+    expect(seen[0]?.[1]).toEqual(['a bio', 'dark', 'user-1']);
+  });
+
+  it('forwards a method that is not a query to the underlying client', async () => {
+    const { sql: fake } = createFakeSql();
+    let closed = 0;
+    (fake as unknown as { close: unknown }).close = () => {
+      closed += 1;
+      return Promise.resolve();
     };
 
     const sql = instrumentSql(fake, { store: createSlowQueryStore(), now: stepClock(150) });
-    await (sql.unsafe as (text: string) => Promise<unknown>)('VACUUM');
+    await (sql.close as () => Promise<void>)();
 
-    expect(seen).toEqual(['VACUUM']);
+    expect(closed).toBe(1);
   });
 });
