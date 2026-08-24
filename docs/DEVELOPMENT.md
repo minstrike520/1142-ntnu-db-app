@@ -89,6 +89,34 @@ For browser-facing frontend requests, set the API environment variable to:
 NEXT_PUBLIC_API_URL=http://localhost:4005
 ```
 
+### Realtime runtime and smoke checks
+
+The backend production listener is a single `Bun.serve` instance. Hono handles
+REST requests and `@socket.io/bun-engine` handles `/socket.io/`; the old Node
+HTTP adapter is used only by the supertest compatibility harness. Socket.IO
+uses a 25-second ping interval and a 20-second ping timeout, so Bun's
+`idleTimeout` must stay above that window.
+
+Durable message commands use REST and require an `Idempotency-Key`; edit and
+recall also require `If-Match`. After connecting, clients call `/api/v1/sync`
+with their last cursor. A minimal local smoke test is:
+
+```bash
+curl -sS http://localhost:4005/api/v1/health
+# Register/login, then create a room and send a message with the same key twice:
+curl -sS -X POST http://localhost:4005/api/v1/rooms/<roomId>/messages \
+  -H "Authorization: Bearer <token>" \
+  -H "Idempotency-Key: smoke-create-1" \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"smoke"}'
+curl -sS "http://localhost:4005/api/v1/sync?cursor=0&limit=100" \
+  -H "Authorization: Bearer <token>"
+```
+
+`MAX_SESSIONS_PER_USER`, `PRESENCE_GRACE_MS`, and `TYPING_TTL_MS` control local
+session, presence-reconnect, and typing-indication limits. Multi-node presence,
+global rate limits, and cross-node change fan-out remain outside this service.
+
 ### Production Ingress & Proxy Trust
 
 `docker-compose.prod.yml` publishes every host port on `127.0.0.1`, so the local
@@ -169,8 +197,38 @@ docker compose exec backend bun run db:seed
 ### Common Commands
 - **Create a new migration**: `docker compose exec backend bun run migrate:create <name>`
 - **Run migrations**: `docker compose exec backend bun run migrate:up`
-- **Rollback migrations**: `docker compose exec backend bun run migrate:down`
+- **Rollback migrations**: `docker compose exec backend bun run migrate:down` (rolls back the single most recent migration; pass a count to undo more, e.g. `migrate:down 3`)
 - **Seed database**: `docker compose exec backend bun run db:seed`
+
+### About the Migration Runner
+Migrations are applied by `backend/src/models/migrate.ts`, a small runner built on
+`Bun.SQL`. It replaced `node-pg-migrate` in #421 so the backend depends on Bun
+alone — no Node runtime, no `pg` driver.
+
+What it does:
+
+- Applies every `.sql` file in `backend/migrations/`, ordered by the numeric
+  prefix in the file name, and records each one by name in the `pgmigrations`
+  table. A file already recorded there is never re-applied.
+- Splits each file on its `-- Up Migration` and `-- Down Migration` headers.
+- Runs a whole invocation in **one transaction**. If any migration fails,
+  nothing from that run is committed and the error names the file that failed.
+- Takes a PostgreSQL advisory lock first, so two containers starting at once
+  cannot migrate concurrently — the second exits with
+  `Another migration is already running.`
+- Refuses to start if `backend/migrations/` contains a non-`.sql` file, rather
+  than skipping it silently.
+- Stops with `Not run migration … is preceding already run migration …` when a
+  branch merge leaves a new migration ordered before one already applied. Rename
+  the file with a higher prefix so it sorts last.
+
+The `pgmigrations` table, the recorded names, the ordering rules and the
+advisory lock id are all unchanged from `node-pg-migrate`, so databases migrated
+by the old tool continue from exactly where they left off.
+
+Migrations are SQL only. `migrate:create <name>` writes a new file under
+`backend/migrations/` containing both section headers, with a numeric prefix
+chosen so it always sorts after the existing migrations.
 
 ### Repairing a Broken Dev Database
 If you encounter `relation ... already exists` errors during migration, or migration state goes out of sync:
@@ -284,6 +342,29 @@ pnpm --filter near-chat-frontend lint
 # Or run it inside the frontend Docker container
 docker compose exec frontend pnpm run lint
 ```
+
+### Running Frontend Browser Tests (Playwright)
+These run on the host, not in Docker, and are separate from the Vitest suite in `frontend/tests/`. They exercise a real Chromium against a production build of the frontend; every `/api/v1` call is mocked in the browser, so no backend and no database are needed.
+
+Chromium is not bundled with the npm package. Install it once per machine:
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+```
+
+Then run the suite. `playwright.config.ts` builds and starts Next.js itself, so no server needs to be running first:
+
+```bash
+pnpm --filter near-chat-frontend test:browser
+```
+
+On failure, the HTML report, traces and screenshots land in `frontend/playwright-report/` and `frontend/test-results/`:
+
+```bash
+pnpm --filter near-chat-frontend exec playwright show-report
+```
+
+Specs live in `frontend/tests-browser/`, and the shared REST mock is `frontend/tests-browser/support/api-mock.ts`. Full-stack browser E2E against a real backend and Postgres is tracked separately in issue #544 and will get its own lane rather than extending this one.
 
 ### Running Unit Tests
 Unit tests do not require a database connection.

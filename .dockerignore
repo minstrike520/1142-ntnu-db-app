@@ -27,6 +27,13 @@
 # user uploads (runtime data, supplied by a volume)
 **/uploads
 
+# playwright browser lane output. Dockerfile.prod does `COPY frontend/ ./frontend/`,
+# so a developer who ran `pnpm test:browser` before building would otherwise ship
+# traces and screenshots into the build context and the builder layer.
+**/playwright-report
+**/test-results
+**/blob-report
+
 # logs
 npm-debug.log*
 yarn-debug.log*

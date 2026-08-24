@@ -29,7 +29,7 @@ PR 一律以 squash merge 合併，因此進入 `main` 的 commit 就是 **PR �
 vX.Y.Z push → release-stack.yml → 映像、attestation、bundle
 ```
 
-1. **`ci.yml` — Gate。** 每個 `main` commit 都會產生完整結束的 CI run。單一 `detect` job 決定哪些 lane 必須執行，純文件變更因此會跳過昂貴的 lane；程式變更必須通過 frontend lane（lint／typecheck／test／build）、backend lane（lint／unit／build）、database lane（對 Postgres 執行 integration 與 E2E），以及 dependency security lane。這些 lane 都是 reusable workflow，最後由單一彙總 job `required-checks` 把結果收斂成 branch protection 與發布流程唯一依賴的 status check。CI 不持有發布 credential，也不發布內容。
+1. **`ci.yml` — Gate。** 每個 `main` commit 都會產生完整結束的 CI run。單一 `detect` job 決定哪些 lane 必須執行，純文件變更因此會跳過昂貴的 lane；程式變更必須通過 frontend lane（lint／typecheck／test／build）、backend lane（lint／unit／build）、database lane（對 Postgres 執行 integration 與 E2E）、browser lane（以 Chromium 對前端 production build 執行 Playwright smoke tests），以及 dependency security lane。這些 lane 都是 reusable workflow，最後由單一彙總 job `required-checks` 把結果收斂成 branch protection 與發布流程唯一依賴的 status check。CI 不持有發布 credential，也不發布內容。
 2. **`release-please.yml` — 審查邊界。** `main` 的同一個 commit 通過 CI 後，Release Please 依 `release-please-config.json` 與 `.release-please-manifest.json` 建立或更新一份 Release PR。該 PR 提出版本號、更新 `CHANGELOG.md`，並同步 root、backend、frontend 三份 `package.json` 的 `version`。PR 尚未合併時不建立 tag。
 3. **合併 Release PR。** 維護者先審查預計版本、英文 changelog 結構、manifest 與三份 package 版本。合併後再次通過 CI，Release Please 才建立對應的 `vX.Y.Z` tag 與 GitHub Release；tag 指向的 commit 已包含所有受審查的版本資產。
 4. **`release-stack.yml` — Stack。** App 產生的 tag push 會啟動此 workflow，建置並推送四個不可變 GHCR 參照、簽署兩份 provenance attestation、附加含完整 diff 連結的英文 Stack 區段，再上傳 `near-chat-stack-vX.Y.Z.tar.gz`。
@@ -78,7 +78,11 @@ cp near-chat.env.example .env
 docker compose --env-file .env -f docker-compose.release.yml up -d
 ```
 
-Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行一次 `pnpm run migrate:up`，再啟動 backend 與 frontend。PostgreSQL 資料與使用者上傳檔案仍由部署環境的 volume 持有，不會放入 image 或 Release archive。
+Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行一次 `bun run migrate:up`，接著以 `bun src/index.ts` 啟動 backend，最後啟動 frontend。backend 的兩個命令都只使用 bun：backend production image 以 bun runtime 直接執行 TypeScript 原始碼，其中沒有 `node`、沒有 `pnpm`，也沒有建置產物。PostgreSQL 資料與使用者上傳檔案仍由部署環境的 volume 持有，不會放入 image 或 Release archive。
+
+升級 bundle 時請使用 `up -d`，不要用 `restart`：`docker compose restart backend` 不會重新評估 `depends_on`，因此不會執行 `migrate` service，會讓 backend 跑在尚未套用 migration 的 schema 上。
+
+`v2.1.1`（含）以前發布的 bundle，其 `docker-compose.release.yml` 中 backend 的啟動命令（`pnpm run migrate:up`、`node dist/backend/src/index.js`）在它所固定的 backend image 中並不存在。已發布的 tag 不可變更，因此這些 archive 無法就地修正——若要部署這些版本，請自行將該兩個 `command:` 改為上述 bun-only 形式。
 
 正式部署應把 `BACKEND_IMAGE` 與 `FRONTEND_IMAGE` 固定為 manifest 記錄的 digest 參照。Frontend image 預設以 `http://localhost:4005` 建置 API URL；現有前端 runtime 邏輯會對標準 `3005`／`4005` host port 做對應，若公開拓撲不同，需另行設定建置參數。
 

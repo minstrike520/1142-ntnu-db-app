@@ -58,8 +58,30 @@ const mapFriendRow = (row: FriendRow) => ({
   friendshipCreatedAt: row.friendship_created_at
 });
 
+const userPairLockKey = (userA: string, userB: string): string =>
+  [userA, userB].sort().join(':');
+
 export const makeFriendRepository = (sql: SQL = defaultSql) => {
+  const pairLocks = new Map<string, Promise<void>>();
+  const withInProcessPairLock = async <T>(namespace: number, userA: string, userB: string, operation: () => Promise<T>): Promise<T> => {
+    const key = `${namespace}:${userPairLockKey(userA, userB)}`;
+    const prior = pairLocks.get(key);
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    pairLocks.set(key, current);
+    if (prior) await prior;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (pairLocks.get(key) === current) pairLocks.delete(key);
+    }
+  };
+  const withUserPairLock = <T>(userA: string, userB: string, operation: () => Promise<T>): Promise<T> =>
+    withInProcessPairLock(1, userA, userB, operation);
+
   return {
+    withUserPairLock,
     async sendFriendRequest(requesterId: string, addresseeId: string): Promise<FriendRequestResult> {
       const rows = await sql<FriendshipRow[]>`
         INSERT INTO friendships (requester_id, addressee_id, status)
@@ -169,16 +191,28 @@ export const makeFriendRepository = (sql: SQL = defaultSql) => {
     },
 
     async blockUser(blockerId: string, blockedId: string): Promise<void> {
-      await sql`
-        INSERT INTO blocks (blocker_id, blocked_id)
-        VALUES (${blockerId}, ${blockedId})
-        ON CONFLICT DO NOTHING
-      `;
-      await sql`
-        DELETE FROM emergency_contacts
-        WHERE (user_id = ${blockerId} AND contact_id = ${blockedId})
-           OR (user_id = ${blockedId} AND contact_id = ${blockerId})
-      `;
+      await sql.begin(async (tx) => {
+        // This repository transaction is deliberately self-contained: the
+        // service-level pair mutex protects the multi-repository block flow,
+        // while these DB locks serialize direct repository callers and the
+        // message authorization lock across processes.
+        await tx`
+          SELECT pg_advisory_xact_lock(hashtextextended(${userPairLockKey(blockerId, blockedId)}, 2))
+        `;
+        await tx`
+          SELECT pg_advisory_xact_lock(hashtextextended(${userPairLockKey(blockerId, blockedId)}, 1))
+        `;
+        await tx`
+          INSERT INTO blocks (blocker_id, blocked_id)
+          VALUES (${blockerId}, ${blockedId})
+          ON CONFLICT DO NOTHING
+        `;
+        await tx`
+          DELETE FROM emergency_contacts
+          WHERE (user_id = ${blockerId} AND contact_id = ${blockedId})
+             OR (user_id = ${blockedId} AND contact_id = ${blockerId})
+        `;
+      });
     },
 
     async unblockUser(blockerId: string, blockedId: string): Promise<void> {

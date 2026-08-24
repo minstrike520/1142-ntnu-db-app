@@ -46,7 +46,7 @@ A real-time group chat application built as an NTNU Database Theories course pro
 .
 ├── backend/                # Hono API backend
 │   ├── src/                # Backend TypeScript source code (routes, services, models, middlewares, realtime, utils)
-│   ├── migrations/         # PostgreSQL node-pg-migrate schema migrations
+│   ├── migrations/         # PostgreSQL schema migrations (plain SQL)
 │   └── Dockerfile          # Backend container configurations
 ├── frontend/               # Next.js frontend web app
 │   ├── app/                # React App Router pages and layouts
@@ -131,7 +131,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 ### 3. Run Database Migrations
 Run the pending database migrations on the production container:
 ```bash
-docker compose -f docker-compose.prod.yml exec backend pnpm run migrate:up
+docker compose -f docker-compose.prod.yml exec backend bun run migrate:up
 ```
 
 ### 4. Stopping Services

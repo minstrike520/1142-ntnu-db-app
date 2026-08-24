@@ -78,6 +78,10 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
+      # Pass-through only, deliberately not `${LOG_LEVEL:-info}`: the logger
+      # already defaults to info, and a bare name keeps an unset host variable
+      # unset in the container instead of setting it to the empty string.
+      - LOG_LEVEL
       # The dev stack is reached directly on the published ports, with nothing in
       # front to write X-Forwarded-For, so no hop is trusted here. Both names are
       # pass-through only: set TRUST_PROXY_HOPS on the host if you put a proxy
@@ -90,6 +94,9 @@ services:
       - ATTACHMENT_ALLOWED_MIME_TYPES=${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
       - ATTACHMENT_ALLOWED_EXTENSIONS=${ATTACHMENT_ALLOWED_EXTENSIONS:-.jpg,.jpeg,.png,.gif,.pdf,.zip,.txt}
       - ATTACHMENT_MAX_BYTES=${ATTACHMENT_MAX_BYTES:-10485760}
+      - MAX_SESSIONS_PER_USER=${MAX_SESSIONS_PER_USER:-5}
+      - PRESENCE_GRACE_MS=${PRESENCE_GRACE_MS:-3000}
+      - TYPING_TTL_MS=${TYPING_TTL_MS:-3000}
       - CI=true
     working_dir: /workspace/backend
     volumes:

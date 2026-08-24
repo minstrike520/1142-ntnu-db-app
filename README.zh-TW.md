@@ -46,7 +46,7 @@
 .
 ├── backend/                # Hono API 後端服務
 │   ├── src/                # 後端 TypeScript 源碼 (routes, services, models, middlewares, realtime, utils)
-│   ├── migrations/         # PostgreSQL node-pg-migrate 遷移腳本
+│   ├── migrations/         # PostgreSQL 遷移腳本（純 SQL）
 │   └── Dockerfile          # 後端映像檔配置
 ├── frontend/               # Next.js 前端網頁應用
 │   ├── app/                # React App Router 頁面與佈局
@@ -130,7 +130,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 ### 3. 執行資料庫遷移
 於生產容器中套用最新的資料庫遷移：
 ```bash
-docker compose -f docker-compose.prod.yml exec backend pnpm run migrate:up
+docker compose -f docker-compose.prod.yml exec backend bun run migrate:up
 ```
 
 ### 4. 停止生產服務

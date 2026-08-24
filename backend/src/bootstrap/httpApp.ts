@@ -10,6 +10,7 @@ import { makeAuthRoutes } from '../routes/authRoutes';
 import { makeUserRoutes } from '../routes/userRoutes';
 import { makeRoomRoutes } from '../routes/roomRoutes';
 import { makeMessageRoutes } from '../routes/messageRoutes';
+import { makeSyncRoutes } from '../routes/syncRoutes';
 import { makeFolderRoutes } from '../routes/folderRoutes';
 import { makeAttachmentRoutes } from '../routes/attachmentRoutes';
 import { makeFriendRoutes, makeBlockRoutes, makeFriendRequestRoutes } from '../routes/friendRoutes';
@@ -41,6 +42,8 @@ export const createHttpApp = ({ services, config }: CreateHttpAppDeps): Hono => 
   );
 
   honoApp.use('/api/*', makeGlobalRateLimiter());
+
+  honoApp.get('/api/v1/health', (c) => c.json({ status: 'ok' }, 200));
 
   // Fired and not awaited, as before: the directories are only needed by the
   // time an upload or a read of one arrives, not to serve the first request.
@@ -75,6 +78,11 @@ export const createHttpApp = ({ services, config }: CreateHttpAppDeps): Hono => 
   roomApi.route('/', makeRoomRoutes(services.room));
   roomApi.route('/', makeMessageRoutes(services.message));
   honoApp.route('/api/v1/rooms', roomApi);
+
+  const syncApi = new Hono();
+  syncApi.use('*', authMiddleware);
+  syncApi.route('/', makeSyncRoutes(services.message));
+  honoApp.route('/api/v1/sync', syncApi);
 
   honoApp.route('/api/v1/folders', makeFolderRoutes(services.folder));
   honoApp.route('/api/v1/attachments', makeAttachmentRoutes(services.attachment));

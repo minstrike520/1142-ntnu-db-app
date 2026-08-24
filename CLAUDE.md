@@ -12,7 +12,7 @@ This is a real-time group chat application built as a database course project. I
 | [docker-compose.yml](docker-compose.yml) | Defines the local four-service development stack: `db` (PostgreSQL 18), `redis` (Redis 8), `backend` (Bun + Hono), and `frontend` (Next.js) |
 | [docker-compose.prod.yml](docker-compose.prod.yml) | Defines the local four-service production stack with optimized builds and Cloudflare Tunnel |
 | [.env.example](.env.example) | Template for environment variables. Must be copied to `.env` in the root folder before local runs |
-| [issues.json](issues.json) | **CRITICAL TASK LIST**: Contains the active catalog of outstanding issues, bugs, refactorings, and features to implement with detailed tasks and acceptance criteria |
+| [docs/README.md](docs/README.md) | Index of the API, schema, setup and release documentation |
 
 ## Documentation Roadmap
 
@@ -31,14 +31,14 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 | [backend/](backend/) | Hono + Socket.IO API server | See [backend/CLAUDE.md](backend/CLAUDE.md) |
 | [frontend/](frontend/) | Next.js 16 + React 19 Client Web App | See [frontend/CLAUDE.md](frontend/CLAUDE.md) |
 | [shared/](shared/) | Shared TypeScript models and interfaces | Mounts read-only into both services |
-| [docs/](docs/) | Design specifications and guidelines | See [docs/CLAUDE.md](docs/CLAUDE.md) |
-| [reference/](reference/) | Course materials (original ER diagram, project reports) | Reference only |
+| [docs/](docs/) | API, schema, setup and release documentation (EN + 繁中) | See [docs/CLAUDE.md](docs/CLAUDE.md) |
+| [docs/archive/](docs/archive/) | Frozen course deliverables (original ER diagram, graded reports) | Reference only — never modify |
 
 ## AI Agent Guidelines
 
 ### 1. Database Operations & Schema Integrity
 - Prisma has been **completely removed**. The database is accessed via raw SQL.
-- When modifying schemas, do not run arbitrary SQL manually on the DB. You must write migrations under [backend/migrations/](backend/migrations/) using `node-pg-migrate`.
+- When modifying schemas, do not run arbitrary SQL manually on the DB. You must write migrations under [backend/migrations/](backend/migrations/) as plain SQL files, applied by [backend/src/models/migrate.ts](backend/src/models/migrate.ts).
 - Refer to [docs/database-design.md](docs/database-design.md) for actual column structures, default values, and foreign keys.
 
 ### 2. API Contract Verification
@@ -57,8 +57,20 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 - The active branch is `dev`.
 - Code changes should be verified with TypeScript compiler checks (`pnpm exec tsc --noEmit` on both backend and frontend) and E2E/integration tests.
 
-### 5. GitHub Text Language
-- Write all human-readable GitHub text in **Traditional Chinese (繁體中文)**: PR titles (the description after the conventional-commit prefix), PR bodies, and Issue titles/bodies/comments.
-- Keep structural tokens and code in English: the conventional-commit type prefix (e.g. `fix:`, `docs:`), `Closes #<n>`, branch names, file paths, code identifiers, and any trailer/footer lines.
+### 5. Language Usage Conventions
+- **PR title**: English, following Conventional Commits (e.g. `feat(vimeo): add batch thumbnail download`, `fix(migration): prevent temporary file leak on failure`).
+- **PR body / PR comment / review comment**: Traditional Chinese (繁體中文).
+- **Issue title / body / comment**: Traditional Chinese (繁體中文).
+- **Git commit message**: English, following Conventional Commits (e.g. `feat(vimeo): support streaming uploads`, `fix(ui): prevent video list flickering on selection`).
+- **Branch name**: English.
+- **Code identifiers** (class, function, variable, type, interface, enum, constant, file/directory names, API and other code identifiers): English.
+- Technical terms, code identifiers, CLI commands, API names, package names, and proper nouns without a suitable Chinese translation must stay in their original English form even inside Traditional Chinese text.
+
+### 6. Frequently Used Commands
+Prefer these quieter forms over their default equivalents to keep session output focused on what matters:
+- `docker compose up -d` — start the stack detached instead of streaming build/boot logs.
+- `docker compose logs -f --tail=50 backend` — tail recent logs for one service instead of dumping full history.
+- `docker compose exec backend pnpm run db:seed` — reseed reproducible test data (wipes the DB first).
+- See [backend/CLAUDE.md](backend/CLAUDE.md) and [frontend/CLAUDE.md](frontend/CLAUDE.md) for the per-package test/lint/typecheck commands run most often.
 
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
