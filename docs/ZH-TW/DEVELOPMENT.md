@@ -99,19 +99,29 @@ supertest 相容測試使用。Socket.IO ping interval 為 25 秒、ping timeout
 `realtime_ready`、可靠發送（重送同一個 `Idempotency-Key` 只會產生一則訊息）、
 斷線後靠 sync cursor 補齊變更，以及超限的驗證請求會回傳
 `429`／`TOO_MANY_REQUESTS`。目標位址讀取自 `SMOKE_API_URL`（預設
-`http://localhost:4005`），任何一項失敗都會印出可行動的診斷訊息並以非零結束；
-最後一項檢查需要 stack 的 `RATE_LIMIT_DISABLED` 未設定或為 `false` 才能驗證。
-對 development stack 執行：
+`http://localhost:4005`），任何一項失敗都會印出可行動的診斷訊息並以非零結束。
+
+最後一項檢查需要限流器實際運作，而 `.env.example` 為了日常開發預設帶
+`RATE_LIMIT_DISABLED=true`，因此請覆寫該值再啟動 smoke 用的 stack，而不是直接
+跑預設的：
 
 ```bash
-docker compose up -d --wait
+RATE_LIMIT_DISABLED=false docker compose up -d --wait --force-recreate backend
 SMOKE_API_URL=http://localhost:4005 pnpm --filter near-chat-backend run smoke
 ```
 
+`--force-recreate backend` 是讓覆寫生效的關鍵：Compose 不會只因為插值後的環境
+變數改變，就重啟一個已在執行中的容器。
+
+另外可將 `SMOKE_STATE_FILE` 設為某個路徑，用以驗證持久狀態能否跨 restart 存活。
+第一次執行會把 token、room 與 message ID 寫入該檔；之後以同一個檔案再執行時，
+會改用存下來的 token 重新 sync，並斷言 restart 前的那則訊息仍然回傳 —— 因此
+restart 若真的遺失資料就會失敗，而不是靠新建立的狀態矇混通過。
+
 CI 的 `ci-backend.yml` 會對 development image（`docker-compose.yml`）與
 production image（`docker-compose.release.yml`）各執行一次同一份腳本，且各自
-在 graceful restart backend 容器前後都跑一次，因此映像本身的問題或
-restart 造成的狀態遺失都會讓建置失敗。
+在 graceful restart backend 容器前後都跑一次、共用同一個 `SMOKE_STATE_FILE`，
+因此映像本身的問題或 restart 造成的已提交狀態遺失都會讓建置失敗。
 
 `MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS` 分別控制單機
 session、presence 重連寬限與 typing indication TTL。多節點 presence、全域

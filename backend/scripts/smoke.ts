@@ -1,15 +1,22 @@
 #!/usr/bin/env bun
 /**
  * WebSocket/REST smoke test for a running near-chat stack (dev or
- * production-like Docker Compose). Exercises exactly the acceptance criteria
- * of issue #536: connect, reliable send, sync-cursor repair, over-limit
+ * production-like Docker Compose). Exercises the acceptance criteria of
+ * issue #536: connect, reliable send, sync-cursor repair, over-limit
  * handling. Graceful restart is exercised by the caller (see
- * `scripts/smoke.sh`), which runs this script once before and once after
- * restarting the backend container.
+ * `.github/workflows/ci-backend.yml`), which runs this script once before
+ * and once after restarting the backend container.
  *
  * Every check prints its own actionable diagnostic on failure and the script
  * exits non-zero if any check failed, so it is safe to wire directly into a
  * CI step without extra log-scraping.
+ *
+ * Set SMOKE_STATE_FILE to a shared path to also verify that state survives a
+ * restart: the first invocation (no file yet) writes a token/room/message
+ * triple to it after creating them; the second invocation (file already
+ * exists) reads it back and asserts /sync still has that message, so a
+ * restart that actually lost data — not just a rebuilt smoke run redoing its
+ * own setup — fails the check.
  */
 import { io as ioClient, type Socket } from 'socket.io-client';
 
@@ -116,6 +123,7 @@ async function main() {
 
   let token = '';
   let roomId = '';
+  let reliableMessageId = '';
   let socket: Socket | undefined;
 
   await run('socket connects and reaches realtime_ready', async () => {
@@ -149,7 +157,35 @@ async function main() {
       retry.body.content === 'first attempt',
       `retry applied the retried body instead of replaying the first one: got "${retry.body.content}"`,
     );
+    reliableMessageId = first.body.messageId as string;
   });
+
+  const stateFile = process.env.SMOKE_STATE_FILE;
+  if (stateFile) {
+    await run('durable state survives a backend restart', async () => {
+      assert(token && roomId && reliableMessageId, 'no durable state available from earlier checks');
+      const priorRunFile = Bun.file(stateFile);
+      if (await priorRunFile.exists()) {
+        const prior = JSON.parse(await priorRunFile.text()) as {
+          token: string;
+          roomId: string;
+          messageId: string;
+        };
+        const sync = await api('/api/v1/sync?cursor=0&limit=200', { token: prior.token });
+        assert(
+          sync.status === 200,
+          `expected 200 re-syncing with the pre-restart token, got ${sync.status}: ${JSON.stringify(sync.body)}`,
+        );
+        const changes: Array<{ message?: { messageId?: string; roomId?: string } }> = sync.body.changes ?? [];
+        assert(
+          changes.some((change) => change.message?.messageId === prior.messageId),
+          `message ${prior.messageId} (room ${prior.roomId}) created before the restart is missing from /sync — the restart lost durable state instead of just recovering the connection`,
+        );
+      } else {
+        await Bun.write(stateFile, JSON.stringify({ token, roomId, messageId: reliableMessageId }));
+      }
+    });
+  }
 
   await run('sync cursor repairs a change missed while disconnected', async () => {
     assert(socket, 'no socket available from the connect check');

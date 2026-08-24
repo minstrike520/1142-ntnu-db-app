@@ -146,6 +146,7 @@ jobs:
       - name: Run the realtime smoke suite against the production image
         env:
           SMOKE_API_URL: http://localhost:4005
+          SMOKE_STATE_FILE: ${{ runner.temp }}/smoke-state.json
         run: cd backend && bun run smoke
 
       - name: Gracefully restart the backend container
@@ -170,6 +171,7 @@ jobs:
       - name: Re-run the realtime smoke suite after the restart
         env:
           SMOKE_API_URL: http://localhost:4005
+          SMOKE_STATE_FILE: ${{ runner.temp }}/smoke-state.json
         run: cd backend && bun run smoke
 
       - name: Assert re-applying the bundle is a no-op
@@ -251,6 +253,7 @@ jobs:
       - name: Run the realtime smoke suite against the development image
         env:
           SMOKE_API_URL: http://localhost:4005
+          SMOKE_STATE_FILE: ${{ runner.temp }}/smoke-state.json
         run: cd backend && bun run smoke
 
       - name: Gracefully restart the backend container
@@ -275,6 +278,7 @@ jobs:
       - name: Re-run the realtime smoke suite after the restart
         env:
           SMOKE_API_URL: http://localhost:4005
+          SMOKE_STATE_FILE: ${{ runner.temp }}/smoke-state.json
         run: cd backend && bun run smoke
 
       - name: Collect service logs
