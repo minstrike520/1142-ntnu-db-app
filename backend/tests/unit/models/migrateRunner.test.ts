@@ -158,6 +158,7 @@ describe('loadMigrationFiles', () => {
     '2026081000006_enforce_blocked_private_room_state',
     '2026081100000_record_noop_command_receipts',
     '2026081100001_record_emergency_alert_deliveries',
+    '2026081100002_add_user_is_admin',
   ];
 
   it('reproduces the migration order node-pg-migrate recorded', async () => {

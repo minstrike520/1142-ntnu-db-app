@@ -210,6 +210,37 @@ docker compose exec backend bun run db:seed
 - **Rollback migrations**: `docker compose exec backend bun run migrate:down` (rolls back the single most recent migration; pass a count to undo more, e.g. `migrate:down 3`)
 - **Seed database**: `docker compose exec backend bun run db:seed`
 
+### Granting Admin Access
+
+`/api/v1/admin/*` is gated by the `users.is_admin` column. Every account starts
+with `is_admin = false`, including seeded ones, and there is deliberately **no
+HTTP endpoint that sets the flag** — `is_admin` is absent from the repository's
+`update` allow-list, so it cannot be reached through `PATCH /api/v1/users/me`.
+
+Promote an account with a direct database write:
+
+```bash
+docker compose exec db psql -U chatuser -d chatdb \
+  -c "UPDATE users SET is_admin = true WHERE email = 'alice@test.com';"
+```
+
+Verify the gate (a non-admin gets 403, an admin gets 200):
+
+```bash
+curl -i -s http://localhost:4005/api/v1/admin/health -H "Authorization: Bearer <token>" | head -1
+```
+
+Revoke by setting the column back to `false`; it takes effect on the caller's
+next request, because the flag is read from the database per request rather than
+carried in the JWT.
+
+There is intentionally no `SYSTEM_ADMIN_EMAILS`-style environment allow-list.
+`PATCH /api/v1/users/me` lets any authenticated user change their own email with
+only a uniqueness check — no current-password confirmation, unlike a password
+change — and `users.email` is a plain case-sensitive `UNIQUE` column, so
+`Ops@company.com` can be inserted alongside `ops@company.com`. Matching admins by
+email would therefore be self-service privilege escalation.
+
 ### About the Migration Runner
 Migrations are applied by `backend/src/models/migrate.ts`, a small runner built on
 `Bun.SQL`. It replaced `node-pg-migrate` in #421 so the backend depends on Bun

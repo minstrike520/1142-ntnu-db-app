@@ -24,6 +24,8 @@ This document defines the relational schema for the real-time group chat applica
 | `app_theme` | VARCHAR(10)| UI theme preference (API field: `theme`) | NOT NULL, DEFAULT 'light', CHECK (app_theme IN ('light', 'dark')) |
 | `notify_desktop` | BOOLEAN | Desktop notifications preference | NOT NULL, DEFAULT TRUE |
 | `notify_sound` | BOOLEAN | Sound notification preference | NOT NULL, DEFAULT TRUE |
+| `room_order` | JSONB | Per-folder room ordering (API field: `roomOrder`) | NOT NULL, DEFAULT `'{}'` |
+| `is_admin` | BOOLEAN | Grants access to `/api/v1/admin/*`; not settable over HTTP | NOT NULL, DEFAULT FALSE |
 
 #### `chat_rooms`
 | Column Name | Type | Description | Constraints |
