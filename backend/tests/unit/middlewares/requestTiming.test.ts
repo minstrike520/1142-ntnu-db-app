@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { makeRequestTiming } from '../../../src/middlewares/requestTiming';
 import { errorHandler } from '../../../src/middlewares/errorHandler';
 import { createLogger, createRecentLogStore, type RecentLogEntry } from '../../../src/utils/logger';
@@ -134,6 +135,35 @@ describe('requestTiming middleware', () => {
 
     expect(requests()).toHaveLength(1);
     expect(requests()[0]?.path).toBe('/api/v1/rooms');
+    expect(metrics.snapshot().totalRequests).toBe(1);
+  });
+
+  /**
+   * `cors()` answers an `OPTIONS` preflight with its own 204 and never calls
+   * `next()`, so this is the ordering that decides whether preflight traffic
+   * appears in the metrics at all. Exercised against the real CORS middleware
+   * rather than a stand-in: the behaviour under test is Hono's, and a fake would
+   * keep passing if Hono ever changed it.
+   */
+  it('measures a CORS preflight that never reaches a route', async () => {
+    const { logger, requests } = createTestLogger();
+    const metrics = createRequestMetricsStore({ sampleCapacity: 10 });
+
+    const app = new Hono();
+    app.use('*', makeRequestTiming({ logger, metrics, now: stepClock(2) }));
+    app.use('*', cors({ origin: 'https://app.example', credentials: true }));
+    app.post('/api/v1/rooms', (c) => c.json({ ok: true }, 201));
+
+    const response = await app.request('/api/v1/rooms', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://app.example',
+        'Access-Control-Request-Method': 'POST',
+      },
+    });
+    expect(response.status).toBe(204);
+
+    expect(requests()[0]).toMatchObject({ method: 'OPTIONS', path: '/api/v1/rooms', status: 204 });
     expect(metrics.snapshot().totalRequests).toBe(1);
   });
 

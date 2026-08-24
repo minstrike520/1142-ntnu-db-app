@@ -27,15 +27,24 @@ export interface CreateHttpAppDeps {
  * The Hono application: middleware, static uploads and every API route.
  *
  * Middleware order is load-bearing and preserved as it was — security headers
- * and CORS wrap everything, request timing sits just inside them so it measures
- * the whole handling of a request, the global limiter covers `/api/*`, and the
- * auth limiter is mounted on `/api/v1/auth/*` ahead of the auth routes
+ * and CORS wrap everything, request timing sits between them so it measures
+ * every request CORS answers by itself, the global limiter covers `/api/*`, and
+ * the auth limiter is mounted on `/api/v1/auth/*` ahead of the auth routes
  * themselves.
  */
 export const createHttpApp = ({ services, config }: CreateHttpAppDeps): Hono => {
   const honoApp = new Hono();
 
   honoApp.use('*', securityHeaders);
+
+  // Outside CORS, not inside it: `cors()` answers an `OPTIONS` preflight by
+  // returning a 204 itself and never calling `next()`, so a timer mounted after
+  // it would silently miss every preflight — real traffic this backend serves,
+  // and traffic whose volume is worth seeing. Outside the rate limiter for the
+  // same reason: a burst of 429s is a signal, not something to hide from the
+  // metrics.
+  honoApp.use('*', requestTiming);
+
   honoApp.use(
     '*',
     cors({
@@ -43,11 +52,6 @@ export const createHttpApp = ({ services, config }: CreateHttpAppDeps): Hono => 
       credentials: true,
     }),
   );
-
-  // Inside CORS so a preflight is measured as the cheap request it is, and
-  // outside the rate limiter so requests it rejects are still counted — a burst
-  // of 429s is a signal, not something to hide from the metrics.
-  honoApp.use('*', requestTiming);
 
   honoApp.use('/api/*', makeGlobalRateLimiter());
 
