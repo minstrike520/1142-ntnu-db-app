@@ -185,28 +185,35 @@ async function main() {
 
   const stateFile = process.env.SMOKE_STATE_FILE;
   if (stateFile) {
-    await run('durable state survives a backend restart', async () => {
+    // Named for what this invocation actually does, so the seeding run cannot
+    // read as though it had verified a restart it never saw.
+    const priorRunFile = Bun.file(stateFile);
+    const isVerifyingRun = await priorRunFile.exists();
+    const checkName = isVerifyingRun
+      ? 'durable state survives a backend restart'
+      : 'record durable state for the post-restart run';
+
+    await run(checkName, async () => {
       assert(token && roomId && reliableMessageId, 'no durable state available from earlier checks');
-      const priorRunFile = Bun.file(stateFile);
-      if (await priorRunFile.exists()) {
-        const prior = JSON.parse(await priorRunFile.text()) as {
-          token: string;
-          roomId: string;
-          messageId: string;
-        };
-        const sync = await api('/api/v1/sync?cursor=0&limit=200', { token: prior.token });
-        assert(
-          sync.status === 200,
-          `expected 200 re-syncing with the pre-restart token, got ${sync.status}: ${JSON.stringify(sync.body)}`,
-        );
-        const changes: Array<{ message?: { messageId?: string; roomId?: string } }> = sync.body.changes ?? [];
-        assert(
-          changes.some((change) => change.message?.messageId === prior.messageId),
-          `message ${prior.messageId} (room ${prior.roomId}) created before the restart is missing from /sync — the restart lost durable state instead of just recovering the connection`,
-        );
-      } else {
+      if (!isVerifyingRun) {
         await Bun.write(stateFile, JSON.stringify({ token, roomId, messageId: reliableMessageId }));
+        return;
       }
+      const prior = JSON.parse(await priorRunFile.text()) as {
+        token: string;
+        roomId: string;
+        messageId: string;
+      };
+      const sync = await api('/api/v1/sync?cursor=0&limit=200', { token: prior.token });
+      assert(
+        sync.status === 200,
+        `expected 200 re-syncing with the pre-restart token, got ${sync.status}: ${JSON.stringify(sync.body)}`,
+      );
+      const changes: Array<{ message?: { messageId?: string; roomId?: string } }> = sync.body.changes ?? [];
+      assert(
+        changes.some((change) => change.message?.messageId === prior.messageId),
+        `message ${prior.messageId} (room ${prior.roomId}) created before the restart is missing from /sync — the restart lost durable state instead of just recovering the connection`,
+      );
     });
   }
 
