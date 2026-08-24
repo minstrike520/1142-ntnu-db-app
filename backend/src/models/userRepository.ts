@@ -20,6 +20,7 @@ export interface UserRow {
   created_at: Date;
   deleted_at?: Date | null;
   room_order?: Record<string, string[]> | null;
+  is_admin: boolean;
 }
 
 function mapRowToUser(row: UserRow): User {
@@ -40,6 +41,7 @@ function mapRowToUser(row: UserRow): User {
     createdAt: row.created_at,
     deletedAt: row.deleted_at ?? null,
     roomOrder: row.room_order ?? undefined,
+    isAdmin: row.is_admin ?? false,
   };
 }
 
@@ -87,6 +89,13 @@ export class UserRepository implements IUserRepository {
       `;
     }
     return rows.map(mapRowToUser);
+  }
+
+  async isAdmin(userId: string): Promise<boolean> {
+    const rows = await this.sql<{ is_admin: boolean }[]>`
+      SELECT is_admin FROM users WHERE user_id = ${userId} AND deleted_at IS NULL
+    `;
+    return rows[0]?.is_admin === true;
   }
 
   async findAllWarningEnabled(): Promise<{ userId: string; lastActivity: Date; warningDays: number }[]> {

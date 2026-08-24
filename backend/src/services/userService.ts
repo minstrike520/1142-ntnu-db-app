@@ -150,6 +150,22 @@ export const makeUserService = (
   };
 
   return {
+    /**
+     * Whether the user may reach `/api/v1/admin/*`.
+     *
+     * The authorization rule lives here rather than in `adminMiddleware` so the
+     * gate goes through the same service layer as every other permission check
+     * (see backend/AGENTS.md). The middleware stays a pure HTTP adapter: it
+     * turns `false` into a 403 and knows nothing about how the answer is found.
+     *
+     * Answered from the database on every call, deliberately — not from the JWT,
+     * so revoking an admin takes effect on their next request. A missing or
+     * soft-deleted account is `false`, never a throw: the gate fails closed.
+     */
+    async isAdmin(userId: string): Promise<boolean> {
+      return repo.isAdmin(userId);
+    },
+
     async register(data: RegisterRequest): Promise<AuthResponse & { refreshToken: string }> {
       const existingUser = await repo.findByEmail(data.email);
       if (existingUser) {

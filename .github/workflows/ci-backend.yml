@@ -67,6 +67,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Only needed to run backend/scripts/smoke.ts from the runner below —
+      # the compose stack itself is unaffected by this.
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-backend
+          bun: 'true'
+
       # ~2-4 min cold. Left uncached on purpose: a stale layer cache is exactly
       # what would hide a runtime/layout drift from this job.
       - name: Build the production backend image
@@ -114,10 +121,11 @@ jobs:
       - name: Assert the backend serves HTTP
         run: |
           set -euo pipefail
-          # No healthcheck and no health route, so probe any path. A response
-          # carrying the security headers proves the Hono middleware chain ran,
-          # not merely that something is holding the port. The status itself is
-          # deliberately not asserted: an unmatched path is a 404 by design.
+          # No healthcheck on this compose service. Probes an unmatched path
+          # rather than /api/v1/health so the response carrying the security
+          # headers proves the Hono middleware chain ran, not merely that
+          # something is holding the port. The status itself is deliberately
+          # not asserted: an unmatched path is a 404 by design.
           for attempt in {1..30}; do
             if curl -sS --max-time 5 -o /dev/null -D "$RUNNER_TEMP/probe.headers" \
               http://localhost:4005/api/v1/ci-startup-probe 2>/dev/null \
@@ -130,6 +138,41 @@ jobs:
           done
           echo "::error::backend did not serve an HTTP response on :4005 within 30s"
           exit 1
+
+      # Covers the remaining issue #536 acceptance criteria not exercised
+      # above: connect, reliable send, sync-cursor repair and over-limit
+      # handling against the real production image, then the same checks
+      # again after a graceful restart to prove recovery holds.
+      - name: Run the realtime smoke suite against the production image
+        env:
+          SMOKE_API_URL: http://localhost:4005
+          SMOKE_STATE_FILE: ${{ runner.temp }}/smoke-state.json
+        run: cd backend && bun run smoke
+
+      - name: Gracefully restart the backend container
+        run: |
+          set -euo pipefail
+          docker compose --env-file "$RUNNER_TEMP/release.env" \
+            -f docker-compose.release.yml restart backend
+
+      - name: Wait for the backend to answer again after restart
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if curl -sS --max-time 5 -o /dev/null "http://localhost:4005/api/v1/health" 2>/dev/null; then
+              echo "backend answered again on attempt ${attempt}"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::backend did not recover on :4005 within 30s of a graceful restart" >&2
+          exit 1
+
+      - name: Re-run the realtime smoke suite after the restart
+        env:
+          SMOKE_API_URL: http://localhost:4005
+          SMOKE_STATE_FILE: ${{ runner.temp }}/smoke-state.json
+        run: cd backend && bun run smoke
 
       - name: Assert re-applying the bundle is a no-op
         run: |
@@ -150,3 +193,112 @@ jobs:
         run: |
           docker compose --env-file "$RUNNER_TEMP/release.env" \
             -f docker-compose.release.yml down -v --remove-orphans
+
+  # Mirrors release-compose above, but against the development image
+  # (docker-compose.yml, backend/Dockerfile) rather than the production one.
+  # Issue #536 requires both images to build and pass the same realtime smoke
+  # suite, and a bug specific to the dev Dockerfile or dev compose wiring
+  # (e.g. the bind-mounted node_modules setup) would not show up in
+  # release-compose at all.
+  dev-compose-smoke:
+    name: dev compose boots on the development image
+    if: inputs.run-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-backend
+          bun: 'true'
+
+      - name: Write a throwaway dev env file
+        run: |
+          set -euo pipefail
+          # docker-compose.yml runs `pnpm run migrate:up && pnpm run dev` as its
+          # own command, so migration happens as part of `up` here, unlike the
+          # release compose's separate `migrate` service.
+          cat > "$RUNNER_TEMP/dev.env" <<'EOF'
+          NODE_ENV=development
+          POSTGRES_USER=near
+          POSTGRES_PASSWORD=near
+          POSTGRES_DB=near_chat
+          DATABASE_URL=postgresql://near:near@db:5432/near_chat
+          PORT=4000
+          JWT_SECRET=ci-only-value-not-a-real-secret
+          JWT_EXPIRES_IN=15m
+          CORS_ORIGINS=http://localhost:3005
+          RATE_LIMIT_DISABLED=false
+          EOF
+
+      # `--wait` here is deliberate rather than incidental: it is the command
+      # docs/DEVELOPMENT.md tells developers to run, and it only means anything
+      # because the backend service defines a healthcheck. Running it in CI is
+      # what keeps that healthcheck honest — if it ever stops reporting
+      # readiness correctly, this step fails instead of developers silently
+      # getting a connection refused right after `up --wait` returns.
+      - name: Build and start db, redis and backend from the dev compose
+        run: |
+          set -euo pipefail
+          docker compose --env-file "$RUNNER_TEMP/dev.env" \
+            -f docker-compose.yml up -d --build --wait --wait-timeout 300 db redis backend
+
+      # Not redundant with `--wait` above: the healthcheck probes 127.0.0.1
+      # from inside the container, so it says nothing about the published
+      # port. This asserts the backend is reachable the way the smoke suite
+      # and a developer's browser actually reach it.
+      - name: Assert the backend is reachable on the published port
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if curl -sS --max-time 5 -o /dev/null "http://localhost:4005/api/v1/health" 2>/dev/null; then
+              echo "backend answered on the published port on attempt ${attempt}"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::backend is healthy in-container but not reachable on :4005 — check the port mapping" >&2
+          exit 1
+
+      - name: Run the realtime smoke suite against the development image
+        env:
+          SMOKE_API_URL: http://localhost:4005
+          SMOKE_STATE_FILE: ${{ runner.temp }}/smoke-state.json
+        run: cd backend && bun run smoke
+
+      - name: Gracefully restart the backend container
+        run: |
+          set -euo pipefail
+          docker compose --env-file "$RUNNER_TEMP/dev.env" \
+            -f docker-compose.yml restart backend
+
+      - name: Wait for the backend to answer again after restart
+        run: |
+          set -euo pipefail
+          for attempt in {1..60}; do
+            if curl -sS --max-time 5 -o /dev/null "http://localhost:4005/api/v1/health" 2>/dev/null; then
+              echo "backend answered again on attempt ${attempt}"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::backend did not recover on :4005 within 60s of a graceful restart" >&2
+          exit 1
+
+      - name: Re-run the realtime smoke suite after the restart
+        env:
+          SMOKE_API_URL: http://localhost:4005
+          SMOKE_STATE_FILE: ${{ runner.temp }}/smoke-state.json
+        run: cd backend && bun run smoke
+
+      - name: Collect service logs
+        if: failure()
+        run: |
+          docker compose --env-file "$RUNNER_TEMP/dev.env" \
+            -f docker-compose.yml logs --no-color db redis backend
+
+      - name: Tear the stack down
+        if: always()
+        run: |
+          docker compose --env-file "$RUNNER_TEMP/dev.env" \
+            -f docker-compose.yml down -v --remove-orphans

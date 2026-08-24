@@ -54,6 +54,7 @@
 | | `POST` | [`/users/me/emergency-contacts`](#post-usersmeemergency-contacts) | 需驗證 | 新增或更新緊急聯絡人設定 |
 | | `DELETE` | [`/users/me/emergency-contacts/:contactId`](#delete-usersmeemergency-contactscontactid) | 需驗證 | 刪除緊急聯絡人設定 |
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | 需驗證 | 檢查不活躍狀態以判定是否發送警報 |
+| **管理員** | `GET` | [`/admin/health`](#get-adminhealth) | 需驗證（管理員） | 管理員守門機制後方的存活探測 |
 
 ### Socket.io 即時通訊
 
@@ -1421,6 +1422,29 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
   ```
 - **回應**:
   - `200 OK`: 檢查完成。
+
+---
+
+### H. 管理員
+
+`/api/v1/admin/*` 下的所有路由都由 `makeAdminRoutes` 內綁定的兩層 middleware 守門：
+先是一般身分驗證，接著是每次請求都從資料庫讀取 `users.is_admin` 的管理員檢查。
+此旗標不放進 JWT，因此撤銷權限會在該呼叫端的下一個請求立即生效。
+沒有任何 endpoint 可以設定此旗標，初始化流程請見 `docs/DEVELOPMENT.md`。
+
+#### `GET /admin/health`
+- **說明**: 管理員命名空間的存活探測。用途是讓管理員守門機制能被端到端驗證；實際的監控 endpoint 位於 #566-#570。
+- **驗證與授權**: 需驗證，且呼叫者的 `users.is_admin` 必須為 `true`。
+- **回應**:
+  - `200 OK`: 呼叫者為管理員。
+  - `401 Unauthorized`: 缺少 token、token 無效，或帳號已刪除。
+  - `403 Forbidden`: 已驗證但非管理員（`code: "FORBIDDEN"`）。
+- **回應範例**:
+  ```json
+  {
+    "status": "ok"
+  }
+  ```
 
 ---
 

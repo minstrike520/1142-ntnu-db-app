@@ -99,19 +99,41 @@ uses a 25-second ping interval and a 20-second ping timeout, so Bun's
 
 Durable message commands use REST and require an `Idempotency-Key`; edit and
 recall also require `If-Match`. After connecting, clients call `/api/v1/sync`
-with their last cursor. A minimal local smoke test is:
+with their last cursor.
+
+`backend/scripts/smoke.ts` (`pnpm --filter near-chat-backend run smoke`, or
+`bun run smoke` from `backend/`) is the automated realtime smoke test against
+a running stack. It registers a throwaway user and exercises health, socket
+connect (`realtime_ready`), a reliably-sent message (retried `Idempotency-Key`
+resolves to one message), sync-cursor repair after a disconnect, and
+over-limit auth requests (`429`/`TOO_MANY_REQUESTS`). It reads the target from
+`SMOKE_API_URL` (default `http://localhost:4005`) and exits non-zero with a
+per-check diagnostic on the first failure.
+
+The last check needs the rate limiter actually running, and `.env.example`
+ships `RATE_LIMIT_DISABLED=true` for everyday development — so override it for
+the smoke stack rather than running the default one:
 
 ```bash
-curl -sS http://localhost:4005/api/v1/health
-# Register/login, then create a room and send a message with the same key twice:
-curl -sS -X POST http://localhost:4005/api/v1/rooms/<roomId>/messages \
-  -H "Authorization: Bearer <token>" \
-  -H "Idempotency-Key: smoke-create-1" \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"smoke"}'
-curl -sS "http://localhost:4005/api/v1/sync?cursor=0&limit=100" \
-  -H "Authorization: Bearer <token>"
+RATE_LIMIT_DISABLED=false docker compose up -d --wait --force-recreate backend
+SMOKE_API_URL=http://localhost:4005 pnpm --filter near-chat-backend run smoke
 ```
+
+`--force-recreate backend` is what makes the override take effect: Compose does
+not restart an already-running container just because an interpolated
+environment variable changed.
+
+Set `SMOKE_STATE_FILE` to a path to additionally verify that durable state
+survives a restart. The first run writes its token, room and message id there;
+a later run against the same file re-syncs with that saved token and asserts
+the pre-restart message is still returned, so a restart that dropped data fails
+rather than passing on freshly created state.
+
+CI runs this same script against both the development image
+(`docker-compose.yml`) and the production image (`docker-compose.release.yml`)
+in `ci-backend.yml`, once before and once after gracefully restarting the
+backend container, sharing one `SMOKE_STATE_FILE` across the pair — so a broken
+image, or a restart that loses committed state, fails the build.
 
 `MAX_SESSIONS_PER_USER`, `PRESENCE_GRACE_MS`, and `TYPING_TTL_MS` control local
 session, presence-reconnect, and typing-indication limits. Multi-node presence,
@@ -199,6 +221,37 @@ docker compose exec backend bun run db:seed
 - **Run migrations**: `docker compose exec backend bun run migrate:up`
 - **Rollback migrations**: `docker compose exec backend bun run migrate:down` (rolls back the single most recent migration; pass a count to undo more, e.g. `migrate:down 3`)
 - **Seed database**: `docker compose exec backend bun run db:seed`
+
+### Granting Admin Access
+
+`/api/v1/admin/*` is gated by the `users.is_admin` column. Every account starts
+with `is_admin = false`, including seeded ones, and there is deliberately **no
+HTTP endpoint that sets the flag** — `is_admin` is absent from the repository's
+`update` allow-list, so it cannot be reached through `PATCH /api/v1/users/me`.
+
+Promote an account with a direct database write:
+
+```bash
+docker compose exec db psql -U chatuser -d chatdb \
+  -c "UPDATE users SET is_admin = true WHERE email = 'alice@test.com';"
+```
+
+Verify the gate (a non-admin gets 403, an admin gets 200):
+
+```bash
+curl -i -s http://localhost:4005/api/v1/admin/health -H "Authorization: Bearer <token>" | head -1
+```
+
+Revoke by setting the column back to `false`; it takes effect on the caller's
+next request, because the flag is read from the database per request rather than
+carried in the JWT.
+
+There is intentionally no `SYSTEM_ADMIN_EMAILS`-style environment allow-list.
+`PATCH /api/v1/users/me` lets any authenticated user change their own email with
+only a uniqueness check — no current-password confirmation, unlike a password
+change — and `users.email` is a plain case-sensitive `UNIQUE` column, so
+`Ops@company.com` can be inserted alongside `ops@company.com`. Matching admins by
+email would therefore be self-service privilege escalation.
 
 ### About the Migration Runner
 Migrations are applied by `backend/src/models/migrate.ts`, a small runner built on

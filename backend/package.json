@@ -20,7 +20,8 @@
     "test:db:up": "docker compose -f ../docker-compose.test.yml up -d --wait && pnpm run migrate:test",
     "test:db:down": "docker compose -f ../docker-compose.test.yml down",
     "migrate:test": "DATABASE_URL=postgresql://postgres:postgres@localhost:5436/ntnu_test bun src/models/migrate.ts up",
-    "lint": "eslint src && tsc --noEmit"
+    "lint": "eslint src && tsc --noEmit",
+    "smoke": "bun run scripts/smoke.ts"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.9.0",
