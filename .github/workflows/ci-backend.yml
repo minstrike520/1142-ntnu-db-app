@@ -231,23 +231,33 @@ jobs:
           RATE_LIMIT_DISABLED=false
           EOF
 
+      # `--wait` here is deliberate rather than incidental: it is the command
+      # docs/DEVELOPMENT.md tells developers to run, and it only means anything
+      # because the backend service defines a healthcheck. Running it in CI is
+      # what keeps that healthcheck honest — if it ever stops reporting
+      # readiness correctly, this step fails instead of developers silently
+      # getting a connection refused right after `up --wait` returns.
       - name: Build and start db, redis and backend from the dev compose
         run: |
           set -euo pipefail
           docker compose --env-file "$RUNNER_TEMP/dev.env" \
-            -f docker-compose.yml up -d --build db redis backend
+            -f docker-compose.yml up -d --build --wait --wait-timeout 300 db redis backend
 
-      - name: Wait for the backend to serve health
+      # Not redundant with `--wait` above: the healthcheck probes 127.0.0.1
+      # from inside the container, so it says nothing about the published
+      # port. This asserts the backend is reachable the way the smoke suite
+      # and a developer's browser actually reach it.
+      - name: Assert the backend is reachable on the published port
         run: |
           set -euo pipefail
-          for attempt in {1..60}; do
+          for attempt in {1..30}; do
             if curl -sS --max-time 5 -o /dev/null "http://localhost:4005/api/v1/health" 2>/dev/null; then
-              echo "backend answered on attempt ${attempt}"
+              echo "backend answered on the published port on attempt ${attempt}"
               exit 0
             fi
             sleep 1
           done
-          echo "::error::backend did not serve /api/v1/health on :4005 within 60s" >&2
+          echo "::error::backend is healthy in-container but not reachable on :4005 — check the port mapping" >&2
           exit 1
 
       - name: Run the realtime smoke suite against the development image

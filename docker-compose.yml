@@ -117,6 +117,26 @@ services:
       redis:
         condition: service_healthy
     command: sh -c "pnpm run migrate:up && pnpm run dev"
+    # Without this, `up --wait` returns as soon as the container is *running* —
+    # which here is while `migrate:up` is still going and nothing is listening
+    # yet. Anything that starts working immediately after `--wait` (the smoke
+    # suite in docs/DEVELOPMENT.md, a script, a person) would then hit a
+    # connection refused. `bun` is the app runtime, so it is always present;
+    # there is deliberately no curl/wget in this image to depend on.
+    #
+    # start_period covers the migration: failures during it do not count toward
+    # `retries`, so a slow first-run migration delays readiness rather than
+    # marking the service unhealthy.
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - "const r = await fetch('http://127.0.0.1:4000/api/v1/health'); process.exit(r.ok ? 0 : 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
 
   frontend:
     build:
