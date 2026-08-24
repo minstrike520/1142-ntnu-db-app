@@ -48,6 +48,7 @@ describe('userService', () => {
       update: mock(),
       delete: mock(),
       findAllWarningEnabled: mock(),
+      isAdmin: mock(),
     };
     emergencyContactRepo = {
       findByUserId: mock(),
@@ -485,6 +486,22 @@ describe('userService', () => {
     it('keeps login schema validation intact', () => {
       expect(loginSchema.safeParse({ email: 'valid@example.com', password: 'password123' }).success).toBe(true);
       expect(loginSchema.safeParse({ email: 'invalid', password: 'password123' }).success).toBe(false);
+    });
+  });
+
+  describe('isAdmin', () => {
+    it('reports the flag the repository returns', async () => {
+      mockRepo.isAdmin.mockResolvedValue(true);
+
+      expect(await userService.isAdmin('u1')).toBe(true);
+      expect(mockRepo.isAdmin).toHaveBeenCalledWith('u1');
+    });
+
+    it('reports false for a non-admin, a missing account, or a soft-deleted one', async () => {
+      // The repository collapses all three into `false` so the gate fails closed.
+      mockRepo.isAdmin.mockResolvedValue(false);
+
+      expect(await userService.isAdmin('u1')).toBe(false);
     });
   });
 

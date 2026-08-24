@@ -104,8 +104,9 @@ export const createHttpApp = ({ services, config }: CreateHttpAppDeps): Hono => 
   honoApp.route('/api/v1/blocks', makeBlockRoutes(services.friend));
 
   // Auth and the admin gate are bound inside `makeAdminRoutes`, not here, so
-  // every route added to this namespace inherits both.
-  honoApp.route('/api/v1/admin', makeAdminRoutes());
+  // every route added to this namespace inherits both. The gate's authorization
+  // check comes from the user service, like every other permission check.
+  honoApp.route('/api/v1/admin', makeAdminRoutes(services.user));
 
   honoApp.onError(errorHandler);
 

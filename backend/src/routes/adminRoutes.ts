@@ -15,8 +15,12 @@ import { type AdminChecker, makeAdminMiddleware } from '../middlewares/adminMidd
  * guard is reachable end to end today — Hono runs matched middleware before it
  * falls through to the not-found handler, so an empty sub-app would still
  * enforce 401/403, but nothing would prove the allowed path returns 200.
+ *
+ * `checker` is required, not defaulted: the authorization check is a service the
+ * composition root owns and hands down, so this module never reaches for a
+ * repository or a database handle of its own.
  */
-export const makeAdminRoutes = (checker?: AdminChecker) => {
+export const makeAdminRoutes = (checker: AdminChecker) => {
   const app = new Hono();
 
   app.use('*', authMiddleware);

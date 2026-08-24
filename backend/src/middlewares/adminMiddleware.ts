@@ -1,30 +1,29 @@
 import type { MiddlewareHandler } from 'hono';
 import { AppError, ForbiddenError } from '../utils/AppError';
-import pool from '../models/db';
-import { UserRepository } from '../models/userRepository';
+import { logger } from '../utils/logger';
 
 /**
- * The single question this middleware asks the database.
+ * The service-layer authorization check this gate consumes.
  *
- * Injected rather than imported so tests can pass a stub: `mock.module()` is
- * process-global within a tier and cannot be undone, which is what made
- * `avatarUpload.test.ts` order-dependent (issue #467). Same
- * implementation/default-parameter split as `AvatarStore` / `defaultAvatarStore`.
+ * Structurally satisfied by `userService`, which is what the composition root
+ * injects. Declared as a one-method interface rather than importing the service
+ * type so the middleware depends on the capability it needs, and so a unit test
+ * can pass a plain object — `mock.module()` is process-global within a tier and
+ * cannot be undone, which is what made `avatarUpload.test.ts` order-dependent
+ * (issue #467).
  */
 export interface AdminChecker {
   isAdmin(userId: string): Promise<boolean>;
 }
 
-const defaultAdminChecker = (): AdminChecker => new UserRepository(pool);
-
 /**
  * Gate for `/api/v1/admin/*`, the authorization base for the admin monitoring
  * backend (#280).
  *
- * Authority is `users.is_admin`, read fresh from the database on every request.
- * The JWT is deliberately not involved: `JwtPayload` carries only `{ userId,
- * name }`, and putting the flag in the token would mean a revoked admin keeps
- * their access until the token expires.
+ * A pure HTTP adapter: it resolves the caller, asks the service layer one
+ * question, and maps the answer onto a status code. It holds no repository and
+ * opens no database handle of its own — the decision, and the freshness
+ * guarantee behind it, belong to `userService.isAdmin`.
  *
  * There is intentionally no `SYSTEM_ADMIN_EMAILS` env allow-list, which #565
  * originally proposed. `PATCH /api/v1/users/me` lets any authenticated user
@@ -35,9 +34,7 @@ const defaultAdminChecker = (): AdminChecker => new UserRepository(pool);
  * privilege escalation. Bootstrapping is a DB operation instead; see
  * docs/DEVELOPMENT.md.
  */
-export const makeAdminMiddleware = (
-  checker: AdminChecker = defaultAdminChecker(),
-): MiddlewareHandler => async (c, next) => {
+export const makeAdminMiddleware = (checker: AdminChecker): MiddlewareHandler => async (c, next) => {
   // Defence in depth against a mis-mount. `ContextVariableMap.user` is declared
   // non-optional, so TypeScript believes this is always set; if `authMiddleware`
   // did not actually run, the unchecked read would surface as a 500 rather than
@@ -48,9 +45,10 @@ export const makeAdminMiddleware = (
   }
 
   if (!(await checker.isAdmin(authUser.userId))) {
-    // The denial itself is a signal #280's monitoring backend will want. userId
-    // and path only — never the email or the token.
-    console.warn(`ADMIN DENIED: userId=${authUser.userId} path=${c.req.path}`);
+    // The denial itself is a signal #280's monitoring backend will want, and it
+    // reaches the recent-log buffer #566 added. userId and path only — never the
+    // email or the token.
+    logger.warn({ userId: authUser.userId, path: c.req.path }, 'admin access denied');
     throw new ForbiddenError();
   }
 
