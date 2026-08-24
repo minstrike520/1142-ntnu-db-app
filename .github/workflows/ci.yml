@@ -68,6 +68,15 @@ jobs:
       - uses: dorny/paths-filter@v4
         id: filter
         with:
+          # Default 'some' quantifier silently ignores '!'-prefixed patterns
+          # (a file matches if it matches ANY listed pattern, negated ones
+          # included as just another alternative) -- it does NOT subtract
+          # them. That turned the CLAUDE.md exclusions below into a false
+          # match: any file outside 'frontend/**/CLAUDE.md' satisfies the
+          # negated pattern taken alone, so unrelated changes (e.g. under
+          # .claude/) were matching both frontend and backend. This makes a
+          # match require a positive pattern AND no negated pattern.
+          predicate-quantifier: some-with-excludes
           # The root workspace files are load-bearing for BOTH packages now that
           # every job installs from the single root lockfile. Without them here,
           # a PR touching only pnpm-lock.yaml, the `overrides` block, or the root

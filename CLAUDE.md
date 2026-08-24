@@ -9,8 +9,8 @@ This is a real-time group chat application built as a database course project. I
 
 | File | Description |
 |------|-------------|
-| [docker-compose.yml](docker-compose.yml) | Defines the local three-service development stack: `db` (PostgreSQL 18), `backend` (Bun + Hono), and `frontend` (Next.js) |
-| [docker-compose.prod.yml](docker-compose.prod.yml) | Defines the local three-service production stack with optimized builds and Cloudflare Tunnel |
+| [docker-compose.yml](docker-compose.yml) | Defines the local four-service development stack: `db` (PostgreSQL 18), `redis` (Redis 8), `backend` (Bun + Hono), and `frontend` (Next.js) |
+| [docker-compose.prod.yml](docker-compose.prod.yml) | Defines the local four-service production stack with optimized builds and Cloudflare Tunnel |
 | [.env.example](.env.example) | Template for environment variables. Must be copied to `.env` in the root folder before local runs |
 | [docs/README.md](docs/README.md) | Index of the API, schema, setup and release documentation |
 
