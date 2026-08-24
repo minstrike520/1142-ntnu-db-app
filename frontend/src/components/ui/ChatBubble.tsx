@@ -40,7 +40,7 @@ export interface ChatBubbleProps {
 
 // Kept outside the component: a conditional expression inside a component-
 // level try/catch (or a try/finally) makes the React Compiler skip the whole
-// component (see docs/frontend-react-render-optimization.md).
+// component.
 const toErrorMessage = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
 

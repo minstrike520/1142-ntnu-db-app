@@ -35,6 +35,10 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
+      # Pass-through only, deliberately not `${LOG_LEVEL:-info}`: the logger
+      # already defaults to info, and a bare name keeps an unset host variable
+      # unset in the container instead of setting it to the empty string.
+      - LOG_LEVEL
       # The dev stack is reached directly on the published ports, with nothing in
       # front to write X-Forwarded-For, so no hop is trusted here. Both names are
       # pass-through only: set TRUST_PROXY_HOPS on the host if you put a proxy

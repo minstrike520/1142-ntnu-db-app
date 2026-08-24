@@ -48,4 +48,9 @@ This directory contains the Next.js 16 + React 19 client web application. It inc
 - Any configuration exposed to the browser must be prefixed with `NEXT_PUBLIC_`.
 - Under Docker Compose, `NEXT_PUBLIC_API_URL` should point to `http://localhost:4005` (the host-facing backend port) to enable browser websocket and REST connections.
 
+### 6. Frequently Used Commands
+- Run a single test file quietly: `npx vitest run <file> --reporter=dot`
+- Type check without building: `pnpm exec tsc --noEmit`
+- Lint: `pnpm run lint`
+
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
