@@ -34,6 +34,8 @@ export interface User {
   createdAt: Date;
   deletedAt?: Date | null;
   roomOrder?: Record<string, string[]>;
+  /** Grants access to `/api/v1/admin/*`; never included in API responses. */
+  isAdmin: boolean;
 }
 
 /** Safe public projection of a user — no credentials. */

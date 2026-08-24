@@ -24,6 +24,8 @@
 | `app_theme` | VARCHAR(10)| UI 主題偏好設定 | NOT NULL, 預設值: 'light', CHECK (app_theme IN ('light', 'dark')) |
 | `notify_desktop` | BOOLEAN | 是否啟用桌面通知 | NOT NULL, 預設值: TRUE |
 | `notify_sound` | BOOLEAN | 是否啟用聲音通知 | NOT NULL, 預設值: TRUE |
+| `room_order` | JSONB | 各資料夾內的聊天室排序（API 欄位：`roomOrder`） | NOT NULL, 預設值: `'{}'` |
+| `is_admin` | BOOLEAN | 是否可存取 `/api/v1/admin/*`；無法經由 HTTP 設定 | NOT NULL, 預設值: FALSE |
 
 #### `chat_rooms` (聊天室)
 | 欄位名稱 | 類型 | 說明 | 條件約束 |
