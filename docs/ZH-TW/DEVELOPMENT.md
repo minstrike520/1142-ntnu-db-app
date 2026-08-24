@@ -91,20 +91,37 @@ supertest 相容測試使用。Socket.IO ping interval 為 25 秒、ping timeout
 20 秒，因此 Bun `idleTimeout` 必須大於此視窗。
 
 持久化訊息命令走 REST 並必須帶 `Idempotency-Key`；編輯與收回另需
-`If-Match`。連線後客戶端以最後 cursor 呼叫 `/api/v1/sync`。最小本機
-smoke check：
+`If-Match`。連線後客戶端以最後 cursor 呼叫 `/api/v1/sync`。
+
+`backend/scripts/smoke.ts`（`pnpm --filter near-chat-backend run smoke`，或在
+`backend/` 下執行 `bun run smoke`）是對執行中 stack 的自動化即時通訊 smoke
+測試。它會註冊一個用完即丟的使用者，依序驗證健康檢查、socket 連線並收到
+`realtime_ready`、可靠發送（重送同一個 `Idempotency-Key` 只會產生一則訊息）、
+斷線後靠 sync cursor 補齊變更，以及超限的驗證請求會回傳
+`429`／`TOO_MANY_REQUESTS`。目標位址讀取自 `SMOKE_API_URL`（預設
+`http://localhost:4005`），任何一項失敗都會印出可行動的診斷訊息並以非零結束。
+
+最後一項檢查需要限流器實際運作，而 `.env.example` 為了日常開發預設帶
+`RATE_LIMIT_DISABLED=true`，因此請覆寫該值再啟動 smoke 用的 stack，而不是直接
+跑預設的：
 
 ```bash
-curl -sS http://localhost:4005/api/v1/health
-# 完成註冊／登入並建立聊天室後，使用相同 key 重送訊息：
-curl -sS -X POST http://localhost:4005/api/v1/rooms/<roomId>/messages \
-  -H "Authorization: Bearer <token>" \
-  -H "Idempotency-Key: smoke-create-1" \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"smoke"}'
-curl -sS "http://localhost:4005/api/v1/sync?cursor=0&limit=100" \
-  -H "Authorization: Bearer <token>"
+RATE_LIMIT_DISABLED=false docker compose up -d --wait --force-recreate backend
+SMOKE_API_URL=http://localhost:4005 pnpm --filter near-chat-backend run smoke
 ```
+
+`--force-recreate backend` 是讓覆寫生效的關鍵：Compose 不會只因為插值後的環境
+變數改變，就重啟一個已在執行中的容器。
+
+另外可將 `SMOKE_STATE_FILE` 設為某個路徑，用以驗證持久狀態能否跨 restart 存活。
+第一次執行會把 token、room 與 message ID 寫入該檔；之後以同一個檔案再執行時，
+會改用存下來的 token 重新 sync，並斷言 restart 前的那則訊息仍然回傳 —— 因此
+restart 若真的遺失資料就會失敗，而不是靠新建立的狀態矇混通過。
+
+CI 的 `ci-backend.yml` 會對 development image（`docker-compose.yml`）與
+production image（`docker-compose.release.yml`）各執行一次同一份腳本，且各自
+在 graceful restart backend 容器前後都跑一次、共用同一個 `SMOKE_STATE_FILE`，
+因此映像本身的問題或 restart 造成的已提交狀態遺失都會讓建置失敗。
 
 `MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS` 分別控制單機
 session、presence 重連寬限與 typing indication TTL。多節點 presence、全域
