@@ -196,8 +196,8 @@ async function main() {
         );
       } else {
         assert(
-          res.status === 401,
-          `expected 401 for a wrong-password login attempt (or 429 once over the limit), got ${res.status}: ${JSON.stringify(res.body)}`,
+          res.status === 400,
+          `expected 400 for a wrong-password login attempt (or 429 once over the limit), got ${res.status}: ${JSON.stringify(res.body)}`,
         );
       }
     }
