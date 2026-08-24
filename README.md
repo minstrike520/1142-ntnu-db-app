@@ -129,7 +129,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 ### 3. Run Database Migrations
 Run the pending database migrations on the production container:
 ```bash
-docker compose -f docker-compose.prod.yml exec backend pnpm run migrate:up
+docker compose -f docker-compose.prod.yml exec backend bun run migrate:up
 ```
 
 ### 4. Stopping Services

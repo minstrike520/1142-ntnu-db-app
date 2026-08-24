@@ -47,3 +47,106 @@ jobs:
           package: near-chat-backend
           bun: 'true'
       - run: pnpm --filter near-chat-backend build
+
+  # The release deploy path had never been executed anywhere: release-stack.yml
+  # only copies docker-compose.release.yml into the bundle, so nothing ever
+  # started it, and the compose commands drifted away from the image they run
+  # until neither could have booted (issue #558). The unit tier now checks that
+  # contract statically; this job is the one place the two are actually run
+  # together. It is also the only CI coverage of Dockerfile.prod building at all.
+  #
+  # Deliberately a job in this lane rather than a new top-level workflow: ci.yml
+  # calls this file as a reusable workflow, so the `backend` result it feeds into
+  # `required-checks` already covers every job here. A new lane would need its own
+  # detect output, gate entry and branch-protection change to be enforced at all.
+  # Gated on run-build like the job above, so docs-only PRs still skip it.
+  release-compose:
+    name: release compose boots on the production image
+    if: inputs.run-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # ~2-4 min cold. Left uncached on purpose: a stale layer cache is exactly
+      # what would hide a runtime/layout drift from this job.
+      - name: Build the production backend image
+        run: docker build -f backend/Dockerfile.prod -t near-chat-backend:ci .
+
+      - name: Write a throwaway release env file
+        run: |
+          set -euo pipefail
+          # Compose interpolates the whole file, so every `${VAR:?}` needs a value
+          # even though only db, migrate and backend are started here. Written to
+          # RUNNER_TEMP rather than the workspace so no .env can be swept into an
+          # artifact, and passed with --env-file, which replaces the default
+          # ./.env discovery entirely.
+          cat > "$RUNNER_TEMP/release.env" <<'EOF'
+          BACKEND_IMAGE=near-chat-backend:ci
+          FRONTEND_IMAGE=frontend-is-not-started-in-this-job
+          POSTGRES_USER=near
+          POSTGRES_PASSWORD=near
+          POSTGRES_DB=near_chat
+          DATABASE_URL=postgresql://near:near@db:5432/near_chat
+          JWT_SECRET=ci-only-value-not-a-real-secret
+          CORS_ORIGINS=http://localhost:3005
+          EOF
+
+      - name: Start db, migrate and backend from the release compose
+        run: |
+          set -euo pipefail
+          # No `--wait`: it does not cope with a service that is meant to exit.
+          # `service_completed_successfully` already holds the backend until the
+          # migration finishes, and a failed migration makes `up` itself exit
+          # non-zero, which covers the "migrate must succeed" criterion directly.
+          docker compose --env-file "$RUNNER_TEMP/release.env" \
+            -f docker-compose.release.yml up -d db migrate backend
+
+      - name: Assert the migrate service exited cleanly
+        run: |
+          set -euo pipefail
+          # `ps` without -a hides containers that have already exited.
+          container="$(docker compose --env-file "$RUNNER_TEMP/release.env" \
+            -f docker-compose.release.yml ps -aq migrate)"
+          exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$container")"
+          echo "migrate exit code: $exit_code"
+          [[ "$exit_code" == "0" ]]
+
+      - name: Assert the backend serves HTTP
+        run: |
+          set -euo pipefail
+          # No healthcheck and no health route, so probe any path. A response
+          # carrying the security headers proves the Hono middleware chain ran,
+          # not merely that something is holding the port. The status itself is
+          # deliberately not asserted: an unmatched path is a 404 by design.
+          for attempt in {1..30}; do
+            if curl -sS --max-time 5 -o /dev/null -D "$RUNNER_TEMP/probe.headers" \
+              http://localhost:4005/api/v1/ci-startup-probe 2>/dev/null \
+              && grep -qi '^content-security-policy:' "$RUNNER_TEMP/probe.headers"; then
+              echo "backend answered on attempt ${attempt}:"
+              cat "$RUNNER_TEMP/probe.headers"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::backend did not serve an HTTP response on :4005 within 30s"
+          exit 1
+
+      - name: Assert re-applying the bundle is a no-op
+        run: |
+          set -euo pipefail
+          # Re-running `up -d` is the ordinary way to apply an upgraded bundle, so
+          # migrate:up has to stay idempotent against an already-migrated schema.
+          docker compose --env-file "$RUNNER_TEMP/release.env" \
+            -f docker-compose.release.yml up -d db migrate backend
+
+      - name: Collect service logs
+        if: failure()
+        run: |
+          docker compose --env-file "$RUNNER_TEMP/release.env" \
+            -f docker-compose.release.yml logs --no-color db migrate backend
+
+      - name: Tear the stack down
+        if: always()
+        run: |
+          docker compose --env-file "$RUNNER_TEMP/release.env" \
+            -f docker-compose.release.yml down -v --remove-orphans

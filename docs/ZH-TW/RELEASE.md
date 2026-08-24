@@ -78,7 +78,11 @@ cp near-chat.env.example .env
 docker compose --env-file .env -f docker-compose.release.yml up -d
 ```
 
-Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行一次 `pnpm run migrate:up`，再啟動 backend 與 frontend。PostgreSQL 資料與使用者上傳檔案仍由部署環境的 volume 持有，不會放入 image 或 Release archive。
+Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行一次 `bun run migrate:up`，接著以 `bun src/index.ts` 啟動 backend，最後啟動 frontend。backend 的兩個命令都只使用 bun：backend production image 以 bun runtime 直接執行 TypeScript 原始碼，其中沒有 `node`、沒有 `pnpm`，也沒有建置產物。PostgreSQL 資料與使用者上傳檔案仍由部署環境的 volume 持有，不會放入 image 或 Release archive。
+
+升級 bundle 時請使用 `up -d`，不要用 `restart`：`docker compose restart backend` 不會重新評估 `depends_on`，因此不會執行 `migrate` service，會讓 backend 跑在尚未套用 migration 的 schema 上。
+
+`v2.1.1`（含）以前發布的 bundle，其 `docker-compose.release.yml` 中 backend 的啟動命令（`pnpm run migrate:up`、`node dist/backend/src/index.js`）在它所固定的 backend image 中並不存在。已發布的 tag 不可變更，因此這些 archive 無法就地修正——若要部署這些版本，請自行將該兩個 `command:` 改為上述 bun-only 形式。
 
 正式部署應把 `BACKEND_IMAGE` 與 `FRONTEND_IMAGE` 固定為 manifest 記錄的 digest 參照。Frontend image 預設以 `http://localhost:4005` 建置 API URL；現有前端 runtime 邏輯會對標準 `3005`／`4005` host port 做對應，若公開拓撲不同，需另行設定建置參數。
 
