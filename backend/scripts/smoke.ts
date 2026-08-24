@@ -49,6 +49,14 @@ async function run(name: string, fn: () => Promise<void>): Promise<void> {
   }
 }
 
+/**
+ * A backend that accepts the connection but never answers — a deadlocked
+ * query, a wedged handler — would otherwise hang the whole suite on one
+ * request until the Actions job timeout, producing none of the per-check
+ * diagnostics this script promises. Every call therefore aborts on its own.
+ */
+const REQUEST_TIMEOUT_MS = Number(process.env.SMOKE_REQUEST_TIMEOUT_MS ?? 10_000);
+
 async function api(
   path: string,
   init: RequestInit & { token?: string } = {},
@@ -56,7 +64,22 @@ async function api(
   const headers = new Headers(init.headers);
   headers.set('Content-Type', 'application/json');
   if (init.token) headers.set('Authorization', `Bearer ${init.token}`);
-  const res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+  const method = init.method ?? 'GET';
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...init,
+      headers,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(
+        `${method} ${path} did not respond within ${REQUEST_TIMEOUT_MS}ms — the backend accepted the connection but never answered`,
+      );
+    }
+    throw err;
+  }
   const text = await res.text();
   let body: any = text;
   try {
@@ -189,6 +212,25 @@ async function main() {
 
   await run('sync cursor repairs a change missed while disconnected', async () => {
     assert(socket, 'no socket available from the connect check');
+
+    // Take the cursor the client would have held at disconnect time. Resuming
+    // from this non-zero value is the path a real client takes; querying
+    // cursor=0 instead is a full resync, which would still pass even if /sync
+    // ignored the cursor entirely or reported nextCursor wrongly.
+    const before = await api('/api/v1/sync?cursor=0&limit=200', { token });
+    assert(
+      before.status === 200,
+      `expected 200 taking the pre-disconnect cursor, got ${before.status}: ${JSON.stringify(before.body)}`,
+    );
+    const resumeCursor = before.body.nextCursor;
+    assert(
+      typeof resumeCursor === 'number' && resumeCursor > 0,
+      `expected a positive nextCursor after the earlier sends, got ${JSON.stringify(resumeCursor)}`,
+    );
+    const alreadyApplied: string[] = (before.body.changes ?? [])
+      .map((change: { message?: { messageId?: string } }) => change.message?.messageId)
+      .filter((id: string | undefined): id is string => Boolean(id));
+
     socket.close();
     const key = `smoke-offline-${RUN_ID}`;
     const offline = await api(`/api/v1/rooms/${roomId}/messages`, {
@@ -205,12 +247,20 @@ async function main() {
     const reconnected = await connectSocket(token);
     reconnected.close();
 
-    const sync = await api('/api/v1/sync?cursor=0&limit=100', { token });
+    const sync = await api(`/api/v1/sync?cursor=${resumeCursor}&limit=100`, { token });
     assert(sync.status === 200, `expected 200 from /sync, got ${sync.status}: ${JSON.stringify(sync.body)}`);
     const changes: Array<{ message?: { messageId?: string } }> = sync.body.changes ?? [];
     assert(
       changes.some((change) => change.message?.messageId === offline.body.messageId),
-      `sync cursor did not return the message sent while disconnected (messageId=${offline.body.messageId}); got ${changes.length} change(s)`,
+      `resuming from cursor ${resumeCursor} did not return the message sent while disconnected (messageId=${offline.body.messageId}); got ${changes.length} change(s)`,
+    );
+    // An incremental resume must not replay what the client already had.
+    const replayed = changes
+      .map((change) => change.message?.messageId)
+      .filter((id): id is string => Boolean(id) && alreadyApplied.includes(id!));
+    assert(
+      replayed.length === 0,
+      `resuming from cursor ${resumeCursor} replayed ${replayed.length} change(s) the client had already applied (${replayed.join(', ')}) — /sync is not honouring the cursor`,
     );
   });
 
