@@ -207,6 +207,21 @@ docker compose exec backend bun run db:seed
 - **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`（預設只回滾最近一筆遷移；可加上數量回滾更多筆，例如 `migrate:down 3`）
 - **寫入種子資料**：`docker compose exec backend bun run db:seed`
 
+#### 指定要遷移的資料庫
+
+`migrate:up` / `migrate:down` 接受 `--database-url=<connection string>`，優先於 `DATABASE_URL`：
+
+```bash
+bun src/models/migrate.ts up --database-url=postgresql://postgres:postgres@localhost:5436/ntnu_test
+```
+
+未帶此參數時會退回 `DATABASE_URL`，因此上面的既有指令行為不變。但把目標寫進指令裡是比較安全的習慣：
+bun 會自動載入根目錄的 `.env`，所以在專案目錄直接執行 `bun run migrate:up`，動到的是該檔案當下所指向的資料庫。
+
+若目標 host 不是 `localhost`、`127.0.0.1`、`::1`、`db` 或 `db-test`，則必須先確認才會繼續 ——
+在提示字元輸入資料庫名稱，或在非互動環境改帶 `--yes`；確認發生在建立連線與加鎖之前。
+兩種情況下 runner 都會先輸出 `MIGRATE: target=<host>/<database>`；連線字串本身帶有帳密，任何情況下都不會寫進 log。
+
 ### 授予管理員權限
 
 `/api/v1/admin/*` 由 `users.is_admin` 欄位控管。所有帳號（含種子資料）建立時

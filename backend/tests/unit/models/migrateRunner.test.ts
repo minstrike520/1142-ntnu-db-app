@@ -6,7 +6,10 @@ import {
   assertMigrationOrder,
   compareMigrationFileNames,
   getNumericPrefix,
+  isLocalDatabaseTarget,
   loadMigrationFiles,
+  parseMigrateArgs,
+  resolveDatabaseUrl,
   splitMigrationSql,
 } from '../../../src/models/migrate';
 
@@ -197,5 +200,102 @@ describe('loadMigrationFiles', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The target of a migration is a destructive choice, so it is an explicit input
+ * rather than something read off the ambient environment (#597). These cases
+ * pin the three parts of that: how the flag is parsed, when the environment may
+ * still stand in for it, and which hosts are allowed to skip confirmation.
+ */
+describe('parseMigrateArgs', () => {
+  it('reads the action and its positional argument', () => {
+    expect(parseMigrateArgs(['down', '3'])).toEqual({
+      action: 'down',
+      argument: '3',
+      databaseUrl: undefined,
+      assumeYes: false,
+    });
+  });
+
+  it('accepts --database-url joined by = or separated by a space', () => {
+    const url = 'postgresql://u:p@example.test:5432/db';
+
+    expect(parseMigrateArgs(['up', `--database-url=${url}`]).databaseUrl).toBe(url);
+    expect(parseMigrateArgs(['up', '--database-url', url]).databaseUrl).toBe(url);
+  });
+
+  it('does not mistake an option for the positional argument', () => {
+    // `down --yes 3` and `down 3 --yes` have to mean the same thing, or a
+    // rollback silently uses the default count of 1.
+    expect(parseMigrateArgs(['down', '--yes', '3'])).toEqual({
+      action: 'down',
+      argument: '3',
+      databaseUrl: undefined,
+      assumeYes: true,
+    });
+  });
+
+  it('rejects --database-url with no value rather than falling back silently', () => {
+    expect(() => parseMigrateArgs(['up', '--database-url'])).toThrow(
+      /requires a connection string/,
+    );
+    expect(() => parseMigrateArgs(['up', '--database-url='])).toThrow(
+      /requires a connection string/,
+    );
+  });
+
+  it('rejects an unknown option instead of treating it as the action', () => {
+    expect(() => parseMigrateArgs(['up', '--force'])).toThrow(/Unknown option/);
+  });
+});
+
+describe('resolveDatabaseUrl', () => {
+  const envUrl = 'postgresql://postgres:postgres@db:5432/chatdb';
+  const flagUrl = 'postgresql://postgres:postgres@localhost:5436/ntnu_test';
+
+  it('prefers the flag over DATABASE_URL', () => {
+    expect(resolveDatabaseUrl(flagUrl, { DATABASE_URL: envUrl })).toBe(flagUrl);
+  });
+
+  it('falls back to DATABASE_URL, keeping the compose and CI flows working', () => {
+    expect(resolveDatabaseUrl(undefined, { DATABASE_URL: envUrl })).toBe(envUrl);
+  });
+
+  it('works with no DATABASE_URL at all when the flag is given', () => {
+    expect(resolveDatabaseUrl(flagUrl, {})).toBe(flagUrl);
+  });
+
+  it('refuses to guess a target when neither is present', () => {
+    expect(() => resolveDatabaseUrl(undefined, {})).toThrow(/No migration target/);
+  });
+});
+
+describe('isLocalDatabaseTarget', () => {
+  it('accepts the operator machine and the compose service names', () => {
+    for (const url of [
+      'postgresql://postgres:postgres@localhost:5436/ntnu_test',
+      'postgresql://postgres:postgres@127.0.0.1:5433/ntnu_test',
+      'postgresql://postgres:postgres@[::1]:5432/chatdb',
+      'postgresql://chatuser:chatpassword@db:5432/chatdb',
+      'postgresql://postgres:postgres@db-test:5432/ntnu_test',
+    ]) {
+      expect(isLocalDatabaseTarget(url)).toBe(true);
+    }
+  });
+
+  it('treats anything else as remote, including lookalike hostnames', () => {
+    for (const url of [
+      'postgresql://u:p@db.example.com:5432/chatdb',
+      'postgresql://u:p@notlocalhost:5432/chatdb',
+      'postgresql://u:p@10.0.0.5:5432/chatdb',
+    ]) {
+      expect(isLocalDatabaseTarget(url)).toBe(false);
+    }
+  });
+
+  it('treats an unparsable value as remote rather than waving it through', () => {
+    expect(isLocalDatabaseTarget('not-a-url')).toBe(false);
   });
 });
