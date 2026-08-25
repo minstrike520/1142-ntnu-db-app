@@ -100,7 +100,12 @@ services:
       # Defaulted rather than required so a checkout whose .env predates this
       # service still starts. Consumed by src/utils/redis.ts, which treats an
       # unset or unreachable Redis as a degraded mode rather than a boot failure.
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      #
+      # `-` rather than `:-`: that degraded mode is a supported deployment, and
+      # an empty REDIS_URL is how .env.example says to ask for it. `:-` would
+      # substitute the default for an empty value too, leaving the opt-out
+      # unreachable for anyone running the documented compose flow.
+      - REDIS_URL=${REDIS_URL-redis://redis:6379}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}

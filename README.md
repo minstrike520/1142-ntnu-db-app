@@ -73,7 +73,7 @@ Here are the key environment parameters you can configure in `.env`:
 | Parameter | Description | Default Value |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | PostgreSQL connection URL | `postgresql://chatuser:chatpassword@db:5432/chatdb` |
-| `REDIS_URL` | Redis connection URL, resolved inside the backend container. Optional — leaving it unset runs realtime single-node instead of failing to start | `redis://redis:6379` |
+| `REDIS_URL` | Redis connection URL, resolved inside the backend container. Optional — an empty value runs realtime single-node instead of failing to start. Under Compose, blank it rather than deleting the line, which falls back to the default | `redis://redis:6379` |
 | `JWT_SECRET` | Secret key for signing JWT tokens | `dev_secret_key` |
 | `RATE_LIMIT_DISABLED` | Disables request rate limiting for testing | `true` (Set `false` or omit in production) |
 | `TRUST_PROXY_HOPS` | How many reverse proxies you operate sit in front of the backend. Rate limiting then reads the client IP that many entries from the **right** of `X-Forwarded-For`, so entries a caller prepends cannot select a bucket. Leave unset for the dev stack, which is reached directly; `docker-compose.prod.yml` pins `1` for cloudflared | *(Empty — trust nothing)* |

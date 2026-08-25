@@ -59,7 +59,12 @@ services:
       # wrong. This one resolves to the same string in both stacks (same service
       # name, same container port), and pointing a deployment at a managed Redis
       # — usually `rediss://` — is an explicit requirement of issue #471.
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      #
+      # `-` rather than `:-`, for the same reason as docker-compose.yml: an
+      # empty REDIS_URL reaches the container empty, and the backend reads that
+      # as "no Redis" and runs realtime single-node — a supported deployment,
+      # not a misconfiguration to be defaulted away.
+      - REDIS_URL=${REDIS_URL-redis://redis:6379}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
