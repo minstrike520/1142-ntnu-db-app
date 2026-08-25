@@ -226,6 +226,26 @@ docker compose exec backend bun run db:seed
 - **Rollback migrations**: `docker compose exec backend bun run migrate:down` (rolls back the single most recent migration; pass a count to undo more, e.g. `migrate:down 3`)
 - **Seed database**: `docker compose exec backend bun run db:seed`
 
+#### Choosing which database to migrate
+
+`migrate:up` / `migrate:down` accept `--database-url=<connection string>`, which
+takes precedence over `DATABASE_URL`:
+
+```bash
+bun src/models/migrate.ts up --database-url=postgresql://postgres:postgres@localhost:5436/ntnu_test
+```
+
+Without the flag the runner falls back to `DATABASE_URL`, so the commands above
+are unchanged. Naming the target in the command is the safer habit: bun loads
+the root `.env` automatically, so `bun run migrate:up` in the project directory
+migrates whatever that file happens to point at.
+
+A target whose host is not `localhost`, `127.0.0.1`, `::1`, `db` or `db-test`
+must be confirmed before anything is opened or locked — type the database name
+at the prompt, or pass `--yes` for a non-interactive run. Either way the runner
+prints `MIGRATE: target=<host>/<database>` first; the connection string itself,
+which carries credentials, is never logged.
+
 ### Granting Admin Access
 
 `/api/v1/admin/*` is gated by the `users.is_admin` column. Every account starts
