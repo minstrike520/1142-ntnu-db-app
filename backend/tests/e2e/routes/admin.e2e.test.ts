@@ -2,6 +2,8 @@ import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
 import request from 'supertest';
 import { resetDb } from '../../helpers/resetDb';
 import { testPool } from '../../helpers/testPool';
+import { createLogger, recentLogs } from '../../../src/utils/logger';
+import { slowQueries } from '../../../src/utils/slowQueryStore';
 
 let app: any;
 
@@ -100,5 +102,198 @@ describe('Admin gate E2E', () => {
     // authMiddleware rejects the deleted account first; the admin gate is a
     // second, independent soft-delete filter behind it.
     expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * The monitoring endpoints render three process-wide buffers, and under the test
+ * runner two of them are empty: `LOG_LEVEL` defaults to `silent`, so pino writes
+ * no records, and nothing in a test run is slow enough to be a slow query. An
+ * earlier version of this suite asserted against those empty arrays and passed
+ * even when `/logs` ignored `?limit=` entirely — so each buffer is seeded here
+ * with records the assertions can actually bite on.
+ *
+ * Seeding the real buffers rather than injecting fakes is deliberate: these are
+ * the exact objects the running app hands the route, so this covers the wiring
+ * as well as the rendering. Both are bounded rings, so the handful of records
+ * added here cannot grow anything.
+ */
+describe('Admin monitoring endpoints E2E', () => {
+  const ENDPOINTS = ['/api/v1/admin/metrics', '/api/v1/admin/logs', '/api/v1/admin/slow-queries'];
+
+  let adminToken: string;
+
+  const seedLogs = (count: number): void => {
+    for (let index = 0; index < count; index += 1) {
+      recentLogs.push(
+        JSON.stringify({ level: 30, time: Date.now() + index, msg: `seeded-record-${index}` }),
+      );
+    }
+  };
+
+  const seedSlowQueries = (count: number): void => {
+    for (let index = 0; index < count; index += 1) {
+      slowQueries.push({
+        query: `SELECT * FROM seeded_table WHERE id = ? -- ${index}`,
+        durationMs: 150 + index,
+        at: Date.now() + index,
+      });
+    }
+  };
+
+  beforeEach(async () => {
+    await resetDb();
+    const { token, userId } = await registerUser('monitor-admin@example.com');
+    await promote(userId);
+    adminToken = token;
+  });
+
+  const asAdmin = (path: string) =>
+    request(app).get(path).set('Authorization', `Bearer ${adminToken}`);
+
+  it('refuses every endpoint without authentication', async () => {
+    for (const path of ENDPOINTS) {
+      expect((await request(app).get(path)).status).toBe(401);
+    }
+  });
+
+  it('refuses every endpoint for an authenticated non-admin', async () => {
+    const { token } = await registerUser('monitor-plain@example.com');
+
+    for (const path of ENDPOINTS) {
+      const res = await request(app).get(path).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('FORBIDDEN');
+    }
+  });
+
+  it('tells intermediaries never to cache a monitoring answer', async () => {
+    // A stale 200 during an incident is indistinguishable from a system that
+    // stopped changing.
+    for (const path of ENDPOINTS) {
+      expect((await asAdmin(path)).headers['cache-control']).toBe('no-store');
+    }
+  });
+
+  it('reports request and process metrics', async () => {
+    const res = await asAdmin('/api/v1/admin/metrics');
+
+    expect(res.status).toBe(200);
+    expect(res.body.requests.totalRequests).toBeGreaterThan(0);
+    expect(res.body.requests.statusClasses['2xx']).toBeGreaterThan(0);
+    expect(res.body.requests.latency).toMatchObject({
+      count: expect.any(Number),
+      avgMs: expect.any(Number),
+      p50Ms: expect.any(Number),
+      p95Ms: expect.any(Number),
+      p99Ms: expect.any(Number),
+      maxMs: expect.any(Number),
+    });
+    expect(res.body.process.memory.rssBytes).toBeGreaterThan(0);
+    expect(res.body.process.uptimeSeconds).toBeGreaterThan(0);
+    // Null on the first sample of a process, a number once there is an earlier
+    // point to difference against — both are correct, neither is absent.
+    expect(['number', 'object']).toContain(typeof res.body.process.cpu.percent);
+    expect(res.body.at).toBeGreaterThan(0);
+  });
+
+  it('counts the failed admin attempts it just served', async () => {
+    const before = (await asAdmin('/api/v1/admin/metrics')).body.requests.statusClasses['4xx'];
+    await request(app).get('/api/v1/admin/metrics');
+
+    const after = (await asAdmin('/api/v1/admin/metrics')).body.requests.statusClasses['4xx'];
+
+    // Proves the endpoint reads the live buffer the timing middleware feeds,
+    // rather than a snapshot taken at startup.
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it('returns the recent log buffer, oldest first', async () => {
+    seedLogs(5);
+
+    const res = await asAdmin('/api/v1/admin/logs');
+
+    expect(res.status).toBe(200);
+    expect(res.body.retained).toBeGreaterThanOrEqual(5);
+    expect(res.body.retained).toBeLessThanOrEqual(res.body.capacity);
+
+    const seeded = res.body.entries.filter((entry: { msg?: string }) =>
+      entry.msg?.startsWith('seeded-record-'),
+    );
+    expect(seeded.map((entry: { msg: string }) => entry.msg)).toEqual([
+      'seeded-record-0',
+      'seeded-record-1',
+      'seeded-record-2',
+      'seeded-record-3',
+      'seeded-record-4',
+    ]);
+  });
+
+  it('honours ?limit= and rejects one the buffer cannot satisfy', async () => {
+    seedLogs(5);
+
+    const full = await asAdmin('/api/v1/admin/logs');
+    const limited = await asAdmin('/api/v1/admin/logs?limit=2');
+
+    expect(limited.status).toBe(200);
+    expect(limited.body.entries).toHaveLength(2);
+    expect(full.body.entries.length).toBeGreaterThan(limited.body.entries.length);
+    // The newest two, since the window ends at the most recent record.
+    expect(limited.body.entries.map((entry: { msg: string }) => entry.msg)).toEqual([
+      'seeded-record-3',
+      'seeded-record-4',
+    ]);
+    expect(limited.body.capacity).toBe(full.body.capacity);
+
+    expect((await asAdmin(`/api/v1/admin/logs?limit=${full.body.capacity + 1}`)).status).toBe(400);
+    expect((await asAdmin('/api/v1/admin/logs?limit=0')).status).toBe(400);
+    expect((await asAdmin('/api/v1/admin/logs?limit=all')).status).toBe(400);
+  });
+
+  it('never hands out a credential through the log buffer', async () => {
+    // The buffer is served over HTTP, so pino's redaction is the only thing
+    // between a logged field and an endpoint that returns it. Written through a
+    // real logger at a real level, into the same process-wide store the route
+    // reads, rather than pushed in pre-serialized — redaction happens on the way
+    // in, so pushing a raw line would prove nothing.
+    const noisy = createLogger({
+      level: 'info',
+      pretty: false,
+      store: recentLogs,
+      stdout: { write: () => true } as unknown as NodeJS.WritableStream,
+    });
+    noisy.info({ password: 'hunter2', refreshToken: 'rt-secret' }, 'seeded credential record');
+
+    const res = await asAdmin('/api/v1/admin/logs');
+
+    const body = JSON.stringify(res.body);
+    expect(body).toInclude('seeded credential record');
+    expect(body).not.toInclude('hunter2');
+    expect(body).not.toInclude('rt-secret');
+    expect(body).toInclude('[redacted]');
+  });
+
+  it('returns the slow-query buffer with the threshold that defines it', async () => {
+    seedSlowQueries(3);
+
+    const res = await asAdmin('/api/v1/admin/slow-queries');
+
+    expect(res.status).toBe(200);
+    expect(res.body.thresholdMs).toBeGreaterThan(0);
+    expect(res.body.retained).toBeGreaterThanOrEqual(3);
+    expect(res.body.retained).toBeLessThanOrEqual(res.body.capacity);
+
+    const seeded = res.body.queries.filter((record: { query: string }) =>
+      record.query.startsWith('SELECT * FROM seeded_table'),
+    );
+    expect(seeded).toHaveLength(3);
+    for (const record of seeded) {
+      expect(record.durationMs).toBeGreaterThanOrEqual(res.body.thresholdMs);
+      expect(record.at).toBeGreaterThan(0);
+    }
+
+    const limited = await asAdmin('/api/v1/admin/slow-queries?limit=1');
+    expect(limited.body.queries).toHaveLength(1);
+    expect((await asAdmin('/api/v1/admin/slow-queries?limit=0')).status).toBe(400);
   });
 });
