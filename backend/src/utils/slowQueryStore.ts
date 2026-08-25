@@ -32,6 +32,18 @@ export interface SlowQueryStore {
   size(): number;
 }
 
+/**
+ * The threshold #280 names: anything slower is worth an operator's attention.
+ *
+ * Lives here rather than with the SQL instrumentation that applies it, because
+ * it is what defines the buffer's contents — "the queries in here are the ones
+ * slower than this" — and both the instrumentation and the admin endpoint that
+ * reports it alongside the records need it. `models/instrumentSql` re-exports
+ * it, so the layering runs one way: `models/` and `routes/` both depend on
+ * `utils/`, and `routes/` never reaches into `models/`.
+ */
+export const DEFAULT_SLOW_QUERY_THRESHOLD_MS = 100;
+
 /** Matches the "最近 100 筆" the parent issue (#280) asks the admin panel to show. */
 export const DEFAULT_SLOW_QUERY_CAPACITY = 100;
 
