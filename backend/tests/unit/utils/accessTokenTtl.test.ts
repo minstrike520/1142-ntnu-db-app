@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach } from 'bun:test';
 import {
   DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
-  getAccessTokenTtlSeconds,
   parseDurationSeconds,
 } from '../../../src/utils/accessTokenTtl';
+import { env } from '../../../src/config/env';
 
 const originalExpiresIn = process.env.JWT_EXPIRES_IN;
 
@@ -49,7 +49,7 @@ describe('parseDurationSeconds', () => {
   });
 });
 
-describe('getAccessTokenTtlSeconds', () => {
+describe('the resolved access token lifetime', () => {
   afterEach(() => {
     if (originalExpiresIn !== undefined) {
       process.env.JWT_EXPIRES_IN = originalExpiresIn;
@@ -60,12 +60,12 @@ describe('getAccessTokenTtlSeconds', () => {
 
   it('defaults to 15 minutes when JWT_EXPIRES_IN is unset', () => {
     delete process.env.JWT_EXPIRES_IN;
-    expect(getAccessTokenTtlSeconds()).toBe(DEFAULT_ACCESS_TOKEN_TTL_SECONDS);
+    expect(env().accessTokenTtlSeconds).toBe(DEFAULT_ACCESS_TOKEN_TTL_SECONDS);
     expect(DEFAULT_ACCESS_TOKEN_TTL_SECONDS).toBe(900);
   });
 
   it('honours a configured non-default lifetime', () => {
     process.env.JWT_EXPIRES_IN = '1h';
-    expect(getAccessTokenTtlSeconds()).toBe(3600);
+    expect(env().accessTokenTtlSeconds).toBe(3600);
   });
 });

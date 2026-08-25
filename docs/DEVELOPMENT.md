@@ -135,8 +135,10 @@ in `ci-backend.yml`, once before and once after gracefully restarting the
 backend container, sharing one `SMOKE_STATE_FILE` across the pair — so a broken
 image, or a restart that loses committed state, fails the build.
 
-`MAX_SESSIONS_PER_USER`, `PRESENCE_GRACE_MS`, and `TYPING_TTL_MS` control local
-session, presence-reconnect, and typing-indication limits. Multi-node presence,
+`MAX_SESSIONS_PER_USER`, `PRESENCE_GRACE_MS`, `TYPING_TTL_MS` and
+`SESSION_RESERVATION_TTL_MS` control local session, presence-reconnect,
+typing-indication and handshake-slot limits; like every other backend variable
+they are declared in `backend/src/config/env.ts`. Multi-node presence,
 global rate limits, and cross-node change fan-out remain outside this service.
 
 ### Production Ingress & Proxy Trust
@@ -199,6 +201,8 @@ before testing.
 1. **Frontend prefix**: Any environment variable that must be readable on the browser-side of Next.js must be prefixed with `NEXT_PUBLIC_`.
 2. **Production injection**: Production should not depend on a checked-in `.env` file. Inject settings through your hosting platform configuration instead (e.g. Vercel, AWS Secrets Manager).
 3. **Template maintenance**: When adding new environment variables, update `.env.example` to document them, leaving values blank or using placeholders.
+4. **Backend variables live in one module**: [`backend/src/config/env.ts`](../backend/src/config/env.ts) declares every variable the API server reads, with its parser and default, and is the authoritative list — read it rather than grepping for `process.env`. A new backend variable is added there, not at the call site.
+5. **Startup validation**: the server validates its environment once, at boot. A value it cannot use is logged (`Ignoring unusable environment values: …`) and replaced by its default; a missing `DATABASE_URL`, or a missing `JWT_SECRET` under `NODE_ENV=production`, exits non-zero instead of starting. A blank value counts as unset, because Compose passes a variable absent from `.env` through as an empty string.
 
 ---
 

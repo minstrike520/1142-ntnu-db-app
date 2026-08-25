@@ -123,8 +123,10 @@ production image（`docker-compose.release.yml`）各執行一次同一份腳本
 在 graceful restart backend 容器前後都跑一次、共用同一個 `SMOKE_STATE_FILE`，
 因此映像本身的問題或 restart 造成的已提交狀態遺失都會讓建置失敗。
 
-`MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS` 分別控制單機
-session、presence 重連寬限與 typing indication TTL。多節點 presence、全域
+`MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS`、
+`SESSION_RESERVATION_TTL_MS` 分別控制單機 session、presence 重連寬限、
+typing indication TTL 與握手名額保留時間；與其他後端變數一樣，宣告位置都在
+`backend/src/config/env.ts`。多節點 presence、全域
 限流與跨節點 change fan-out 仍不在本服務範圍內。
 
 ### 正式環境入口拓撲與代理信任
@@ -180,6 +182,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<tunnel-host>/api/v1/au
 1. **前端前綴**：任何需要在 Next.js 瀏覽器端讀取的環境變數，都必須加上 `NEXT_PUBLIC_` 前綴。
 2. **生產環境注入**：生產環境不應該依賴已提交的 `.env` 檔案，請改為透過雲端託管平台（例如 Vercel、AWS Secrets Manager）的設定來注入環境變數。
 3. **範本維護**：新增環境變數時，請同步更新 `.env.example`，將欄位值留空或使用佔位符，以便他人參考。
+4. **後端變數集中於單一模組**：[`backend/src/config/env.ts`](../../backend/src/config/env.ts) 宣告了 API server 讀取的所有環境變數，連同各自的解析方式與預設值，是唯一的權威清單 —— 請直接閱讀該檔，不要用 grep 搜尋 `process.env`。新增後端變數時，請加在該模組，而不是加在使用端。
+5. **啟動時驗證**：伺服器在啟動時會驗證環境一次。無法使用的值會被記錄（`Ignoring unusable environment values: …`）並改用預設值；缺少 `DATABASE_URL`，或在 `NODE_ENV=production` 下缺少 `JWT_SECRET`，則會以非零狀態結束而不啟動。空字串等同未設定，因為 Compose 會將 `.env` 中不存在的變數以空字串傳入。
 
 ---
 

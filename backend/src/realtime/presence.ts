@@ -1,4 +1,5 @@
 import type { ChatServer } from './authSocket';
+import { env } from '../config/env';
 
 interface FriendPresenceDeps {
   getFriends(userId: string): Promise<{ friend: { userId: string } }[]>;
@@ -9,13 +10,7 @@ interface FriendPresenceDeps {
 const userSockets = new Map<string, Set<string>>();
 const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
 
-const gracePeriodMs = (): number => {
-  // Unit tests default to immediate transitions so they do not leave timers
-  // behind; production keeps the reconnect grace period unless explicitly
-  // configured otherwise.
-  const configured = Number(process.env.PRESENCE_GRACE_MS ?? (process.env.NODE_ENV === 'test' ? 0 : 3_000));
-  return Number.isFinite(configured) && configured >= 0 ? configured : 3_000;
-};
+const gracePeriodMs = (): number => env().realtime.presenceGraceMs;
 
 export const clearPresence = (): void => {
   for (const timer of pendingDisconnects.values()) clearTimeout(timer);
