@@ -54,7 +54,7 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 - For more setup troubleshooting, refer to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ### 4. Git Workflows
-- The active branch is `dev`.
+- The active branch is `main`. Branch off it and target it with every PR; see [CONTRIBUTING.md](CONTRIBUTING.md#1-git-workflow--branching).
 - Code changes should be verified with TypeScript compiler checks (`pnpm exec tsc --noEmit` on both backend and frontend) and E2E/integration tests.
 
 ### 5. Language Usage Conventions
@@ -74,3 +74,17 @@ Prefer these quieter forms over their default equivalents to keep session output
 - See [backend/CLAUDE.md](backend/CLAUDE.md) and [frontend/CLAUDE.md](frontend/CLAUDE.md) for the per-package test/lint/typecheck commands run most often.
 
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues using the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the five default canonical labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single-context domain layout. See `docs/agents/domain.md`.
