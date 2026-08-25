@@ -7,6 +7,7 @@ import {
   DEFAULT_ATTACHMENT_MAX_BYTES,
   DEFAULT_AUTH_RATE_LIMIT_MAX,
   DEFAULT_CORS_ORIGINS,
+  DEFAULT_LOG_LEVEL,
   DEFAULT_MAX_SESSIONS_PER_USER,
   DEFAULT_PORT,
   DEFAULT_PRESENCE_GRACE_MS,
@@ -39,6 +40,7 @@ describe('env', () => {
     expect(config.refreshCookieMaxAgeMs).toBe(DEFAULT_REFRESH_TTL_DAYS * DAY_MS);
     expect(config.secureCookies).toBe(true);
     expect(config.trustedProxyHops).toBe(0);
+    expect(config.logLevel).toBe(DEFAULT_LOG_LEVEL);
     expect(config.rateLimit).toEqual({
       disabled: false,
       global: { windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS, limit: DEFAULT_RATE_LIMIT_MAX },
@@ -112,6 +114,30 @@ describe('env', () => {
     // through Compose; falling back to the localhost defaults would widen it.
     expect(env({ CORS_ORIGINS: '' }).corsOrigins).toEqual([]);
     expect(env({}).corsOrigins).toEqual([...DEFAULT_CORS_ORIGINS]);
+  });
+
+  describe('logLevel', () => {
+    it('accepts a real level, case- and space-insensitively', () => {
+      expect(env({ LOG_LEVEL: 'debug' }).logLevel).toBe('debug');
+      expect(env({ LOG_LEVEL: '  WARN ' }).logLevel).toBe('warn');
+      expect(env({ LOG_LEVEL: 'silent' }).logLevel).toBe('silent');
+    });
+
+    it('falls back rather than handing pino a level it would throw on', () => {
+      for (const value of ['verbose', 'INFOO', '30', '']) {
+        expect(env({ LOG_LEVEL: value }).logLevel).toBe(DEFAULT_LOG_LEVEL);
+      }
+    });
+
+    it('defaults to silent under the test runner, but an explicit level wins', () => {
+      expect(env({ NODE_ENV: 'test' }).logLevel).toBe('silent');
+      expect(env({ NODE_ENV: 'production' }).logLevel).toBe(DEFAULT_LOG_LEVEL);
+      expect(env({ NODE_ENV: 'test', LOG_LEVEL: 'error' }).logLevel).toBe('error');
+    });
+
+    it('reports a misspelt level at startup instead of ignoring it silently', () => {
+      expect(problemNames({ NODE_ENV: 'test', LOG_LEVEL: 'verbose' })).toEqual(['LOG_LEVEL']);
+    });
   });
 
   describe('realtime', () => {

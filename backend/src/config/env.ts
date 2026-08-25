@@ -1,3 +1,4 @@
+import type { LevelWithSilent } from 'pino';
 import { DEFAULT_ACCESS_TOKEN_TTL_SECONDS, parseDurationSeconds } from '../utils/accessTokenTtl';
 import { parsePositiveInt } from '../utils/parsePositiveInt';
 
@@ -77,6 +78,28 @@ export const DEFAULT_TYPING_TTL_MS = 3_000;
 export const DEFAULT_SESSION_RESERVATION_TTL_MS = 10_000;
 export const DEFAULT_PRESENCE_GRACE_MS = 3_000;
 
+/**
+ * pino's severities plus `silent`.
+ *
+ * Declared here rather than imported from `utils/logger` so the dependency runs
+ * one way: the logger reads its configuration from this module, not the other
+ * way round. `pino` itself contributes only the type, which erases at compile
+ * time.
+ */
+export type LogLevel = LevelWithSilent;
+
+export const LOG_LEVELS: readonly LogLevel[] = [
+  'fatal',
+  'error',
+  'warn',
+  'info',
+  'debug',
+  'trace',
+  'silent',
+];
+
+export const DEFAULT_LOG_LEVEL: LogLevel = 'info';
+
 export interface Env {
   /** Raw `NODE_ENV`; `undefined` when unset, which is not the same as development. */
   nodeEnv: string | undefined;
@@ -123,6 +146,16 @@ export interface Env {
     global: { windowMs: number; limit: number };
     auth: { windowMs: number; limit: number };
   };
+
+  /**
+   * Severity handed to pino.
+   *
+   * An unrecognised `LOG_LEVEL` falls back rather than reaching pino, which
+   * throws on an unknown level — and `utils/logger` builds its logger at import
+   * time, so a typo in a deployment's environment would otherwise be a boot
+   * crash. `assertStartupEnv()` reports the ignored value.
+   */
+  logLevel: LogLevel;
 
   realtime: {
     /** Concurrent Socket.IO sessions one user may hold. */
@@ -198,6 +231,11 @@ const asDurationSeconds = (raw: string): number | undefined => {
   // from "parsed to the same number as the default".
   const parsed = parseDurationSeconds(raw, -1);
   return parsed === -1 ? undefined : parsed;
+};
+
+const asLogLevel = (raw: string): LogLevel | undefined => {
+  const normalized = raw.trim().toLowerCase() as LogLevel;
+  return LOG_LEVELS.includes(normalized) ? normalized : undefined;
 };
 
 const asBoolean = (raw: string): boolean | undefined => {
@@ -324,6 +362,10 @@ const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
     secureCookies: nodeEnv !== 'development' && nodeEnv !== 'test',
 
     trustedProxyHops: readTrustedProxyHops(source, problems),
+
+    // `bun test` output stays readable by default; an explicit LOG_LEVEL still
+    // wins under the test runner.
+    logLevel: read(source, 'LOG_LEVEL', asLogLevel, isTest ? 'silent' : DEFAULT_LOG_LEVEL, problems),
 
     rateLimit: {
       // Exact match, unlike the other booleans: this is the historical spelling

@@ -1,4 +1,5 @@
 import pino from 'pino';
+import { env, type LogLevel } from '../config/env';
 
 /**
  * How many records the in-memory buffer keeps before it starts overwriting the
@@ -146,33 +147,19 @@ export const createRecentLogStore = (
   };
 };
 
-type LogLevel = pino.LevelWithSilent;
-
-const LOG_LEVELS: readonly string[] = [
-  'fatal',
-  'error',
-  'warn',
-  'info',
-  'debug',
-  'trace',
-  'silent',
-];
-
 /**
- * `LOG_LEVEL` wins when it names a real level.
+ * `LOG_LEVEL` wins when it names a real level, falling back otherwise: pino
+ * throws on an unknown level and this module builds a logger eagerly, so a typo
+ * in a deployment's environment would be a boot crash. Tests default to
+ * `silent` so `bun test` output stays readable; the logger's own tests pass an
+ * explicit level rather than relying on this.
  *
- * An unrecognised value falls back instead of reaching pino, which throws on an
- * unknown level — a typo in a deployment's environment would otherwise take the
- * process down at import time, since this module builds a logger eagerly.
- * Tests default to `silent` so `bun test` output stays readable; the logger's
- * own tests pass an explicit level rather than relying on this.
+ * Both the level list and that fallback live in `config/env`, which is where
+ * every backend variable is declared. This stays a named function because it is
+ * the seam the logger's tests inject a literal environment through.
  */
-export const resolveLogLevel = (env: NodeJS.ProcessEnv = process.env): LogLevel => {
-  const requested = env.LOG_LEVEL?.trim().toLowerCase();
-  if (requested && LOG_LEVELS.includes(requested)) return requested as LogLevel;
-  if (env.NODE_ENV === 'test') return 'silent';
-  return 'info';
-};
+export const resolveLogLevel = (source: NodeJS.ProcessEnv = process.env): LogLevel =>
+  env(source).logLevel;
 
 /**
  * Pretty output is opt-in by exact environment name, never "anything that is not
@@ -183,9 +170,10 @@ export const resolveLogLevel = (env: NodeJS.ProcessEnv = process.env): LogLevel 
  * `ENV NODE_ENV=production`. A `!== 'production'` test would then select the
  * pretty path in production, where `pino-pretty` is not installed. Same class of
  * Compose interpolation trap as the `TRUST_PROXY_HOPS` note in .env.example.
+ * `Env.isDevelopment` is that exact-match test.
  */
-export const shouldPrettyPrint = (env: NodeJS.ProcessEnv = process.env): boolean =>
-  env.NODE_ENV === 'development';
+export const shouldPrettyPrint = (source: NodeJS.ProcessEnv = process.env): boolean =>
+  env(source).isDevelopment;
 
 type PrettyStreamFactory = (options: Record<string, unknown>) => NodeJS.WritableStream;
 
