@@ -3,9 +3,9 @@ import { describeDatabaseTarget } from "../utils/describeDatabaseTarget";
 import { instrumentSql } from "./instrumentSql";
 
 // DATABASE_URL_TEST may only win inside the test runner. The regular compose
-// stack also defines it (defaulting to the `db-test` host that only
-// docker-compose.test.yml starts), so preferring it unconditionally pointed a
-// plain `docker compose up` at a database that does not exist.
+// stack also defines it (defaulting to the `db-test` host, a profile service a
+// plain `docker compose up` never starts), so preferring it unconditionally
+// pointed a plain `docker compose up` at a database that does not exist.
 const isTestEnv = process.env.NODE_ENV === "test";
 const connectionString =
   (isTestEnv ? process.env.DATABASE_URL_TEST : undefined) || process.env.DATABASE_URL;

@@ -335,7 +335,13 @@ Running `db:seed` populates the development database with the following reproduc
 ### Testing Architecture
 The development environment runs entirely within Docker. There is no `node_modules` on the host machine. All Bun test suites must be executed inside the backend container using `docker compose exec`.
 
-Testing database setup: Integration tests run against an ephemeral Postgres test database instance (`db-test`) defined in `docker-compose.test.yml`, separating development data from tests.
+Testing database setup: Integration tests run against an ephemeral Postgres test database instance (`db-test`), separating development data from tests. `db-test` is defined in `docker-compose.yml` alongside the regular dev services, but sits behind the `test` Compose profile, so a plain `docker compose up -d` never starts it. Start it explicitly when you need it:
+
+```bash
+docker compose up -d --wait db-test
+```
+
+Naming the service auto-enables its profile, so `--profile test` is not required. From `backend/`, `pnpm run test:db:up` does the same and then applies migrations, and `pnpm run test:db:down` stops and removes **only** `db-test`, leaving a running dev stack untouched. Note that `docker compose down --remove-orphans` does cover `db-test`, so it will take a running test DB with it.
 
 ### Installing Dependencies
 This repository is a **single-lockfile pnpm workspace**. There is exactly one
@@ -527,7 +533,7 @@ describe('userRepository', () => {
   ```bash
   cp backend/.env.test.example backend/.env.test
   ```
-* **`db-test` connection hangs/timeouts**: Ensure `db-test` is running using `docker compose -f docker-compose.test.yml ps`. Spin it up if down.
+* **`db-test` connection hangs/timeouts**: Ensure `db-test` is running using `docker compose ps db-test`. Spin it up with `docker compose up -d --wait db-test` if down.
 * **`TRUNCATE` failures**: Make sure migrations were applied to the test DB using:
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up

@@ -308,7 +308,13 @@ docker compose exec backend bun run migrate:up
 ### 測試架構
 開發環境完全運行於 Docker 中，主機上沒有 `node_modules`。所有 Bun 測試套件都必須在後端容器內部使用 `docker compose exec` 執行。
 
-測試資料庫設定：整合測試會在一台臨時的 Postgres 測試資料庫實例（`db-test`）上運行，該實例定義於 `docker-compose.test.yml` 中，以將開發數據與測試數據隔離開來。
+測試資料庫設定：整合測試會在一台臨時的 Postgres 測試資料庫實例（`db-test`）上運行，以將開發數據與測試數據隔離開來。`db-test` 與一般 dev services 一同定義在 `docker-compose.yml`，但被歸在 `test` 這個 Compose profile 之下，因此單純執行 `docker compose up -d` 不會啟動它。需要時請明確指定：
+
+```bash
+docker compose up -d --wait db-test
+```
+
+明確指定 service 名稱會自動啟用其 profile，所以不需要額外加上 `--profile test`。在 `backend/` 目錄下，`pnpm run test:db:up` 會做同樣的事並接著套用 migration；`pnpm run test:db:down` 則**只會**停止並移除 `db-test`，不影響正在運行的 dev stack。請注意 `docker compose down --remove-orphans` 仍會涵蓋 `db-test`，會一併把執行中的測試資料庫移除。
 
 ### 安裝相依套件
 本專案是**單一 lockfile 的 pnpm workspace**：整個 repo 只有根目錄一份 `pnpm-lock.yaml`，
@@ -489,7 +495,7 @@ describe('userRepository', () => {
   ```bash
   cp backend/.env.test.example backend/.env.test
   ```
-* **`db-test` 連線掛起或逾時**：請確認 `db-test` 正在運行，指令為：`docker compose -f docker-compose.test.yml ps`。如果沒啟動請將它啟動。
+* **`db-test` 連線掛起或逾時**：請確認 `db-test` 正在運行，指令為：`docker compose ps db-test`。若沒啟動，請以 `docker compose up -d --wait db-test` 啟動它。
 * **`TRUNCATE` 失敗**：請確認已透過以下指令在測試資料庫中套用了遷移：
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
