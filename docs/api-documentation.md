@@ -55,6 +55,9 @@ This document defines the RESTful API and Socket.IO real-time communication inte
 | | `DELETE` | [`/users/me/emergency-contacts/:contactId`](#delete-usersmeemergency-contactscontactid) | Yes | Delete emergency contact |
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | Yes | Check inactivity to trigger alert automatically |
 | **Admin** | `GET` | [`/admin/health`](#get-adminhealth) | Yes (admin) | Liveness probe behind the admin gate |
+| | `GET` | [`/admin/metrics`](#get-adminmetrics) | Yes (admin) | Request throughput, latency percentiles and process resource usage |
+| | `GET` | [`/admin/logs`](#get-adminlogs) | Yes (admin) | Recent structured log records (polling) |
+| | `GET` | [`/admin/slow-queries`](#get-adminslow-queries) | Yes (admin) | Queries that ran past the slow threshold |
 
 ### Socket.IO Real-Time Communication
 
@@ -1435,7 +1438,7 @@ the JWT, so revoking it takes effect on the caller's very next request. No
 endpoint sets the flag; see `docs/DEVELOPMENT.md` for the bootstrap procedure.
 
 #### `GET /admin/health`
-- **Description**: Liveness probe for the admin namespace. Its purpose is to make the admin gate reachable end to end; the monitoring endpoints themselves land in #566-#570.
+- **Description**: Liveness probe for the admin namespace, and the one endpoint here that does not depend on any buffer holding content.
 - **Authentication & Authorization**: Authentication required, and the caller's `users.is_admin` must be `true`.
 - **Response**:
   - `200 OK`: Caller is an admin.
@@ -1445,6 +1448,108 @@ endpoint sets the flag; see `docs/DEVELOPMENT.md` for the bootstrap procedure.
   ```json
   {
     "status": "ok"
+  }
+  ```
+
+---
+
+#### `GET /admin/metrics`
+- **Description**: Request throughput, latency percentiles and this process's own resource usage. Everything is per-process and resets on restart, so a multi-instance deployment reports whichever instance served the request.
+- **Authentication & Authorization**: Authentication required, and the caller's `users.is_admin` must be `true`.
+- **Response**:
+  - `200 OK`: Snapshot taken at read time. `Cache-Control: no-store`.
+  - `401 Unauthorized` / `403 Forbidden`: As for every route in this namespace.
+- **Response Fields**:
+  | Field | Type | Description |
+  |---|---|---|
+  | `process.uptimeSeconds` | Number | Seconds since this process started |
+  | `process.cpu.userMs` / `systemMs` | Number | Cumulative CPU milliseconds |
+  | `process.cpu.percent` | Number \| null | CPU used since the *previous* call to this endpoint, as a percentage of one core. `null` on the first call, which has no earlier point to difference against. May exceed 100 on a multi-core host |
+  | `process.memory.*` | Number | `rssBytes`, `heapUsedBytes`, `heapTotalBytes`, `externalBytes` |
+  | `requests.totalRequests` | Number | Lifetime request count |
+  | `requests.statusClasses` | Object | Lifetime counts keyed by `1xx`–`5xx` and `other` |
+  | `requests.latency` | Object | `count`, `avgMs`, `p50Ms`, `p95Ms`, `p99Ms`, `maxMs` over the retained window, **not** over all time |
+  | `requests.sampleSize` / `sampleCapacity` | Number | Retained durations, and the ring's capacity |
+  | `at` | Number | Epoch milliseconds the snapshot was taken |
+- **Response Example**:
+  ```json
+  {
+    "process": {
+      "uptimeSeconds": 812.44,
+      "cpu": { "userMs": 5230.1, "systemMs": 980.4, "percent": 3.2 },
+      "memory": { "rssBytes": 128974848, "heapUsedBytes": 41287680, "heapTotalBytes": 62914560, "externalBytes": 2097152 }
+    },
+    "requests": {
+      "totalRequests": 1842,
+      "statusClasses": { "1xx": 0, "2xx": 1790, "3xx": 0, "4xx": 51, "5xx": 1, "other": 0 },
+      "latency": { "count": 1000, "avgMs": 12.44, "p50Ms": 8.1, "p95Ms": 41.2, "p99Ms": 96.7, "maxMs": 310.5 },
+      "sampleSize": 1000,
+      "sampleCapacity": 1000
+    },
+    "at": 1756108800000
+  }
+  ```
+
+---
+
+#### `GET /admin/logs`
+- **Description**: The most recent structured log records, oldest first, from an in-process ring buffer. Polling only — there is no streaming endpoint. Credentials are redacted by the logger before a record ever reaches this buffer.
+- **Authentication & Authorization**: Authentication required, and the caller's `users.is_admin` must be `true`.
+- **Query Parameters**:
+  | Parameter | Type | Required | Description |
+  |---|---|---|---|
+  | `limit` | Integer | No | How many of the newest records to return. Defaults to the buffer capacity; must be between `1` and `capacity` |
+- **Response**:
+  - `200 OK`: `Cache-Control: no-store`.
+  - `400 Bad Request`: `limit` is not an integer in range (`code: "VALIDATION_ERROR"`).
+  - `401 Unauthorized` / `403 Forbidden`: As for every route in this namespace.
+- **Response Fields**:
+  | Field | Type | Description |
+  |---|---|---|
+  | `entries` | Array | Log records, oldest first. `level` is pino's numeric severity (30 = info, 50 = error), `time` is epoch milliseconds, `msg` the message; any other fields the call site merged in are preserved |
+  | `retained` | Number | Records currently held, at most `capacity` |
+  | `capacity` | Number | Ring buffer size |
+- **Response Example**:
+  ```json
+  {
+    "entries": [
+      { "level": 30, "time": 1756108795123, "msg": "request completed", "method": "GET", "path": "/api/v1/rooms", "status": 200, "durationMs": 7.4 },
+      { "level": 40, "time": 1756108799001, "msg": "admin access denied", "userId": "0b2f...", "path": "/api/v1/admin/logs" }
+    ],
+    "retained": 2,
+    "capacity": 200
+  }
+  ```
+
+---
+
+#### `GET /admin/slow-queries`
+- **Description**: Database queries that ran past the slow threshold, oldest first, from an in-process ring buffer. Only the query skeleton is retained — every interpolated value is replaced with `?`, so a slow lookup by email never parks the address in a buffer this endpoint hands out.
+- **Authentication & Authorization**: Authentication required, and the caller's `users.is_admin` must be `true`.
+- **Query Parameters**:
+  | Parameter | Type | Required | Description |
+  |---|---|---|---|
+  | `limit` | Integer | No | How many of the newest records to return. Defaults to the buffer capacity; must be between `1` and `capacity` |
+- **Response**:
+  - `200 OK`: `Cache-Control: no-store`.
+  - `400 Bad Request`: `limit` is not an integer in range (`code: "VALIDATION_ERROR"`).
+  - `401 Unauthorized` / `403 Forbidden`: As for every route in this namespace.
+- **Response Fields**:
+  | Field | Type | Description |
+  |---|---|---|
+  | `queries` | Array | `{ query, durationMs, at }`, oldest first. `at` is epoch milliseconds |
+  | `retained` | Number | Records currently held, at most `capacity` |
+  | `capacity` | Number | Ring buffer size |
+  | `thresholdMs` | Number | The threshold that decides what lands here |
+- **Response Example**:
+  ```json
+  {
+    "queries": [
+      { "query": "SELECT * FROM messages WHERE room_id = ? ORDER BY created_at DESC LIMIT ?", "durationMs": 184.2, "at": 1756108780000 }
+    ],
+    "retained": 1,
+    "capacity": 100,
+    "thresholdMs": 100
   }
   ```
 

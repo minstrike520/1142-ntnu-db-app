@@ -55,6 +55,9 @@
 | | `DELETE` | [`/users/me/emergency-contacts/:contactId`](#delete-usersmeemergency-contactscontactid) | 需驗證 | 刪除緊急聯絡人設定 |
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | 需驗證 | 檢查不活躍狀態以判定是否發送警報 |
 | **管理員** | `GET` | [`/admin/health`](#get-adminhealth) | 需驗證（管理員） | 管理員守門機制後方的存活探測 |
+| | `GET` | [`/admin/metrics`](#get-adminmetrics) | 需驗證（管理員） | 請求吞吐量、延遲百分位數與程序資源使用量 |
+| | `GET` | [`/admin/logs`](#get-adminlogs) | 需驗證（管理員） | 最近的結構化日誌記錄（輪詢） |
+| | `GET` | [`/admin/slow-queries`](#get-adminslow-queries) | 需驗證（管理員） | 超過慢查詢門檻的資料庫查詢 |
 
 ### Socket.io 即時通訊
 
@@ -1433,7 +1436,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 沒有任何 endpoint 可以設定此旗標，初始化流程請見 `docs/DEVELOPMENT.md`。
 
 #### `GET /admin/health`
-- **說明**: 管理員命名空間的存活探測。用途是讓管理員守門機制能被端到端驗證；實際的監控 endpoint 位於 #566-#570。
+- **說明**: 管理員命名空間的存活探測，也是本節唯一不依賴任何緩衝區有內容的 endpoint。
 - **驗證與授權**: 需驗證，且呼叫者的 `users.is_admin` 必須為 `true`。
 - **回應**:
   - `200 OK`: 呼叫者為管理員。
@@ -1443,6 +1446,108 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
   ```json
   {
     "status": "ok"
+  }
+  ```
+
+---
+
+#### `GET /admin/metrics`
+- **說明**: 請求吞吐量、延遲百分位數，以及本程序自身的資源使用量。所有數據都是單一程序範圍且重啟後歸零，因此多實例部署下回報的是實際處理該請求的那個實例。
+- **驗證與授權**: 需驗證，且呼叫者的 `users.is_admin` 必須為 `true`。
+- **回應**:
+  - `200 OK`: 於讀取當下取樣。附帶 `Cache-Control: no-store`。
+  - `401 Unauthorized` / `403 Forbidden`: 與本命名空間所有路由相同。
+- **回應欄位**:
+  | 欄位 | 型別 | 說明 |
+  |---|---|---|
+  | `process.uptimeSeconds` | Number | 本程序啟動至今的秒數 |
+  | `process.cpu.userMs` / `systemMs` | Number | 累計 CPU 毫秒數 |
+  | `process.cpu.percent` | Number \| null | 自**上一次**呼叫本 endpoint 以來的 CPU 使用率，以單一核心的百分比表示。首次呼叫為 `null`，因為沒有可供比較的前一個取樣點。多核心主機上可能超過 100 |
+  | `process.memory.*` | Number | `rssBytes`、`heapUsedBytes`、`heapTotalBytes`、`externalBytes` |
+  | `requests.totalRequests` | Number | 累計請求數 |
+  | `requests.statusClasses` | Object | 以 `1xx`–`5xx` 與 `other` 為鍵的累計計數 |
+  | `requests.latency` | Object | `count`、`avgMs`、`p50Ms`、`p95Ms`、`p99Ms`、`maxMs`，統計範圍為**保留視窗內**而非全部歷史 |
+  | `requests.sampleSize` / `sampleCapacity` | Number | 目前保留的耗時樣本數，以及環形緩衝區容量 |
+  | `at` | Number | 取樣當下的 epoch 毫秒 |
+- **回應範例**:
+  ```json
+  {
+    "process": {
+      "uptimeSeconds": 812.44,
+      "cpu": { "userMs": 5230.1, "systemMs": 980.4, "percent": 3.2 },
+      "memory": { "rssBytes": 128974848, "heapUsedBytes": 41287680, "heapTotalBytes": 62914560, "externalBytes": 2097152 }
+    },
+    "requests": {
+      "totalRequests": 1842,
+      "statusClasses": { "1xx": 0, "2xx": 1790, "3xx": 0, "4xx": 51, "5xx": 1, "other": 0 },
+      "latency": { "count": 1000, "avgMs": 12.44, "p50Ms": 8.1, "p95Ms": 41.2, "p99Ms": 96.7, "maxMs": 310.5 },
+      "sampleSize": 1000,
+      "sampleCapacity": 1000
+    },
+    "at": 1756108800000
+  }
+  ```
+
+---
+
+#### `GET /admin/logs`
+- **說明**: 來自程序內環形緩衝區的最近結構化日誌記錄，由舊到新排列。僅支援輪詢，沒有串流 endpoint。憑證在記錄進入此緩衝區之前就已由 logger 遮蔽。
+- **驗證與授權**: 需驗證，且呼叫者的 `users.is_admin` 必須為 `true`。
+- **查詢參數**:
+  | 參數 | 型別 | 必填 | 說明 |
+  |---|---|---|---|
+  | `limit` | Integer | 否 | 回傳最新的幾筆記錄。預設為緩衝區容量，且必須介於 `1` 與 `capacity` 之間 |
+- **回應**:
+  - `200 OK`: 附帶 `Cache-Control: no-store`。
+  - `400 Bad Request`: `limit` 不是範圍內的整數（`code: "VALIDATION_ERROR"`）。
+  - `401 Unauthorized` / `403 Forbidden`: 與本命名空間所有路由相同。
+- **回應欄位**:
+  | 欄位 | 型別 | 說明 |
+  |---|---|---|
+  | `entries` | Array | 日誌記錄，由舊到新。`level` 為 pino 的數值嚴重度（30 = info、50 = error），`time` 為 epoch 毫秒，`msg` 為訊息；呼叫端額外合併的欄位都會保留 |
+  | `retained` | Number | 目前保留的記錄數，最多為 `capacity` |
+  | `capacity` | Number | 環形緩衝區大小 |
+- **回應範例**:
+  ```json
+  {
+    "entries": [
+      { "level": 30, "time": 1756108795123, "msg": "request completed", "method": "GET", "path": "/api/v1/rooms", "status": 200, "durationMs": 7.4 },
+      { "level": 40, "time": 1756108799001, "msg": "admin access denied", "userId": "0b2f...", "path": "/api/v1/admin/logs" }
+    ],
+    "retained": 2,
+    "capacity": 200
+  }
+  ```
+
+---
+
+#### `GET /admin/slow-queries`
+- **說明**: 來自程序內環形緩衝區、執行時間超過慢查詢門檻的資料庫查詢，由舊到新排列。僅保留查詢骨架——所有插值都會被替換為 `?`，因此依 email 查詢變慢時，不會把該地址留在這個對外提供的緩衝區裡。
+- **驗證與授權**: 需驗證，且呼叫者的 `users.is_admin` 必須為 `true`。
+- **查詢參數**:
+  | 參數 | 型別 | 必填 | 說明 |
+  |---|---|---|---|
+  | `limit` | Integer | 否 | 回傳最新的幾筆記錄。預設為緩衝區容量，且必須介於 `1` 與 `capacity` 之間 |
+- **回應**:
+  - `200 OK`: 附帶 `Cache-Control: no-store`。
+  - `400 Bad Request`: `limit` 不是範圍內的整數（`code: "VALIDATION_ERROR"`）。
+  - `401 Unauthorized` / `403 Forbidden`: 與本命名空間所有路由相同。
+- **回應欄位**:
+  | 欄位 | 型別 | 說明 |
+  |---|---|---|
+  | `queries` | Array | `{ query, durationMs, at }`，由舊到新。`at` 為 epoch 毫秒 |
+  | `retained` | Number | 目前保留的記錄數，最多為 `capacity` |
+  | `capacity` | Number | 環形緩衝區大小 |
+  | `thresholdMs` | Number | 決定哪些查詢會進入此列表的門檻值 |
+- **回應範例**:
+  ```json
+  {
+    "queries": [
+      { "query": "SELECT * FROM messages WHERE room_id = ? ORDER BY created_at DESC LIMIT ?", "durationMs": 184.2, "at": 1756108780000 }
+    ],
+    "retained": 1,
+    "capacity": 100,
+    "thresholdMs": 100
   }
   ```
 

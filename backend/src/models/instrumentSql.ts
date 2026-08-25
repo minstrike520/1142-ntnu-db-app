@@ -1,12 +1,15 @@
 import type { SQL } from 'bun';
 import type { Logger } from 'pino';
 import { logger as defaultLogger } from '../utils/logger';
-import { slowQueries, type SlowQueryStore } from '../utils/slowQueryStore';
+import {
+  DEFAULT_SLOW_QUERY_THRESHOLD_MS,
+  slowQueries,
+  type SlowQueryStore,
+} from '../utils/slowQueryStore';
 
-/**
- * The threshold #280 names: anything slower is worth an operator's attention.
- */
-export const DEFAULT_SLOW_QUERY_THRESHOLD_MS = 100;
+// Re-exported from its home next to the buffer it describes, so the existing
+// callers and tests that import it from here keep working.
+export { DEFAULT_SLOW_QUERY_THRESHOLD_MS };
 
 /**
  * Ceiling on a retained query skeleton, in characters.
