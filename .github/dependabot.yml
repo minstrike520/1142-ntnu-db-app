@@ -39,6 +39,35 @@ updates:
       - "ci/cd"
       - "dependencies"
 
+  # docker base image 的 major 版本守門（適用於下方 3. 與 4. 兩個項目）
+  #
+  # #555 只為 npm 生態加上 major 守門，兩個 docker 項目當時沒有。但 base image 的
+  # major 升級在本 repo 正是「PR 綠燈、image 卻壞掉」的那一類變更：
+  #
+  # 1. Node 25 起不再隨發行版散布 Corepack。上游 nodejs/corepack README 原文：
+  #    "Corepack is distributed with Node.js from version 14.19.0 up to (but not
+  #    including) 25.0.0."；nodejs.org/api/corepack.html 現已 308 轉址至該 repo。
+  #    而四個 Dockerfile 都靠 corepack 安裝 pnpm：frontend/Dockerfile:10、
+  #    frontend/Dockerfile.prod:15、backend/Dockerfile:24、backend/Dockerfile.prod:19。
+  # 2. Dependabot 的 docker parser 只解析 `FROM`，不解析 `COPY --from=`。已由 PR #591
+  #    實證：該 PR 只改到 backend 的三行 `FROM oven/bun:...`，完全沒動
+  #    backend/Dockerfile:16 與 backend/Dockerfile.prod:18 的 `COPY --from=node:24-slim`。
+  #    因此 node 的 major 升級不可能同時涵蓋 frontend image 與 backend 的 node graft，
+  #    只會讓兩者的 toolchain 版本悄悄分歧。
+  # 3. 沒有任何 CI lane 會 build frontend 的兩個 Dockerfile（`grep -rn "frontend/Dockerfile"
+  #    .github/` 只命中 release-stack.yml 的 tag-time push），破壞會等到發版當下才浮現。
+  #
+  # 用 `"*"` 而不是只擋 `node`：/backend 的唯一 `FROM` 是 oven/bun，只擋 node 形同沒擋
+  # （見 PR #591）。這條規則只擋 major 版本更新：
+  #   - minor / patch 不受影響，`node:24-slim` 這類浮動 tag 仍持續取得 24.x 的修補；
+  #   - GitHub Advisory Database 不涵蓋 container image，docker 生態本來就沒有
+  #     security update PR，因此不會擋掉任何安全性修補。
+  #
+  # 解除條件：待 #582 的 Dockerfile build lane 就緒、且 #583 完成 base image 對齊後，
+  # major 升級才有 CI 訊號可依據，屆時再重新評估這條規則。根因修法（更徹底，但不在
+  # 本項範圍）是把 `corepack enable pnpm` 換成 `npm install -g pnpm@11.15.0`，
+  # 讓 Node major 不再是 breaking change。
+
   # 3. 後端 Docker Base Image (/backend)
   #    Dockerfile 仍位於各套件目錄，因此 docker 項目維持分開宣告。
   - package-ecosystem: "docker"
@@ -50,6 +79,9 @@ updates:
     labels:
       - "docker"
       - "backend"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   # 4. 前端 Docker Base Image (/frontend)
   - package-ecosystem: "docker"
@@ -61,3 +93,6 @@ updates:
     labels:
       - "docker"
       - "frontend"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
