@@ -7,10 +7,14 @@ import {
   DEFAULT_ATTACHMENT_MAX_BYTES,
   DEFAULT_AUTH_RATE_LIMIT_MAX,
   DEFAULT_CORS_ORIGINS,
+  DEFAULT_MAX_SESSIONS_PER_USER,
   DEFAULT_PORT,
+  DEFAULT_PRESENCE_GRACE_MS,
   DEFAULT_RATE_LIMIT_MAX,
   DEFAULT_RATE_LIMIT_WINDOW_MS,
   DEFAULT_REFRESH_TTL_DAYS,
+  DEFAULT_SESSION_RESERVATION_TTL_MS,
+  DEFAULT_TYPING_TTL_MS,
   env,
   EnvConfigError,
   envProblems,
@@ -39,6 +43,12 @@ describe('env', () => {
       disabled: false,
       global: { windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS, limit: DEFAULT_RATE_LIMIT_MAX },
       auth: { windowMs: DEFAULT_RATE_LIMIT_WINDOW_MS, limit: DEFAULT_AUTH_RATE_LIMIT_MAX },
+    });
+    expect(config.realtime).toEqual({
+      maxSessionsPerUser: DEFAULT_MAX_SESSIONS_PER_USER,
+      typingTtlMs: DEFAULT_TYPING_TTL_MS,
+      sessionReservationTtlMs: DEFAULT_SESSION_RESERVATION_TTL_MS,
+      presenceGraceMs: DEFAULT_PRESENCE_GRACE_MS,
     });
     expect(config.attachments).toEqual({
       restrictionEnabled: false,
@@ -102,6 +112,54 @@ describe('env', () => {
     // through Compose; falling back to the localhost defaults would widen it.
     expect(env({ CORS_ORIGINS: '' }).corsOrigins).toEqual([]);
     expect(env({}).corsOrigins).toEqual([...DEFAULT_CORS_ORIGINS]);
+  });
+
+  describe('realtime', () => {
+    it('reads the configured session, typing and reservation limits', () => {
+      const config = env({
+        MAX_SESSIONS_PER_USER: '2',
+        TYPING_TTL_MS: '250',
+        SESSION_RESERVATION_TTL_MS: '500',
+        PRESENCE_GRACE_MS: '0',
+      });
+
+      expect(config.realtime).toEqual({
+        maxSessionsPerUser: 2,
+        typingTtlMs: 250,
+        sessionReservationTtlMs: 500,
+        presenceGraceMs: 0,
+      });
+    });
+
+    it('keeps the millisecond delays fractional but the session count whole', () => {
+      // The pre-existing parsers differed on purpose: a session count is a
+      // cardinality, a delay is a duration.
+      const config = env({ MAX_SESSIONS_PER_USER: '2.5', TYPING_TTL_MS: '2.5' });
+
+      expect(config.realtime.maxSessionsPerUser).toBe(DEFAULT_MAX_SESSIONS_PER_USER);
+      expect(config.realtime.typingTtlMs).toBe(2.5);
+    });
+
+    it('rejects a non-positive delay but allows a zero presence grace', () => {
+      const config = env({ TYPING_TTL_MS: '0', PRESENCE_GRACE_MS: '0' });
+
+      expect(config.realtime.typingTtlMs).toBe(DEFAULT_TYPING_TTL_MS);
+      expect(config.realtime.presenceGraceMs).toBe(0);
+    });
+
+    it('drops the presence grace period under the test runner', () => {
+      expect(env({ NODE_ENV: 'test' }).realtime.presenceGraceMs).toBe(0);
+      expect(env({ NODE_ENV: 'production' }).realtime.presenceGraceMs).toBe(
+        DEFAULT_PRESENCE_GRACE_MS,
+      );
+    });
+
+    it('reports unusable values instead of applying them', () => {
+      // NODE_ENV=test so the missing DATABASE_URL is not also reported.
+      expect(
+        problemNames({ NODE_ENV: 'test', MAX_SESSIONS_PER_USER: 'many', TYPING_TTL_MS: '-1' }),
+      ).toEqual(['MAX_SESSIONS_PER_USER', 'TYPING_TTL_MS']);
+    });
   });
 
   describe('trustedProxyHops', () => {

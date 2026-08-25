@@ -123,8 +123,10 @@ production image（`docker-compose.release.yml`）各執行一次同一份腳本
 在 graceful restart backend 容器前後都跑一次、共用同一個 `SMOKE_STATE_FILE`，
 因此映像本身的問題或 restart 造成的已提交狀態遺失都會讓建置失敗。
 
-`MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS` 分別控制單機
-session、presence 重連寬限與 typing indication TTL。多節點 presence、全域
+`MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS`、
+`SESSION_RESERVATION_TTL_MS` 分別控制單機 session、presence 重連寬限、
+typing indication TTL 與握手名額保留時間；與其他後端變數一樣，宣告位置都在
+`backend/src/config/env.ts`。多節點 presence、全域
 限流與跨節點 change fan-out 仍不在本服務範圍內。
 
 ### 正式環境入口拓撲與代理信任

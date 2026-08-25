@@ -4,6 +4,7 @@ import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
 import type { ChatServer } from './authSocket';
 import { trackUserConnection, trackUserDisconnection } from './presence';
 import { mapErrorToApiShape } from '../utils/mapError';
+import { env } from '../config/env';
 
 interface SocketDeps {
   roomMemberRepository: Pick<IRoomMemberRepository, 'findMember' | 'findByUser'>;
@@ -15,15 +16,9 @@ interface SocketDeps {
   ) => Promise<T>;
 }
 
-const maxSessionsPerUser = (): number => {
-  const configured = Number(process.env.MAX_SESSIONS_PER_USER ?? 5);
-  return Number.isInteger(configured) && configured > 0 ? configured : 5;
-};
+const maxSessionsPerUser = (): number => env().realtime.maxSessionsPerUser;
 
-const typingTtlMs = (): number => {
-  const configured = Number(process.env.TYPING_TTL_MS ?? 3_000);
-  return Number.isFinite(configured) && configured > 0 ? configured : 3_000;
-};
+const typingTtlMs = (): number => env().realtime.typingTtlMs;
 
 /**
  * How long a handshake may hold its reserved session slot before the slot is
@@ -33,10 +28,7 @@ const typingTtlMs = (): number => {
  * would return the slot. Without an expiry those slots accumulate until the
  * user can no longer connect at all.
  */
-const sessionReservationTtlMs = (): number => {
-  const configured = Number(process.env.SESSION_RESERVATION_TTL_MS ?? 10_000);
-  return Number.isFinite(configured) && configured > 0 ? configured : 10_000;
-};
+const sessionReservationTtlMs = (): number => env().realtime.sessionReservationTtlMs;
 
 /**
  * Attach only the ephemeral realtime surface. Durable commands deliberately

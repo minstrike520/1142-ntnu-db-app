@@ -72,6 +72,11 @@ export const DEFAULT_ATTACHMENT_ALLOWED_EXTENSIONS = [
 
 export const DEFAULT_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 
+export const DEFAULT_MAX_SESSIONS_PER_USER = 5;
+export const DEFAULT_TYPING_TTL_MS = 3_000;
+export const DEFAULT_SESSION_RESERVATION_TTL_MS = 10_000;
+export const DEFAULT_PRESENCE_GRACE_MS = 3_000;
+
 export interface Env {
   /** Raw `NODE_ENV`; `undefined` when unset, which is not the same as development. */
   nodeEnv: string | undefined;
@@ -119,6 +124,23 @@ export interface Env {
     auth: { windowMs: number; limit: number };
   };
 
+  realtime: {
+    /** Concurrent Socket.IO sessions one user may hold. */
+    maxSessionsPerUser: number;
+    /** How long a typing indicator survives without a refresh. */
+    typingTtlMs: number;
+    /**
+     * How long a handshake may hold its reserved session slot before the slot
+     * is assumed abandoned. See `realtime/socketServer`.
+     */
+    sessionReservationTtlMs: number;
+    /**
+     * Reconnect grace period before a disconnect is broadcast as offline.
+     * Defaults to 0 under the test runner so suites leave no timers behind.
+     */
+    presenceGraceMs: number;
+  };
+
   attachments: {
     restrictionEnabled: boolean;
     allowedMimeTypes: string[];
@@ -158,6 +180,17 @@ const asPositiveInt = (raw: string): number | undefined => {
 const asNonNegativeInt = (raw: string): number | undefined => {
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+};
+
+/** Finite and positive, but not necessarily whole: these are millisecond delays. */
+const asPositiveNumber = (raw: string): number | undefined => {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const asNonNegativeNumber = (raw: string): number | undefined => {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 };
 
 const asDurationSeconds = (raw: string): number | undefined => {
@@ -323,6 +356,34 @@ const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
           problems,
         ),
       },
+    },
+
+    realtime: {
+      maxSessionsPerUser: read(
+        source,
+        'MAX_SESSIONS_PER_USER',
+        asPositiveInt,
+        DEFAULT_MAX_SESSIONS_PER_USER,
+        problems,
+      ),
+      typingTtlMs: read(source, 'TYPING_TTL_MS', asPositiveNumber, DEFAULT_TYPING_TTL_MS, problems),
+      sessionReservationTtlMs: read(
+        source,
+        'SESSION_RESERVATION_TTL_MS',
+        asPositiveNumber,
+        DEFAULT_SESSION_RESERVATION_TTL_MS,
+        problems,
+      ),
+      // Unit tests default to immediate transitions so they do not leave timers
+      // behind; production keeps the reconnect grace period unless explicitly
+      // configured otherwise.
+      presenceGraceMs: read(
+        source,
+        'PRESENCE_GRACE_MS',
+        asNonNegativeNumber,
+        isTest ? 0 : DEFAULT_PRESENCE_GRACE_MS,
+        problems,
+      ),
     },
 
     attachments: {

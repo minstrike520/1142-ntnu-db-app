@@ -135,8 +135,10 @@ in `ci-backend.yml`, once before and once after gracefully restarting the
 backend container, sharing one `SMOKE_STATE_FILE` across the pair — so a broken
 image, or a restart that loses committed state, fails the build.
 
-`MAX_SESSIONS_PER_USER`, `PRESENCE_GRACE_MS`, and `TYPING_TTL_MS` control local
-session, presence-reconnect, and typing-indication limits. Multi-node presence,
+`MAX_SESSIONS_PER_USER`, `PRESENCE_GRACE_MS`, `TYPING_TTL_MS` and
+`SESSION_RESERVATION_TTL_MS` control local session, presence-reconnect,
+typing-indication and handshake-slot limits; like every other backend variable
+they are declared in `backend/src/config/env.ts`. Multi-node presence,
 global rate limits, and cross-node change fan-out remain outside this service.
 
 ### Production Ingress & Proxy Trust
