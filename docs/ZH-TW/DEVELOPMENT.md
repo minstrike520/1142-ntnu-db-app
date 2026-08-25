@@ -76,7 +76,7 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 | **前端** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js 前端網頁應用程式 |
 | **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API 與 Socket.IO 伺服器 |
 | **資料庫** | `localhost:5435` | 5432 | PostgreSQL 18 實例 |
-| **Redis** | `localhost:6385` | 6379 | 供即時狀態使用的 Redis 8 實例。因為沒有設定密碼，只綁定在 `127.0.0.1`。後端要到 #472 才會讀取 |
+| **Redis** | `localhost:6385` | 6379 | 供即時狀態使用的 Redis 8 實例。因為沒有設定密碼，只綁定在 `127.0.0.1`。後端啟動時會連線，但不依賴它：Redis 連不上只會讓即時通訊降級，不會讓 API 停擺 |
 
 對於瀏覽器端的前端請求，請將 API 環境變數設定為：
 ```env

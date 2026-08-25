@@ -223,6 +223,75 @@ describe('env', () => {
       );
     });
   });
+
+  describe('redisUrl', () => {
+    it('accepts the schemes the Redis client understands', () => {
+      expect(env({ REDIS_URL: 'redis://redis:6379' }).redisUrl).toBe('redis://redis:6379');
+      expect(env({ REDIS_URL: 'rediss://cache.example:6380/2' }).redisUrl).toBe(
+        'rediss://cache.example:6380/2',
+      );
+      expect(env({ REDIS_URL: 'redis+unix:///var/run/redis.sock' }).redisUrl).toBe(
+        'redis+unix:///var/run/redis.sock',
+      );
+    });
+
+    it('treats unset and blank alike, with nothing to report', () => {
+      // Compose passes a variable that is absent from `.env` through as an empty
+      // string, so blank has to mean "no Redis", not "misconfigured Redis".
+      expect(env({}).redisUrl).toBeUndefined();
+      expect(env({ REDIS_URL: '   ' }).redisUrl).toBeUndefined();
+      expect(problemNames({ NODE_ENV: 'test', REDIS_URL: '' })).not.toContain('REDIS_URL');
+    });
+
+    it('reports an unusable value and disables Redis rather than passing it through', () => {
+      expect(env({ REDIS_URL: 'http://redis:6379' }).redisUrl).toBeUndefined();
+      expect(problemNames({ NODE_ENV: 'test', REDIS_URL: 'http://redis:6379' })).toEqual([
+        'REDIS_URL',
+      ]);
+      expect(problemNames({ NODE_ENV: 'test', REDIS_URL: 'not a url at all' })).toEqual([
+        'REDIS_URL',
+      ]);
+    });
+
+    it('never puts the offending value in the problem, which can hold a password', () => {
+      const [problem] = envProblems({
+        NODE_ENV: 'test',
+        REDIS_URL: 'http://default:sup3r-s3cret@cache.example:6380',
+      });
+
+      expect(problem?.name).toBe('REDIS_URL');
+      expect(problem?.value).toBeUndefined();
+      expect(problem?.message).not.toInclude('sup3r-s3cret');
+    });
+
+    it('is never fatal, because Redis holds only derived state', () => {
+      // A Redis problem must never be the reason a process that can serve every
+      // REST route refuses to boot.
+      expect(
+        envProblems({
+          NODE_ENV: 'production',
+          DATABASE_URL: 'postgresql://app@primary/appdb',
+          JWT_SECRET: 'secret',
+          REDIS_URL: 'http://redis:6379',
+        }).every((problem) => !problem.fatal),
+      ).toBe(true);
+
+      const warn = spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(() =>
+          assertStartupEnv({
+            NODE_ENV: 'production',
+            DATABASE_URL: 'postgresql://app@primary/appdb',
+            JWT_SECRET: 'secret',
+            REDIS_URL: 'http://redis:6379',
+          }),
+        ).not.toThrow();
+        expect(String(warn.mock.calls[0]?.[0])).toInclude('REDIS_URL');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
 });
 
 describe('envProblems', () => {

@@ -82,7 +82,7 @@ Docker Compose exposes different host ports from the container-internal ports:
 | **Frontend** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js frontend web app |
 | **Backend API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API & Socket.IO server |
 | **Database** | `localhost:5435` | 5432 | PostgreSQL 18 instance |
-| **Redis** | `localhost:6385` | 6379 | Redis 8 instance for realtime state. Bound to `127.0.0.1` only — it runs without a password. Not read by the backend until #472 |
+| **Redis** | `localhost:6385` | 6379 | Redis 8 instance for realtime state. Bound to `127.0.0.1` only — it runs without a password. The backend connects at boot but never depends on it: an unreachable Redis degrades realtime, it does not stop the API |
 
 For browser-facing frontend requests, set the API environment variable to:
 ```env

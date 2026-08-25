@@ -212,6 +212,10 @@ const REDACTED_PATHS = [
   'accessToken',
   'refreshToken',
   'connectionString',
+  // Redis URLs put the credential in the userinfo (`rediss://default:<pw>@host`),
+  // so the whole URL is a secret. `utils/describeRedisTarget.ts` is what a log
+  // line is supposed to carry instead.
+  'redisUrl',
   'req.headers.authorization',
   'req.headers.cookie',
   'headers.authorization',

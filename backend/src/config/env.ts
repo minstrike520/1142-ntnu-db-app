@@ -126,6 +126,23 @@ export interface Env {
    */
   databaseUrl: string | undefined;
 
+  /**
+   * Where this process reaches Redis, or `undefined` when none is configured.
+   *
+   * `undefined` is a supported deployment, not an error: Redis holds only
+   * derived state (presence leases, typing TTLs, realtime fan-out), so its
+   * absence costs cross-instance realtime and nothing else. Making it required
+   * would turn a derived-state store into a boot dependency for every REST
+   * route, which is why `envProblems` never reports it as fatal.
+   *
+   * Both `redis://` and `rediss://` are expected — the latter for a managed
+   * Redis, per the note in docker-compose.prod.yml. The host is resolved
+   * *inside* the container, so it is the Compose service name (`redis:6379`),
+   * never the host-side mapping (`localhost:6385`); .env.example calls out the
+   * same trap for `db`.
+   */
+  redisUrl: string | undefined;
+
   /** Raw `JWT_SECRET`, empty treated as unset. The production rule lives in `assertStartupEnv`/`utils/jwt`. */
   jwtSecret: string | undefined;
   accessTokenTtlSeconds: number;
@@ -319,6 +336,51 @@ const readTrustedProxyHops = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]
   return (source.TRUST_PROXY ?? '').trim().toLowerCase() === 'true' ? 1 : 0;
 };
 
+/** The URL schemes Bun's Redis client accepts. */
+export const REDIS_URL_PROTOCOLS = [
+  'redis:',
+  'rediss:',
+  'redis+tls:',
+  'redis+unix:',
+  'redis+tls+unix:',
+] as const;
+
+/**
+ * Resolve `REDIS_URL`, reporting an unusable value without ever echoing it.
+ *
+ * Bespoke rather than a `read()` call for two reasons. The generic message
+ * would render as "falling back to the default (undefined)", which reads as a
+ * bug; and `read()` attaches the offending value to the problem, while a Redis
+ * URL is one of the settings `EnvProblem.value` is explicitly documented not to
+ * carry — `rediss://default:<password>@host` puts the credential in the
+ * userinfo, and problems are printed to the startup log.
+ *
+ * An unrecognised scheme resolves to "no Redis" rather than being passed
+ * through: handing a nonsense URL to the client would produce a connection that
+ * can only ever fail, and a warned-about degraded mode is easier to diagnose
+ * than a reconnect loop.
+ */
+const readRedisUrl = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): string | undefined => {
+  const configured = (source.REDIS_URL ?? '').trim();
+  if (!configured) return undefined;
+
+  let protocol: string | undefined;
+  try {
+    protocol = new URL(configured).protocol;
+  } catch {
+    protocol = undefined;
+  }
+
+  if (protocol && (REDIS_URL_PROTOCOLS as readonly string[]).includes(protocol)) return configured;
+
+  problems?.push({
+    name: 'REDIS_URL',
+    message: `is not a Redis connection URL (expected ${REDIS_URL_PROTOCOLS.join(', ')}), so Redis stays disabled and realtime runs single-node`,
+    fatal: false,
+  });
+  return undefined;
+};
+
 const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
   const nodeEnv = source.NODE_ENV;
   const isTest = nodeEnv === 'test';
@@ -342,6 +404,8 @@ const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
       source.CORS_ORIGINS === undefined ? [...DEFAULT_CORS_ORIGINS] : asList(source.CORS_ORIGINS),
 
     databaseUrl: (isTest ? source.DATABASE_URL_TEST : undefined) || source.DATABASE_URL || undefined,
+
+    redisUrl: readRedisUrl(source, problems),
 
     jwtSecret: source.JWT_SECRET || undefined,
     accessTokenTtlSeconds: read(
