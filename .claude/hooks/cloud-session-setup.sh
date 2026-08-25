@@ -32,9 +32,11 @@ wait "$bpid" || echo "WARN: backend dependency install failed" >&2
 wait "$fpid" || echo "WARN: frontend dependency install failed" >&2
 
 # --- Test DB: start + migrate in the background so it never blocks startup ---
-# Uses a standalone postgres:18-alpine container (matches docker-compose.test.yml's
-# image) rather than that compose file, which requires an external network that
-# only exists when the full dev stack is running. Logs go to /tmp/db-test-setup.log.
+# Uses a standalone postgres:18-alpine container (matching the `db-test` service
+# in docker-compose.yml) rather than `docker compose up db-test`: the image is
+# pre-pulled into the environment snapshot by cloud-setup.sh, so `docker run`
+# needs no compose CLI and no project network here. Keep the image version in
+# sync with `db-test`. Logs go to /tmp/db-test-setup.log.
 {
   command -v docker >/dev/null 2>&1 || { echo "no docker available; skipping test DB"; exit 0; }
 
