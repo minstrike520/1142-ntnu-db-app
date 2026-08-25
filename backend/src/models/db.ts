@@ -3,7 +3,12 @@ import { env } from "../config/env";
 import { describeDatabaseTarget } from "../utils/describeDatabaseTarget";
 import { instrumentSql } from "./instrumentSql";
 
-// Which of DATABASE_URL / DATABASE_URL_TEST applies is resolved in config/env.ts.
+// Which of DATABASE_URL / DATABASE_URL_TEST applies is resolved in config/env.ts,
+// where the rule is the same one #596 arrived at independently: DATABASE_URL_TEST
+// may only win inside the test runner. The regular compose stack also defines it
+// (defaulting to the `db-test` host, a profile service a plain `docker compose up`
+// never starts), so preferring it unconditionally pointed a plain
+// `docker compose up` at a database that does not exist.
 const { databaseUrl: connectionString, isTest: isTestEnv, nodeEnv } = env();
 
 // Fail fast on a misconfigured deployment rather than at the first query — but

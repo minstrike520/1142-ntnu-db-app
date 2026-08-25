@@ -22,7 +22,7 @@ corepack enable && corepack prepare pnpm@latest --activate
 # Pre-pull the test DB image so it is cached in the snapshot. The container
 # itself is started per-session by the SessionStart hook, because running
 # containers do not persist in the cache (only on-disk files do). Version
-# must track docker-compose.test.yml's image.
+# must track the `db-test` service image in docker-compose.yml.
 docker pull postgres:18-alpine || true
 
 echo "Environment setup complete."
