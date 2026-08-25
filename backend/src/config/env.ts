@@ -336,10 +336,25 @@ const readTrustedProxyHops = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]
   return (source.TRUST_PROXY ?? '').trim().toLowerCase() === 'true' ? 1 : 0;
 };
 
-/** The URL schemes Bun's Redis client accepts. */
+/**
+ * The URL schemes Bun's Redis client accepts, in the order it lists them.
+ *
+ * Taken from the client itself rather than from the Redis URI convention: on
+ * the pinned Bun 1.3.14, constructing a `RedisClient` with an unsupported
+ * scheme throws `Expected url protocol to be one of redis, valkey, rediss,
+ * valkeys, redis+tls, redis+unix, redis+tls+unix`. The Valkey pair matters —
+ * a managed Valkey endpoint hands out `valkey://` or `valkeys://`, and a
+ * scheme missing here is not a connection error but a silent single-node
+ * fallback, which is the hardest kind of misconfiguration to notice.
+ *
+ * Note the asymmetry, which is Bun's and not ours: there are no `valkey+unix`
+ * forms. A Valkey reached over a unix socket uses the `redis+unix` scheme.
+ */
 export const REDIS_URL_PROTOCOLS = [
   'redis:',
+  'valkey:',
   'rediss:',
+  'valkeys:',
   'redis+tls:',
   'redis+unix:',
   'redis+tls+unix:',

@@ -233,6 +233,14 @@ describe('env', () => {
       expect(env({ REDIS_URL: 'redis+unix:///var/run/redis.sock' }).redisUrl).toBe(
         'redis+unix:///var/run/redis.sock',
       );
+      // Bun accepts both Valkey schemes, so rejecting them here would turn a
+      // working managed endpoint into a silent single-node fallback.
+      expect(env({ REDIS_URL: 'valkey://cache.example:6379' }).redisUrl).toBe(
+        'valkey://cache.example:6379',
+      );
+      expect(env({ REDIS_URL: 'valkeys://cache.example:6380/2' }).redisUrl).toBe(
+        'valkeys://cache.example:6380/2',
+      );
     });
 
     it('treats unset and blank alike, with nothing to report', () => {

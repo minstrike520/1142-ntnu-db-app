@@ -48,7 +48,12 @@ export const describeRedisTarget = (connectionString: string | undefined): strin
     const port = url.port ? `:${url.port}` : ':6379';
     // Kept because it is the one operationally meaningful difference between two
     // otherwise identical-looking targets: whether the link is encrypted.
-    const tls = url.protocol.startsWith('rediss') || url.protocol.includes('+tls') ? ' (tls)' : '';
+    const tls =
+      url.protocol.startsWith('rediss') ||
+      url.protocol.startsWith('valkeys') ||
+      url.protocol.includes('+tls')
+        ? ' (tls)'
+        : '';
     return `${host}${port}/${database}${tls}`;
   } catch {
     // A malformed value must not be echoed back either — it may still be a

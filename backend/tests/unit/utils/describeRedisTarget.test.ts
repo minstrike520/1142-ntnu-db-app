@@ -22,6 +22,9 @@ describe('describeRedisTarget', () => {
     expect(describeRedisTarget('rediss://cache.example:6379')).toInclude('(tls)');
     expect(describeRedisTarget('redis+tls://cache.example:6379')).toInclude('(tls)');
     expect(describeRedisTarget('redis://cache.example:6379')).not.toInclude('(tls)');
+    // `valkeys` is to `valkey` what `rediss` is to `redis`.
+    expect(describeRedisTarget('valkeys://cache.example:6379')).toInclude('(tls)');
+    expect(describeRedisTarget('valkey://cache.example:6379')).not.toInclude('(tls)');
   });
 
   it('names the unix-socket forms without echoing the path', () => {
