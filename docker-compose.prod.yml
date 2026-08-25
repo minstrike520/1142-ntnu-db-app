@@ -94,8 +94,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Started, not healthy. src/utils/redis.ts treats Redis as a degraded mode
+      # rather than a boot dependency, and .env.example documents running without
+      # it as a supported deployment; gating startup on the healthcheck
+      # contradicts both, because a Redis that cannot bind its port would then
+      # stop the API from serving the routes that never touch Redis. Ordering is
+      # still worth keeping: starting redis first means the usual case connects
+      # on the first attempt instead of waiting out a watchdog tick.
       redis:
-        condition: service_healthy
+        condition: service_started
     volumes:
       - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/app/uploads
 

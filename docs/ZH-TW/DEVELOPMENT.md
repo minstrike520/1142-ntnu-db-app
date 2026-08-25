@@ -519,11 +519,12 @@ describe('userRepository', () => {
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
-* **backend 起不來，且 `docker compose ps` 顯示 `redis` unhealthy 或已結束**：
-  `backend` 會等 `redis` 通過 healthcheck 才啟動，因此 Redis 起不來也會連帶擋住
-  `migrate:up`。最常見的原因是主機連接埠被占用：請在 `docker compose logs redis`
-  中查看是否有 `port is already allocated`，並釋放 `127.0.0.1:6385`，
-  或直接修改 `docker-compose.yml` 中的對應設定。
+* **`docker compose ps` 顯示 `redis` unhealthy 或已結束**：backend 仍會照常啟動並
+  提供服務——API 完全不受影響，只有即時通訊退回單節點——所以症狀是 presence 與
+  typing 更新消失，而不是啟動失敗。但 `docker compose up -d --wait` 仍會回報失敗，
+  因為它會等待每個服務的 healthcheck，與誰依賴誰無關。最常見的原因是主機連接埠被
+  占用：請在 `docker compose logs redis` 中查看是否有 `port is already allocated`，
+  並釋放 `127.0.0.1:6385`，或直接修改 `docker-compose.yml` 中的對應設定。
 * **確認 backend 真的連得到 Redis**：backend 映像檔內沒有 `redis-cli`，其 shell 也不是
   bash，所以無法使用 `/dev/tcp`。但容器內有 Node，可用以下指令驗證 `REDIS_URL`
   確實有傳進容器且能解析：
