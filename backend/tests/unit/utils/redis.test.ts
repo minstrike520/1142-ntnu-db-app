@@ -32,7 +32,16 @@ interface FakeConnection extends RedisConnection {
   readonly sent: { command: string; args: string[] }[];
   readonly published: { channel: string; message: string }[];
   readonly subscribeCalls: string[];
-  readonly listeners: Map<string, RedisMessageHandler>;
+  /**
+   * Every listener still registered, per channel, in registration order.
+   *
+   * A list rather than one entry per channel because that is what Bun's client
+   * actually does: it appends, and de-duplicates nothing — subscribing a channel
+   * twice makes each message invoke the handler twice, even with the same
+   * function reference. Modelling it as last-writer-wins is what let an earlier
+   * version of this fake pass while the module leaked a listener per reconnect.
+   */
+  readonly listeners: Map<string, RedisMessageHandler[]>;
   closes: number;
   unsubscribes: number;
   connectCalls: number;
@@ -42,6 +51,18 @@ interface FakeConnection extends RedisConnection {
   hangUnsubscribe: boolean;
   /** Makes every command reject, as a mid-flight drop does. */
   failCommands: boolean;
+  /**
+   * Holds `connect()` open until `settleConnect()` is called.
+   *
+   * Without this the fake's `connect()` resolves synchronously and fires
+   * `onconnect` before the caller ever reaches its `await`, which hides both the
+   * in-flight window the `connecting` guard protects and the fallback path that
+   * runs when a client resolves `connect()` without announcing.
+   */
+  deferConnect: boolean;
+  /** With `deferConnect`, whether resolving should also fire `onconnect`. */
+  announceOnConnect: boolean;
+  settleConnect(): void;
   /** Drop the connection the way Bun does for a retryable blip: silently. */
   drop(): void;
   /** Deliver a message as the server would. */
@@ -49,6 +70,7 @@ interface FakeConnection extends RedisConnection {
 }
 
 const createFakeConnection = (role: RedisRole): FakeConnection => {
+  let pendingConnect: (() => void) | undefined;
   const fake: FakeConnection = {
     role,
     connected: false,
@@ -64,12 +86,25 @@ const createFakeConnection = (role: RedisRole): FakeConnection => {
     failConnect: false,
     hangUnsubscribe: false,
     failCommands: false,
+    deferConnect: false,
+    announceOnConnect: true,
+
+    settleConnect() {
+      const release = pendingConnect;
+      pendingConnect = undefined;
+      release?.();
+    },
 
     async connect() {
       fake.connectCalls += 1;
       if (fake.failConnect) throw new Error(`connect refused for ${role}`);
+      if (fake.deferConnect) {
+        await new Promise<void>((resolve) => {
+          pendingConnect = resolve;
+        });
+      }
       (fake as { connected: boolean }).connected = true;
-      fake.onconnect?.();
+      if (fake.announceOnConnect) fake.onconnect?.();
       return undefined;
     },
     close() {
@@ -89,13 +124,19 @@ const createFakeConnection = (role: RedisRole): FakeConnection => {
     async subscribe(channel, listener) {
       if (fake.failCommands) throw new Error('subscribe failed');
       fake.subscribeCalls.push(channel);
-      fake.listeners.set(channel, listener);
+      fake.listeners.set(channel, [...(fake.listeners.get(channel) ?? []), listener]);
       return fake.listeners.size;
     },
-    async unsubscribe() {
-      fake.unsubscribes += 1;
-      if (fake.hangUnsubscribe) await new Promise<void>(() => {});
-      fake.listeners.clear();
+    async unsubscribe(channel?: string, listener?: RedisMessageHandler) {
+      if (channel === undefined) {
+        fake.unsubscribes += 1;
+        if (fake.hangUnsubscribe) await new Promise<void>(() => {});
+        fake.listeners.clear();
+        return;
+      }
+      const remaining = (fake.listeners.get(channel) ?? []).filter((entry) => entry !== listener);
+      if (remaining.length > 0) fake.listeners.set(channel, remaining);
+      else fake.listeners.delete(channel);
     },
 
     drop() {
@@ -104,7 +145,7 @@ const createFakeConnection = (role: RedisRole): FakeConnection => {
       (fake as { connected: boolean }).connected = false;
     },
     emit(channel, message) {
-      fake.listeners.get(channel)?.(message, channel);
+      for (const listener of fake.listeners.get(channel) ?? []) listener(message, channel);
     },
   };
   return fake;
@@ -116,6 +157,8 @@ interface Harness {
   /** Every connection ever built for a role, oldest first. */
   allFor(role: RedisRole): FakeConnection[];
   tick(): void;
+  /** Configure each connection the manager builds from now on. */
+  onBuild(configure: (connection: FakeConnection) => void): void;
   cleared: IntervalHandle[];
   intervals: number[];
 }
@@ -126,6 +169,7 @@ const createHarness = () => {
   const intervals: number[] = [];
   let scheduled: (() => void) | undefined;
   let handles = 0;
+  let configure: ((connection: FakeConnection) => void) | undefined;
 
   const harness: Harness = {
     connections,
@@ -137,6 +181,9 @@ const createHarness = () => {
       return latest;
     },
     tick: () => scheduled?.(),
+    onBuild: (next) => {
+      configure = next;
+    },
     cleared,
     intervals,
   };
@@ -146,6 +193,7 @@ const createHarness = () => {
     logger: quietLogger(),
     connectionFactory: (_url, role) => {
       const connection = createFakeConnection(role);
+      configure?.(connection);
       connections.push(connection);
       return connection;
     },
@@ -362,14 +410,30 @@ describe('redis manager', () => {
       await manager.subscribe('room', second);
 
       await manager.unsubscribe('room', first);
-      expect(harness.byRole('subscriber').sent).toHaveLength(0);
+      expect(harness.byRole('subscriber').listeners.get('room')).toHaveLength(1);
       expect(manager.status.subscribedChannels).toEqual(['room']);
 
       await manager.unsubscribe('room', second);
-      expect(harness.byRole('subscriber').sent).toEqual([
-        { command: 'UNSUBSCRIBE', args: ['room'] },
-      ]);
+      // Removed through the client, never as a raw `UNSUBSCRIBE` command: the
+      // raw form leaves Bun's listener registered, so re-subscribing the channel
+      // later would deliver every message twice.
+      expect(harness.byRole('subscriber').sent).toHaveLength(0);
+      expect(harness.byRole('subscriber').listeners.get('room')).toBeUndefined();
       expect(manager.status.subscribedChannels).toEqual([]);
+    });
+
+    it('delivers once after a channel is dropped and taken up again', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+      const first: RedisMessageHandler = () => {};
+      await manager.subscribe('room', first);
+      await manager.unsubscribe('room', first);
+
+      const received: string[] = [];
+      await manager.subscribe('room', (message) => received.push(message));
+      harness.byRole('subscriber').emit('room', 'x');
+
+      expect(received).toEqual(['x']);
     });
 
     it('remembers a channel it could not subscribe to while Redis was down', async () => {
@@ -394,11 +458,13 @@ describe('redis manager', () => {
       await manager.subscribe('near-chat-ws', (message) => received.push(message));
       await manager.subscribe('presence', (message) => received.push(message));
 
-      // Bun's client reconnects on its own and fires `onconnect` again, but tells
-      // the server nothing about the old subscriptions. Without the registry
-      // replay this instance would look healthy and receive nothing, forever.
+      // Bun's client reconnects on its own and fires `onconnect` again on the
+      // same connection, but tells the server nothing about the old
+      // subscriptions. Without the registry replay this instance would look
+      // healthy and receive nothing, forever. Note the fake does NOT drop its
+      // listeners here: Bun keeps them, and that is the second half of the
+      // problem.
       const subscriber = harness.byRole('subscriber');
-      subscriber.listeners.clear();
       subscriber.onconnect?.();
       await settle();
 
@@ -411,6 +477,27 @@ describe('redis manager', () => {
 
       subscriber.emit('near-chat-ws', 'after-reconnect');
       expect(received).toEqual(['after-reconnect']);
+    });
+
+    it('delivers each message once however many times it has reconnected', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+      const received: string[] = [];
+      await manager.subscribe('near-chat-ws', (message) => received.push(message));
+      const subscriber = harness.byRole('subscriber');
+
+      // Bun accumulates listeners and de-duplicates nothing, so replaying the
+      // registry without first removing the previous listener adds a copy per
+      // reconnect: measured against a real Redis, three drops took one PUBLISH
+      // from one handler call to four.
+      for (let reconnect = 0; reconnect < 3; reconnect += 1) {
+        subscriber.onconnect?.();
+        await settle();
+      }
+      subscriber.emit('near-chat-ws', 'once');
+
+      expect(received).toEqual(['once']);
+      expect(subscriber.listeners.get('near-chat-ws')).toHaveLength(1);
     });
 
     it('replaces a connection the client has given up on, and resubscribes', async () => {
@@ -444,20 +531,83 @@ describe('redis manager', () => {
       expect(manager.status.reconnects).toBe(0);
     });
 
-    it('does not stack attempts when several ticks land on a dead connection', async () => {
+    it('does not stack attempts while a connect is still in flight', async () => {
       const { manager, harness } = createHarness();
       await manager.connect();
-      harness.byRole('command').drop();
 
+      // The guard only matters during the window between starting a connect and
+      // it completing, so the replacement's connect is held open. A fake that
+      // resolves immediately would make this test pass with the guard deleted.
+      const replacementsHeld: FakeConnection[] = [];
+      harness.onBuild((connection) => {
+        if (connection.role !== 'command') return;
+        connection.deferConnect = true;
+        replacementsHeld.push(connection);
+      });
+
+      harness.byRole('command').drop();
       harness.tick();
+      await settle();
       harness.tick();
       harness.tick();
       await settle();
 
-      // One replacement, not three: `connecting` guards the role while an
-      // attempt is in flight.
+      // One replacement, not three.
+      expect(replacementsHeld).toHaveLength(1);
       expect(harness.allFor('command')).toHaveLength(2);
-      void manager;
+
+      replacementsHeld[0]?.settleConnect();
+      await settle();
+      expect(manager.status.ready).toBe(true);
+    });
+
+    it('restores subscriptions even when connect() resolves without announcing', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+      await manager.subscribe('near-chat-ws', () => {});
+
+      // A client that resolves `connect()` without firing `onconnect` would
+      // otherwise leave a live subscriber holding no subscriptions at all.
+      harness.onBuild((connection) => {
+        if (connection.role !== 'subscriber') return;
+        connection.announceOnConnect = false;
+      });
+      harness.byRole('subscriber').drop();
+      harness.tick();
+      await settle();
+
+      const replacement = harness.byRole('subscriber');
+      expect(replacement.subscribeCalls).toEqual(['near-chat-ws']);
+      expect(replacement.listeners.get('near-chat-ws')).toHaveLength(1);
+    });
+
+    it('marks a role unavailable when the client reports a close', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+
+      harness.byRole('publisher').onclose?.(new Error('connection reset'));
+
+      expect(manager.status.roles.find((entry) => entry.role === 'publisher')?.state).toBe(
+        'unavailable',
+      );
+      expect(manager.status.lastError?.message).toBe('connection reset');
+    });
+
+    it('ignores callbacks from a connection it has already retired', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+      const original = harness.byRole('command');
+
+      original.drop();
+      harness.tick();
+      await settle();
+      expect(manager.status.ready).toBe(true);
+
+      // The retired client keeps its callbacks — clearing them panics Bun — so
+      // a late event from it must not be able to mark the live role down.
+      original.onclose?.(new Error('late failure from a retired connection'));
+
+      expect(manager.status.roles.find((entry) => entry.role === 'command')?.state).toBe('ready');
     });
   });
 

@@ -30,11 +30,22 @@ export const describeRedisTarget = (connectionString: string | undefined): strin
         : 'unparsable-connection-string';
     }
 
+    // Redis numbers its databases and defaults to 0, so an omitted path is a
+    // known target rather than an unknown one — and anything that is not a bare
+    // number means the parse did not land where it looks like it did.
+    //
+    // That check is the credential guard, not a validation nicety. A password
+    // containing an unescaped `/` derails WHATWG authority parsing: for
+    // `rediss://default:12/ab@realhost:6379` the parser stops at the slash, so
+    // `hostname` comes back as `default`, `port` as `12`, and `pathname` as
+    // `/ab@realhost:6379` — the rest of the password. Formatting those fields
+    // would print a credential fragment straight into the log this function
+    // exists to keep clean.
+    const database = url.pathname.replace(/^\//, '') || '0';
+    if (!/^\d+$/.test(database)) return 'unparsable-connection-string';
+
     const host = url.hostname;
     const port = url.port ? `:${url.port}` : ':6379';
-    // Redis numbers its databases and defaults to 0, so an omitted path is a
-    // known target rather than an unknown one.
-    const database = url.pathname.replace(/^\//, '') || '0';
     // Kept because it is the one operationally meaningful difference between two
     // otherwise identical-looking targets: whether the link is encrypted.
     const tls = url.protocol.startsWith('rediss') || url.protocol.includes('+tls') ? ' (tls)' : '';

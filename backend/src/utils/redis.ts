@@ -192,7 +192,17 @@ export interface RedisConnection {
   send(command: string, args: string[]): Promise<unknown>;
   publish(channel: string, message: string): Promise<number>;
   subscribe(channel: string, listener: RedisMessageHandler): Promise<number>;
+  /** Leave every channel, which is also what clears subscriber mode. */
   unsubscribe(): Promise<void>;
+  /**
+   * Drop one specific listener.
+   *
+   * The two-argument form is not a convenience: it is the only way to remove a
+   * listener from Bun's client. A bare `UNSUBSCRIBE` sent as a raw command
+   * leaves the server unsubscribed but the client-side listener registered, so
+   * the next `subscribe` on that connection stacks a second one.
+   */
+  unsubscribe(channel: string, listener: RedisMessageHandler): Promise<void>;
 }
 
 export type RedisConnectionFactory = (url: string, role: RedisRole) => RedisConnection;
@@ -375,6 +385,23 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
    */
   const channels = new Map<string, Set<RedisMessageHandler>>();
 
+  /**
+   * The one listener currently registered with the client, per channel.
+   *
+   * Needed because **Bun's client accumulates listeners and de-duplicates
+   * nothing** — not even the same function reference. Subscribing a channel
+   * twice on one connection makes every published message invoke the handler
+   * twice. That matters here because `onconnect` fires again after Bun's own
+   * internal reconnect, on the *same* connection object, and the replay below
+   * would otherwise add a listener each time: measured against
+   * `redis:8-alpine`, three transient drops took a single PUBLISH from one
+   * handler call to four, while the server still reported one receiver. So the
+   * previous listener is removed before a new one is registered, and this map
+   * is what makes that possible. Cleared whenever a fresh connection is built,
+   * which starts with no listeners of its own.
+   */
+  const activeListeners = new Map<string, RedisMessageHandler>();
+
   let reconnects = 0;
   let failedCommands = 0;
   let failedPublishes = 0;
@@ -423,17 +450,45 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
   };
 
   /**
+   * Remove whatever listener this manager last registered for a channel.
+   *
+   * Best-effort: the connection may already be gone, and a failure here only
+   * risks a duplicate delivery, never a lost one — so it must not abort the
+   * re-subscribe that follows it.
+   */
+  const dropListener = async (connection: RedisConnection, channel: string): Promise<void> => {
+    const previous = activeListeners.get(channel);
+    if (!previous) return;
+    activeListeners.delete(channel);
+    try {
+      await connection.unsubscribe(channel, previous);
+    } catch (error) {
+      logger.debug(
+        { channel, error: toError(error).message },
+        'Ignoring error while dropping a stale Redis subscription listener',
+      );
+    }
+  };
+
+  /**
    * Re-issue every registered channel on the subscriber connection.
    *
    * Called after *every* subscriber `onconnect`, including the first, where the
-   * registry is empty and this is a no-op. SUBSCRIBE is idempotent, so
-   * re-issuing a channel that is somehow still live costs one command and
-   * changes nothing.
+   * registry is empty and this is a no-op.
+   *
+   * Each channel's previous listener is removed before the new one goes on.
+   * SUBSCRIBE is idempotent on the *server*, but Bun's client-side listener list
+   * is not — see `activeListeners`. Skipping the removal is what turns a handful
+   * of transient reconnects into every realtime event being delivered several
+   * times over.
    */
   const resubscribeAll = async (connection: RedisConnection): Promise<void> => {
     for (const channel of channels.keys()) {
       try {
-        await connection.subscribe(channel, dispatch(channel));
+        await dropListener(connection, channel);
+        const listener = dispatch(channel);
+        await connection.subscribe(channel, listener);
+        activeListeners.set(channel, listener);
       } catch (error) {
         recordError('subscriber', error);
         logger.error(
@@ -556,6 +611,11 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
 
     setState(entry, 'connecting');
     try {
+      // A new connection carries none of the old one's listeners, so the map
+      // that tracks them has to start empty or `resubscribeAll` would try to
+      // remove listeners that live on a connection already retired.
+      if (entry.role === 'subscriber') activeListeners.clear();
+
       const connection = connectionFactory(url, entry.role);
       const handlers = attachHandlers(entry, connection);
       entry.detach = handlers.detach;
@@ -691,7 +751,9 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
       const connection = usable('subscriber');
       if (!connection) return unavailable<void>('subscriber', `SUBSCRIBE ${channel}`);
       try {
-        await connection.subscribe(channel, dispatch(channel));
+        const listener = dispatch(channel);
+        await connection.subscribe(channel, listener);
+        activeListeners.set(channel, listener);
         return { ok: true as const, value: undefined };
       } catch (error) {
         return { ok: false as const, error: recordError('subscriber', error) };
@@ -709,10 +771,15 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
       if (!connection) {
         // The registry is what a reconnect replays, and the channel is gone from
         // it, so a dropped connection has already achieved the intent.
+        activeListeners.delete(channel);
         return { ok: true as const, value: undefined };
       }
       try {
-        await connection.send('UNSUBSCRIBE', [channel]);
+        // Through the client rather than a raw `UNSUBSCRIBE` command: the raw
+        // form unsubscribes the server but leaves Bun's listener in place, so a
+        // later re-subscribe to the same channel would deliver every message
+        // twice.
+        await dropListener(connection, channel);
         return { ok: true as const, value: undefined };
       } catch (error) {
         return { ok: false as const, error: recordError('subscriber', error) };
@@ -742,6 +809,7 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
       }
 
       channels.clear();
+      activeListeners.clear();
 
       for (const role of REDIS_ROLES) {
         const entry = supervised[role];

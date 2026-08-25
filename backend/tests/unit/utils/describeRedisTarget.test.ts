@@ -33,6 +33,27 @@ describe('describeRedisTarget', () => {
     expect(describeRedisTarget('')).toBe('unconfigured');
   });
 
+  it('refuses to report a target when a slash in the password derails the parse', () => {
+    // `new URL` stops the authority at the first slash, so it reports the
+    // username as the host and the tail of the password as the path. Printing
+    // those fields would leak the credential this function exists to hide.
+    // This one *parses*, which is what makes it dangerous: `new URL` reports
+    // hostname `admin`, port `99` and pathname `/Xy7Zq@realhost:6379`, so a
+    // formatter that trusted those fields would print the password's tail.
+    const result = describeRedisTarget('rediss://admin:99/Xy7Zq@realhost:6379');
+
+    expect(result).toBe('unparsable-connection-string');
+    expect(result).not.toInclude('admin');
+    expect(result).not.toInclude('Xy7Zq');
+    expect(result).not.toInclude('realhost');
+  });
+
+  it('rejects a database segment that is not a plain index', () => {
+    expect(describeRedisTarget('redis://cache.example:6379/not-a-number')).toBe(
+      'unparsable-connection-string',
+    );
+  });
+
   it('refuses to echo a malformed value, which may still hold a credential', () => {
     const result = describeRedisTarget('default:sup3r-s3cret@not-a-url');
 
