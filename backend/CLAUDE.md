@@ -14,7 +14,7 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 | [src/config/env.ts](src/config/env.ts) | Typed configuration: the one place `process.env` is read, parsed and defaulted. Also holds the startup validation that fails a misconfigured process fast |
 | [src/bootstrap/](src/bootstrap/) | One factory per assembly stage: `config`, `repositories`, `services`, `httpApp`, `realtime`, `jobs`, `start` |
 | [src/models/db.ts](src/models/db.ts) | Exports the shared `Bun.SQL` instance, connected to the database resolved by `src/config/env.ts` |
-| [migrations/](migrations/) | PostgreSQL migration files written in raw SQL managed by `node-pg-migrate` |
+| [migrations/](migrations/) | PostgreSQL migration files written in raw SQL, applied by the Bun.SQL runner in [src/models/migrate.ts](src/models/migrate.ts) |
 | [package.json](package.json) | NPM scripts (`pnpm run dev` for `bun --watch`, `pnpm run test`) and dependencies |
 
 ## Subdirectories
@@ -28,7 +28,7 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 
 ### 1. Database Access & Query Policies
 - Prisma has been completely removed.
-- **NEVER** use Prisma or any ORM. You must use raw SQL queries parameterized via `pool.query()` in repositories.
+- **NEVER** use Prisma or any ORM. You must use raw parameterized SQL via the `Bun.SQL` client exported from `src/models/db.ts` in repositories.
 - Schema modifications must be performed by creating a new migration file under `migrations/` via `pnpm run migrate:create <name>`. Refer to existing migrations to understand table names and schema patterns.
 
 ### 2. Architecture & Layering Rules
@@ -50,3 +50,9 @@ Do not bypass these layers (e.g., calling repositories directly from route handl
 
 ### 5. Running Tests
 - Execute `pnpm run test` or `docker compose exec backend bun run test` to run all unit, integration, and E2E tests.
+
+### 6. Frequently Used Commands
+- Run a single test file quietly: `bun test tests/unit/<file>.test.ts`
+- Fast feedback loop (skip integration/e2e): `pnpm run test:unit`
+- Type check without building: `pnpm exec tsc --noEmit`
+- Lint: `pnpm run lint`

@@ -2,11 +2,19 @@
  * Fixed render-measurement scenarios for issue #383.
  *
  * These tests drive the three interaction scenarios and print commit counts /
- * render durations / bubble-subtree render counts. They only assert behaviour
- * loosely (the UI ends up in the right state); the numbers are the output and
- * are recorded in docs/frontend-react-render-optimization.md.
+ * render durations / bubble-subtree render counts. They assert behaviour only
+ * (the UI ends up in the right state) — the numbers are output for humans to
+ * compare, not thresholds, because durations are machine-dependent.
  *
- * Run with: cd frontend && pnpm test -- tests/perf/render-perf.test.tsx
+ * The render-count guarantees these scenarios were built to protect are
+ * asserted for real in tests/chat-memoization.test.tsx: appending one message
+ * re-renders at most 3 rows, and a background room, local typing or remote
+ * typing re-renders none. Those are the regression guard; this file is the
+ * measurement harness.
+ *
+ * Run with: cd frontend && pnpm test tests/perf/render-perf.test.tsx
+ * (no `--` before the path: pnpm forwards it to vitest, which then ignores the
+ * filter and runs all three test files instead of this one)
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -14,6 +22,7 @@ import { afterAll, describe, expect, test } from "vitest";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { formatMeasurement, mountChatApp, type Measurement } from "../harness";
 import { ME_ID, makeMessage } from "../fixtures";
+import { __getApiCallLog } from "../mocks/api";
 
 const results: Measurement[] = [];
 
@@ -98,7 +107,7 @@ describe("scenario 2: receive and send messages", () => {
     await app.settle();
     results.push(app.measure("S2c send 1 msg + server echo"));
 
-    expect(socket.countEmitted("send_message")).toBe(1);
+    expect(__getApiCallLog("createMessage")).toHaveLength(1);
     expect(screen.getAllByText("Hello from me").length).toBeGreaterThan(0);
   });
 });

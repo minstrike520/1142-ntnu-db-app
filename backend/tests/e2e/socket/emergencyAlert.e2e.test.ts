@@ -103,10 +103,8 @@ describe('Emergency alert Socket.IO E2E', () => {
 
     const contactSocket = await connectClient(contactRes.body.token);
     
-    // Have the contact socket join the room to receive new_message event
-    contactSocket.emit('join_room', { roomId: privateRoomId });
-    await new Promise((res) => setTimeout(res, 100));
-    
+    // Room subscriptions are derived from the contact's durable membership.
+
     const messagePayload = waitFor<Message>(
       contactSocket,
       'new_message',
@@ -124,4 +122,5 @@ describe('Emergency alert Socket.IO E2E', () => {
     expect(received.senderId).toBe(userRes.body.user.userId);
     expect(received.roomId).toBe(privateRoomId);
   });
+
 });

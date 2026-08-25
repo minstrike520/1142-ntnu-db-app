@@ -1,6 +1,7 @@
 import { SQL } from "bun";
 import { env } from "../config/env";
 import { describeDatabaseTarget } from "../utils/describeDatabaseTarget";
+import { instrumentSql } from "./instrumentSql";
 
 // Which of DATABASE_URL / DATABASE_URL_TEST applies is resolved in config/env.ts.
 const { databaseUrl: connectionString, isTest: isTestEnv, nodeEnv } = env();
@@ -25,4 +26,7 @@ console.log(
 // something actually queries — and then the host name says why.
 const sql = new SQL(connectionString ?? "postgresql://database-not-configured-in-test-env/");
 
-export default sql;
+// Wrapped once, here, so every repository gets query timing by defaulting to
+// this export — including repositories written after today. See instrumentSql.ts
+// for why the client is the interception point rather than the repositories.
+export default instrumentSql(sql);

@@ -1,47 +1,31 @@
-import db from "./models/db";
-import { assertStartupEnv, EnvConfigError } from "./config/env";
-import { createConfig } from "./bootstrap/config";
-import { createRepositories } from "./bootstrap/repositories";
-import { createServices } from "./bootstrap/services";
-import { createHttpApp } from "./bootstrap/httpApp";
-import { createHttpServer, createRealtime } from "./bootstrap/realtime";
-import { startJobs } from "./bootstrap/jobs";
-import { startServer } from "./bootstrap/start";
-import type { ChatServer } from "./realtime/authSocket";
+import db from './models/db';
+import { assertStartupEnv, EnvConfigError } from './config/env';
+import { createConfig } from './bootstrap/config';
+import { createRepositories } from './bootstrap/repositories';
+import { createServices } from './bootstrap/services';
+import { createHttpApp } from './bootstrap/httpApp';
+import { createBunRuntimeServer, createRealtime } from './bootstrap/realtime';
+import { createRealtimePublisher } from './realtime/publisher';
+import { createHttpCompatibilityServer } from './bootstrap/httpCompat';
+import { startJobs } from './bootstrap/jobs';
+import { startServer } from './bootstrap/start';
 
 /**
  * Composition root.
  *
- * Assembly runs in dependency order — config, repositories, services, HTTP app,
- * HTTP server, Socket.IO — with one knot: the services emit through Socket.IO,
- * but Socket.IO cannot exist until there is an HTTP server, which serves the
- * routes that those same services back. `getIo` is what unties it; the reasoning
- * is in `bootstrap/services.ts`.
+ * Production has one Bun server for Hono and Socket.IO. `app` remains a small
+ * Node-shaped compatibility server solely for the existing supertest suite;
+ * it is never used by the production listener.
  */
 const config = createConfig();
 const repositories = createRepositories(db);
-
-let pendingIo: ChatServer | undefined;
-const getIo = (): ChatServer => {
-  if (!pendingIo) {
-    throw new Error("Socket.IO server used before it was created");
-  }
-  return pendingIo;
-};
-
-const services = createServices({ repositories, getIo });
+const publisher = createRealtimePublisher();
+const services = createServices({ repositories, publisher });
 const honoApp = createHttpApp({ services, config });
-const server = createHttpServer(honoApp);
-
-pendingIo = createRealtime({ httpServer: server, config, services, repositories });
-
-// Re-bound as a definitely-assigned const so the export keeps the type it always
-// had; `pendingIo` is optional only to express the window before assignment.
-const io: ChatServer = pendingIo;
-
-// The Node HTTP server under a second name, kept because the E2E suite hands
-// `app` to supertest.
-const app = server;
+const realtime = createRealtime({ config, repositories, publisher });
+const server = createBunRuntimeServer({ app: honoApp, engine: realtime.engine });
+const app = createHttpCompatibilityServer(honoApp);
+const io = realtime.io;
 
 if (require.main === module) {
   // Only the real entrypoint validates: importing the app (as the E2E suite
@@ -54,8 +38,18 @@ if (require.main === module) {
     process.exit(1);
   }
 
-  startJobs({ repositories, services });
-  void startServer({ httpServer: server, config });
+  const stopJobs = startJobs({ repositories, services });
+  void startServer({ server, config });
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    stopJobs();
+    publisher.shutdown(signal);
+    server.close(() => process.exit(0));
+  };
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
 }
 
 export { app, honoApp, server, io };

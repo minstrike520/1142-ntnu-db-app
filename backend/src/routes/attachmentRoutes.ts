@@ -22,7 +22,7 @@ const encodeDownloadFilename = (filename: string): string => {
 
 export interface AttachmentService {
   uploadAttachment(userId: string, file: UploadedFile): Promise<Attachment>;
-  getAttachment(attachmentId: string): Promise<(Attachment & { filePath?: string; file_path?: string; original_name?: string; mime_type?: string }) | null>;
+  getAttachment(userId: string, attachmentId: string): Promise<(Attachment & { filePath?: string; file_path?: string; original_name?: string; mime_type?: string }) | null>;
 }
 
 export const makeAttachmentRoutes = (service: AttachmentService) => {
@@ -44,12 +44,13 @@ export const makeAttachmentRoutes = (service: AttachmentService) => {
   });
 
   app.get('/:id', async (c) => {
+    const userId = c.get('user').userId;
     const attachmentId = c.req.param('id');
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(attachmentId);
     if (!isUuid) {
       throw new NotFoundError('attachment', attachmentId);
     }
-    const attachment = await service.getAttachment(attachmentId);
+    const attachment = await service.getAttachment(userId, attachmentId);
     if (!attachment) {
       throw new NotFoundError('attachment', attachmentId);
     }

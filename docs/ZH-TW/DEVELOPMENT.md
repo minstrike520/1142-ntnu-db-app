@@ -76,11 +76,56 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 | **前端** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js 前端網頁應用程式 |
 | **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API 與 Socket.IO 伺服器 |
 | **資料庫** | `localhost:5435` | 5432 | PostgreSQL 18 實例 |
+| **Redis** | `localhost:6385` | 6379 | 供即時狀態使用的 Redis 8 實例。因為沒有設定密碼，只綁定在 `127.0.0.1`。後端要到 #472 才會讀取 |
 
 對於瀏覽器端的前端請求，請將 API 環境變數設定為：
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:4005
 ```
+
+### 即時通訊 runtime 與 smoke check
+
+後端 production listener 是單一 `Bun.serve`。Hono 處理 REST，
+`@socket.io/bun-engine` 處理 `/socket.io/`；舊 Node HTTP adapter 只供
+supertest 相容測試使用。Socket.IO ping interval 為 25 秒、ping timeout 為
+20 秒，因此 Bun `idleTimeout` 必須大於此視窗。
+
+持久化訊息命令走 REST 並必須帶 `Idempotency-Key`；編輯與收回另需
+`If-Match`。連線後客戶端以最後 cursor 呼叫 `/api/v1/sync`。
+
+`backend/scripts/smoke.ts`（`pnpm --filter near-chat-backend run smoke`，或在
+`backend/` 下執行 `bun run smoke`）是對執行中 stack 的自動化即時通訊 smoke
+測試。它會註冊一個用完即丟的使用者，依序驗證健康檢查、socket 連線並收到
+`realtime_ready`、可靠發送（重送同一個 `Idempotency-Key` 只會產生一則訊息）、
+斷線後靠 sync cursor 補齊變更，以及超限的驗證請求會回傳
+`429`／`TOO_MANY_REQUESTS`。目標位址讀取自 `SMOKE_API_URL`（預設
+`http://localhost:4005`），任何一項失敗都會印出可行動的診斷訊息並以非零結束。
+
+最後一項檢查需要限流器實際運作，而 `.env.example` 為了日常開發預設帶
+`RATE_LIMIT_DISABLED=true`，因此請覆寫該值再啟動 smoke 用的 stack，而不是直接
+跑預設的：
+
+```bash
+RATE_LIMIT_DISABLED=false docker compose up -d --wait --force-recreate backend
+SMOKE_API_URL=http://localhost:4005 pnpm --filter near-chat-backend run smoke
+```
+
+`--force-recreate backend` 是讓覆寫生效的關鍵：Compose 不會只因為插值後的環境
+變數改變，就重啟一個已在執行中的容器。
+
+另外可將 `SMOKE_STATE_FILE` 設為某個路徑，用以驗證持久狀態能否跨 restart 存活。
+第一次執行會把 token、room 與 message ID 寫入該檔；之後以同一個檔案再執行時，
+會改用存下來的 token 重新 sync，並斷言 restart 前的那則訊息仍然回傳 —— 因此
+restart 若真的遺失資料就會失敗，而不是靠新建立的狀態矇混通過。
+
+CI 的 `ci-backend.yml` 會對 development image（`docker-compose.yml`）與
+production image（`docker-compose.release.yml`）各執行一次同一份腳本，且各自
+在 graceful restart backend 容器前後都跑一次、共用同一個 `SMOKE_STATE_FILE`，
+因此映像本身的問題或 restart 造成的已提交狀態遺失都會讓建置失敗。
+
+`MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS` 分別控制單機
+session、presence 重連寬限與 typing indication TTL。多節點 presence、全域
+限流與跨節點 change fan-out 仍不在本服務範圍內。
 
 ### 正式環境入口拓撲與代理信任
 
@@ -157,8 +202,61 @@ docker compose exec backend bun run db:seed
 ### 常見指令
 - **建立新的遷移檔**：`docker compose exec backend bun run migrate:create <name>`
 - **執行資料庫遷移**：`docker compose exec backend bun run migrate:up`
-- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`
+- **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`（預設只回滾最近一筆遷移；可加上數量回滾更多筆，例如 `migrate:down 3`）
 - **寫入種子資料**：`docker compose exec backend bun run db:seed`
+
+### 授予管理員權限
+
+`/api/v1/admin/*` 由 `users.is_admin` 欄位控管。所有帳號（含種子資料）建立時
+都是 `is_admin = false`，且刻意**不提供任何可設定此欄位的 HTTP endpoint** ——
+`is_admin` 不在 repository `update` 的允許清單內，因此無法透過
+`PATCH /api/v1/users/me` 變更。
+
+請直接以資料庫寫入提升權限：
+
+```bash
+docker compose exec db psql -U chatuser -d chatdb \
+  -c "UPDATE users SET is_admin = true WHERE email = 'alice@test.com';"
+```
+
+驗證守門機制（非管理員回 403，管理員回 200）：
+
+```bash
+curl -i -s http://localhost:4005/api/v1/admin/health -H "Authorization: Bearer <token>" | head -1
+```
+
+要撤銷權限，將欄位改回 `false` 即可；由於此旗標是每次請求都從資料庫讀取，
+而非存放於 JWT 中，因此下一個請求就會立即生效。
+
+此處刻意不提供 `SYSTEM_ADMIN_EMAILS` 這類環境變數允許清單。
+`PATCH /api/v1/users/me` 只做唯一性檢查就允許任何已登入使用者修改自己的
+email —— 不像修改密碼需要 `currentPassword` 確認 —— 且 `users.email` 是
+區分大小寫的一般 `UNIQUE` 欄位，`Ops@company.com` 可以與 `ops@company.com`
+並存。因此以 email 比對管理員等同於開放使用者自助提權。
+
+### 關於 Migration Runner
+遷移由 `backend/src/models/migrate.ts` 執行，這是一個以 `Bun.SQL` 實作的最小 runner。
+它在 #421 取代了 `node-pg-migrate`，讓後端只依賴 Bun — 不再需要 Node 執行環境，也不再需要 `pg` driver。
+
+它的行為：
+
+- 套用 `backend/migrations/` 底下所有 `.sql` 檔，依檔名的數字前綴排序，並將每個檔案以名稱記錄在
+  `pgmigrations` 表中。已記錄的檔案不會重複套用。
+- 依 `-- Up Migration` 與 `-- Down Migration` 標頭切分每個檔案。
+- 單次執行是**一個交易**。任何一個遷移失敗時，該次執行不會提交任何內容，
+  且錯誤訊息會指出失敗的檔案名稱。
+- 執行前先取得 PostgreSQL advisory lock，因此兩個同時啟動的容器不會並行遷移；
+  後者會以 `Another migration is already running.` 結束。
+- 若 `backend/migrations/` 中出現非 `.sql` 檔案，會直接失敗，而不是靜默略過。
+- 當分支合併導致新的遷移排在已套用的遷移之前時，會以
+  `Not run migration … is preceding already run migration …` 中止。
+  請將該檔案改名為更大的前綴，使其排在最後。
+
+`pgmigrations` 表、記錄的名稱、排序規則與 advisory lock id 都與 `node-pg-migrate` 相同，
+因此由舊工具遷移過的資料庫可以無縫接續。
+
+遷移檔一律為 SQL。`migrate:create <name>` 會在 `backend/migrations/` 底下產生新檔案，
+內含兩個區段標頭，並自動選擇一定會排在既有遷移之後的數字前綴。
 
 ### 修復損壞的開發資料庫
 如果遷移過程中遇到 `relation ... already exists` 錯誤，或者遷移狀態發生混亂：
@@ -268,6 +366,29 @@ pnpm --filter near-chat-frontend lint
 docker compose exec frontend pnpm run lint
 ```
 
+### 執行前端瀏覽器測試（Playwright）
+這組測試在主機上執行，不在 Docker 內，並且與 `frontend/tests/` 的 Vitest 測試完全分開。它以真實 Chromium 對前端 production build 進行驗證；所有 `/api/v1` 請求都在瀏覽器內被攔截並回覆假資料，因此不需要後端，也不需要資料庫。
+
+npm 套件不含瀏覽器執行檔，每台機器需先安裝一次：
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+```
+
+接著執行測試。`playwright.config.ts` 會自行建置並啟動 Next.js，因此不需要事先啟動伺服器：
+
+```bash
+pnpm --filter near-chat-frontend test:browser
+```
+
+測試失敗時，HTML report、trace 與 screenshot 會產生在 `frontend/playwright-report/` 與 `frontend/test-results/`：
+
+```bash
+pnpm --filter near-chat-frontend exec playwright show-report
+```
+
+測試檔案位於 `frontend/tests-browser/`，共用的 REST mock 為 `frontend/tests-browser/support/api-mock.ts`。串接真實後端與 Postgres 的 full-stack 瀏覽器 E2E 由 Issue #544 另行追蹤，屆時會建立獨立 lane，而不是擴張這條 lane 的責任。
+
 ### 執行單元測試
 單元測試不需要資料庫連線。
 ```bash
@@ -375,6 +496,21 @@ describe('userRepository', () => {
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
+* **backend 起不來，且 `docker compose ps` 顯示 `redis` unhealthy 或已結束**：
+  `backend` 會等 `redis` 通過 healthcheck 才啟動，因此 Redis 起不來也會連帶擋住
+  `migrate:up`。最常見的原因是主機連接埠被占用：請在 `docker compose logs redis`
+  中查看是否有 `port is already allocated`，並釋放 `127.0.0.1:6385`，
+  或直接修改 `docker-compose.yml` 中的對應設定。
+* **確認 backend 真的連得到 Redis**：backend 映像檔內沒有 `redis-cli`，其 shell 也不是
+  bash，所以無法使用 `/dev/tcp`。但容器內有 Node，可用以下指令驗證 `REDIS_URL`
+  確實有傳進容器且能解析：
+  ```bash
+  docker compose exec backend node -e "const u=new URL(process.env.REDIS_URL);require('net').createConnection(u.port||6379,u.hostname).on('connect',()=>{console.log('ok');process.exit(0)}).on('error',e=>{console.error(e.message);process.exit(1)})"
+  ```
+* **Redis 啟動時出現 memory overcommit 或 transparent hugepage 警告**：屬預期行為，
+  可以忽略。這些警告針對的是背景存檔所需的 `fork()`，而本專案已停用持久化
+  （`--save "" --appendonly no`）；且 `vm.overcommit_memory` 並非 namespaced 設定，
+  本來就無法在單一容器內調整。
 
 ---
 

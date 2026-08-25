@@ -15,6 +15,12 @@ export interface EmergencyContactRow {
 export class EmergencyContactRepository implements IEmergencyContactRepository {
   constructor(private sql: SQL = defaultSql) {}
 
+  private readonly contactLocks = new Map<string, Promise<void>>();
+
+  private contactLockKey(userId: string, contactId: string): string {
+    return [userId, contactId].sort().join(':');
+  }
+
   async findByUserId(userId: string): Promise<EmergencyContact[]> {
     const rows = await this.sql<EmergencyContactRow[]>`
       SELECT ec.*, u.name, u.email, u.avatar_url 
@@ -39,6 +45,9 @@ export class EmergencyContactRepository implements IEmergencyContactRepository {
     let result: { contact: EmergencyContact; isUpdate: boolean } | null = null;
 
     await this.sql.begin(async (tx) => {
+      await tx`
+        SELECT pg_advisory_xact_lock(hashtextextended(${this.contactLockKey(userId, contactId)}, 2))
+      `;
       const existingRes = await tx<EmergencyContactRow[]>`
         SELECT user_id, contact_id, message, created_at
         FROM emergency_contacts
@@ -86,26 +95,84 @@ export class EmergencyContactRepository implements IEmergencyContactRepository {
   }
 
   async delete(userId: string, contactId: string): Promise<void> {
-    await this.sql`
-      DELETE FROM emergency_contacts WHERE user_id = ${userId} AND contact_id = ${contactId}
-    `;
+    await this.sql.begin(async (tx) => {
+      await tx`
+        SELECT pg_advisory_xact_lock(hashtextextended(${this.contactLockKey(userId, contactId)}, 2))
+      `;
+      await tx`
+        DELETE FROM emergency_contacts WHERE user_id = ${userId} AND contact_id = ${contactId}
+      `;
+    });
+  }
+
+  async withContactLock<T>(userId: string, contactId: string, operation: () => Promise<T>): Promise<T> {
+    const key = this.contactLockKey(userId, contactId);
+    const prior = this.contactLocks.get(key);
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    this.contactLocks.set(key, current);
+    if (prior) await prior;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.contactLocks.get(key) === current) this.contactLocks.delete(key);
+    }
   }
 
   async recordAlertIfNew(userId: string, lastActivity: Date): Promise<boolean> {
-    const existingRes = await this.sql<{ exists: number }[]>`
-      SELECT 1 as exists
-      FROM emergency_alert_logs
+    const leaseMinutes = 5;
+    const inserted = await this.sql<{ user_id: string }[]>`
+      INSERT INTO emergency_alert_logs (user_id, last_activity_at, delivery_status, lease_until)
+      VALUES (${userId}, ${lastActivity}, 'pending', NOW() + ${leaseMinutes} * INTERVAL '1 minute')
+      ON CONFLICT (user_id, last_activity_at) DO NOTHING
+      RETURNING user_id
+    `;
+    if (inserted.length > 0) return true;
+
+    const reclaimed = await this.sql<{ user_id: string }[]>`
+      UPDATE emergency_alert_logs
+      SET delivery_status = 'pending',
+          lease_until = NOW() + ${leaseMinutes} * INTERVAL '1 minute'
+      WHERE user_id = ${userId}
+        AND last_activity_at = ${lastActivity}
+        AND delivery_status = 'pending'
+        AND lease_until < NOW()
+      RETURNING user_id
+    `;
+    return reclaimed.length > 0;
+  }
+
+  async releaseAlertIfNew(userId: string, lastActivity: Date): Promise<void> {
+    await this.sql`
+      DELETE FROM emergency_alert_logs
+      WHERE user_id = ${userId}
+        AND last_activity_at = ${lastActivity}
+        AND delivery_status = 'pending'
+    `;
+  }
+
+  async hasAlertDelivery(userId: string, contactId: string, incidentId: string): Promise<boolean> {
+    const rows = await this.sql<{ user_id: string }[]>`
+      SELECT user_id FROM emergency_alert_deliveries
+      WHERE user_id = ${userId} AND contact_id = ${contactId} AND incident_id = ${incidentId}
+    `;
+    return rows.length > 0;
+  }
+
+  async recordAlertDelivery(userId: string, contactId: string, incidentId: string): Promise<void> {
+    await this.sql`
+      INSERT INTO emergency_alert_deliveries (user_id, contact_id, incident_id)
+      VALUES (${userId}, ${contactId}, ${incidentId})
+      ON CONFLICT (user_id, contact_id, incident_id) DO NOTHING
+    `;
+  }
+
+  async completeAlert(userId: string, lastActivity: Date): Promise<void> {
+    await this.sql`
+      UPDATE emergency_alert_logs
+      SET delivery_status = 'completed', lease_until = NULL
       WHERE user_id = ${userId} AND last_activity_at = ${lastActivity}
     `;
-
-    if (existingRes.length > 0) {
-      return false;
-    }
-
-    await this.sql`
-      INSERT INTO emergency_alert_logs (user_id, last_activity_at)
-      VALUES (${userId}, ${lastActivity})
-    `;
-    return true;
   }
 }

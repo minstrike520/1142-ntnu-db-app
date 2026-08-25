@@ -24,6 +24,25 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:8-alpine
+    # Deliberately publishes no host port. Unlike `db`, nothing in the documented
+    # local production walkthrough inspects Redis from the host, and this Redis
+    # has no password — reachability from the compose network only *is* the
+    # access control. Publishing a port here is never the right fix; exec into
+    # the container instead.
+    #
+    # Persistence off and eviction left at `noeviction` for the same reasons as
+    # the dev stack — see docker-compose.yml for the full rationale.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: .
@@ -34,9 +53,18 @@ services:
       - NODE_ENV=${NODE_ENV}
       - PORT=${PORT}
       - DATABASE_URL=${DATABASE_URL}
+      # Interpolated rather than pinned literally, unlike TRUST_PROXY_HOPS below.
+      # That one is literal because production's correct value *differs* from
+      # what a shared .env carries, so an inherited value would silently be
+      # wrong. This one resolves to the same string in both stacks (same service
+      # name, same container port), and pointing a deployment at a managed Redis
+      # — usually `rediss://` — is an explicit requirement of issue #471.
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
+      # Pass-through only; the logger defaults to info when this is unset.
+      - LOG_LEVEL
       # One trusted hop: cloudflared, which appends the caller's address to
       # X-Forwarded-For. Without it every request through the tunnel is attributed
       # to the tunnel container, so a single caller exhausting the auth limiter
@@ -54,9 +82,14 @@ services:
       - ATTACHMENT_ALLOWED_MIME_TYPES=${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
       - ATTACHMENT_ALLOWED_EXTENSIONS=${ATTACHMENT_ALLOWED_EXTENSIONS:-.jpg,.jpeg,.png,.gif,.pdf,.zip,.txt}
       - ATTACHMENT_MAX_BYTES=${ATTACHMENT_MAX_BYTES:-10485760}
+      - MAX_SESSIONS_PER_USER=${MAX_SESSIONS_PER_USER:-5}
+      - PRESENCE_GRACE_MS=${PRESENCE_GRACE_MS:-3000}
+      - TYPING_TTL_MS=${TYPING_TTL_MS:-3000}
       - CI=true
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/app/uploads

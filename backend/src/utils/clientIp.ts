@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { getConnInfo } from '@hono/node-server/conninfo';
+import { getConnInfo } from 'hono/bun';
 import { env } from '../config/env';
 
 /**
@@ -44,9 +44,15 @@ export const getClientIp = (c: Context): string | undefined => {
 
   try {
     const address = getConnInfo(c).remote?.address;
-    return address || undefined;
+    if (address) return address;
   } catch {
-    // No Node connection info attached to this context.
-    return undefined;
+    // Fall through to the compatibility shape below.
   }
+
+  // Hono's Bun adapter is authoritative in production. The small fallback is
+  // intentionally structural: it keeps synthetic tests and the Node-shaped
+  // supertest adapter attributable without importing @hono/node-server into
+  // the production path.
+  const legacyIncoming = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming;
+  return legacyIncoming?.socket?.remoteAddress || undefined;
 };

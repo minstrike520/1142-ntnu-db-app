@@ -36,6 +36,7 @@ describe('userService', () => {
     lastActivity: new Date('2026-01-01T00:00:00.000Z'),
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     deletedAt: null,
+    isAdmin: false,
   });
 
   beforeEach(() => {
@@ -47,6 +48,7 @@ describe('userService', () => {
       update: mock(),
       delete: mock(),
       findAllWarningEnabled: mock(),
+      isAdmin: mock(),
     };
     emergencyContactRepo = {
       findByUserId: mock(),
@@ -337,6 +339,26 @@ describe('userService', () => {
     it('soft deletes the account', async () => {
       await userService.deleteMe('u1');
       expect(mockRepo.update).toHaveBeenCalledWith('u1', { deletedAt: expect.any(Date) });
+      expect(mockRefreshTokenRepo.revokeAllForUser).toHaveBeenCalledWith('u1');
+    });
+
+    it('disconnects all realtime sessions after deleting the account', async () => {
+      const disconnectUser = mock();
+      const service = makeUserService(
+        mockRepo,
+        emergencyContactRepo,
+        mockRefreshTokenRepo,
+        mockJwt,
+        undefined,
+        undefined,
+        undefined,
+        avatarStore,
+        disconnectUser,
+      );
+
+      await service.deleteMe('u1');
+
+      expect(disconnectUser).toHaveBeenCalledWith('u1', 'account_deleted');
     });
   });
 
@@ -467,6 +489,22 @@ describe('userService', () => {
     });
   });
 
+  describe('isAdmin', () => {
+    it('reports the flag the repository returns', async () => {
+      mockRepo.isAdmin.mockResolvedValue(true);
+
+      expect(await userService.isAdmin('u1')).toBe(true);
+      expect(mockRepo.isAdmin).toHaveBeenCalledWith('u1');
+    });
+
+    it('reports false for a non-admin, a missing account, or a soft-deleted one', async () => {
+      // The repository collapses all three into `false` so the gate fails closed.
+      mockRepo.isAdmin.mockResolvedValue(false);
+
+      expect(await userService.isAdmin('u1')).toBe(false);
+    });
+  });
+
   describe('emergency alerts', () => {
     const inactiveUser: User = {
       ...baseUser(),
@@ -495,7 +533,32 @@ describe('userService', () => {
       expect(notifyEmergencyContact).toHaveBeenCalledWith('u2', {
         userId: 'u1',
         message: 'inactive',
+        incidentId: '2026-01-01T00:00:00.000Z',
       });
+    });
+
+    it('keeps delivering to the remaining contacts when one delivery throws', async () => {
+      mockRepo.findById.mockResolvedValue(inactiveUser);
+      emergencyContactRepo.recordAlertIfNew.mockResolvedValue(true);
+      emergencyContactRepo.releaseAlertIfNew = mock().mockResolvedValue(undefined);
+      emergencyContactRepo.completeAlert = mock().mockResolvedValue(undefined);
+      emergencyContactRepo.findByUserId.mockResolvedValue([
+        { userId: 'u1', contactId: 'u2', message: 'inactive', createdAt: new Date() },
+        { userId: 'u1', contactId: 'u3', message: 'inactive', createdAt: new Date() },
+      ]);
+      notifyEmergencyContact.mockImplementation(async (contactId: string) => {
+        if (contactId === 'u2') throw new Error('persistence failed');
+      });
+
+      const result = await userService.checkInactivity('u1', new Date('2026-01-04T00:00:00.000Z'));
+
+      expect(notifyEmergencyContact).toHaveBeenCalledTimes(2);
+      expect(result.recipients).toEqual(['u3']);
+      expect(result.failed).toEqual(['u2']);
+      // The incident is still owed to u2, so the reservation is released for
+      // a later retry instead of being marked complete.
+      expect(emergencyContactRepo.releaseAlertIfNew).toHaveBeenCalled();
+      expect(emergencyContactRepo.completeAlert).not.toHaveBeenCalled();
     });
 
     it('does not alert below the inactivity threshold', async () => {
@@ -679,7 +742,10 @@ describe('userService', () => {
       await userService.checkInactivity('u1', new Date('2026-01-03T00:00:00.000Z'));
       expect(notifyEmergencyContact).toHaveBeenCalledWith(
         'c1',
-        expect.objectContaining({ message: expect.stringContaining('User has exceeded their inactivity warning threshold') }),
+        expect.objectContaining({
+          message: expect.stringContaining('User has exceeded their inactivity warning threshold'),
+          incidentId: '2026-01-01T00:00:00.000Z',
+        }),
       );
     });
   });

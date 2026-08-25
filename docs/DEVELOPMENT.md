@@ -82,11 +82,62 @@ Docker Compose exposes different host ports from the container-internal ports:
 | **Frontend** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js frontend web app |
 | **Backend API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API & Socket.IO server |
 | **Database** | `localhost:5435` | 5432 | PostgreSQL 18 instance |
+| **Redis** | `localhost:6385` | 6379 | Redis 8 instance for realtime state. Bound to `127.0.0.1` only — it runs without a password. Not read by the backend until #472 |
 
 For browser-facing frontend requests, set the API environment variable to:
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:4005
 ```
+
+### Realtime runtime and smoke checks
+
+The backend production listener is a single `Bun.serve` instance. Hono handles
+REST requests and `@socket.io/bun-engine` handles `/socket.io/`; the old Node
+HTTP adapter is used only by the supertest compatibility harness. Socket.IO
+uses a 25-second ping interval and a 20-second ping timeout, so Bun's
+`idleTimeout` must stay above that window.
+
+Durable message commands use REST and require an `Idempotency-Key`; edit and
+recall also require `If-Match`. After connecting, clients call `/api/v1/sync`
+with their last cursor.
+
+`backend/scripts/smoke.ts` (`pnpm --filter near-chat-backend run smoke`, or
+`bun run smoke` from `backend/`) is the automated realtime smoke test against
+a running stack. It registers a throwaway user and exercises health, socket
+connect (`realtime_ready`), a reliably-sent message (retried `Idempotency-Key`
+resolves to one message), sync-cursor repair after a disconnect, and
+over-limit auth requests (`429`/`TOO_MANY_REQUESTS`). It reads the target from
+`SMOKE_API_URL` (default `http://localhost:4005`) and exits non-zero with a
+per-check diagnostic on the first failure.
+
+The last check needs the rate limiter actually running, and `.env.example`
+ships `RATE_LIMIT_DISABLED=true` for everyday development — so override it for
+the smoke stack rather than running the default one:
+
+```bash
+RATE_LIMIT_DISABLED=false docker compose up -d --wait --force-recreate backend
+SMOKE_API_URL=http://localhost:4005 pnpm --filter near-chat-backend run smoke
+```
+
+`--force-recreate backend` is what makes the override take effect: Compose does
+not restart an already-running container just because an interpolated
+environment variable changed.
+
+Set `SMOKE_STATE_FILE` to a path to additionally verify that durable state
+survives a restart. The first run writes its token, room and message id there;
+a later run against the same file re-syncs with that saved token and asserts
+the pre-restart message is still returned, so a restart that dropped data fails
+rather than passing on freshly created state.
+
+CI runs this same script against both the development image
+(`docker-compose.yml`) and the production image (`docker-compose.release.yml`)
+in `ci-backend.yml`, once before and once after gracefully restarting the
+backend container, sharing one `SMOKE_STATE_FILE` across the pair — so a broken
+image, or a restart that loses committed state, fails the build.
+
+`MAX_SESSIONS_PER_USER`, `PRESENCE_GRACE_MS`, and `TYPING_TTL_MS` control local
+session, presence-reconnect, and typing-indication limits. Multi-node presence,
+global rate limits, and cross-node change fan-out remain outside this service.
 
 ### Production Ingress & Proxy Trust
 
@@ -170,8 +221,69 @@ docker compose exec backend bun run db:seed
 ### Common Commands
 - **Create a new migration**: `docker compose exec backend bun run migrate:create <name>`
 - **Run migrations**: `docker compose exec backend bun run migrate:up`
-- **Rollback migrations**: `docker compose exec backend bun run migrate:down`
+- **Rollback migrations**: `docker compose exec backend bun run migrate:down` (rolls back the single most recent migration; pass a count to undo more, e.g. `migrate:down 3`)
 - **Seed database**: `docker compose exec backend bun run db:seed`
+
+### Granting Admin Access
+
+`/api/v1/admin/*` is gated by the `users.is_admin` column. Every account starts
+with `is_admin = false`, including seeded ones, and there is deliberately **no
+HTTP endpoint that sets the flag** — `is_admin` is absent from the repository's
+`update` allow-list, so it cannot be reached through `PATCH /api/v1/users/me`.
+
+Promote an account with a direct database write:
+
+```bash
+docker compose exec db psql -U chatuser -d chatdb \
+  -c "UPDATE users SET is_admin = true WHERE email = 'alice@test.com';"
+```
+
+Verify the gate (a non-admin gets 403, an admin gets 200):
+
+```bash
+curl -i -s http://localhost:4005/api/v1/admin/health -H "Authorization: Bearer <token>" | head -1
+```
+
+Revoke by setting the column back to `false`; it takes effect on the caller's
+next request, because the flag is read from the database per request rather than
+carried in the JWT.
+
+There is intentionally no `SYSTEM_ADMIN_EMAILS`-style environment allow-list.
+`PATCH /api/v1/users/me` lets any authenticated user change their own email with
+only a uniqueness check — no current-password confirmation, unlike a password
+change — and `users.email` is a plain case-sensitive `UNIQUE` column, so
+`Ops@company.com` can be inserted alongside `ops@company.com`. Matching admins by
+email would therefore be self-service privilege escalation.
+
+### About the Migration Runner
+Migrations are applied by `backend/src/models/migrate.ts`, a small runner built on
+`Bun.SQL`. It replaced `node-pg-migrate` in #421 so the backend depends on Bun
+alone — no Node runtime, no `pg` driver.
+
+What it does:
+
+- Applies every `.sql` file in `backend/migrations/`, ordered by the numeric
+  prefix in the file name, and records each one by name in the `pgmigrations`
+  table. A file already recorded there is never re-applied.
+- Splits each file on its `-- Up Migration` and `-- Down Migration` headers.
+- Runs a whole invocation in **one transaction**. If any migration fails,
+  nothing from that run is committed and the error names the file that failed.
+- Takes a PostgreSQL advisory lock first, so two containers starting at once
+  cannot migrate concurrently — the second exits with
+  `Another migration is already running.`
+- Refuses to start if `backend/migrations/` contains a non-`.sql` file, rather
+  than skipping it silently.
+- Stops with `Not run migration … is preceding already run migration …` when a
+  branch merge leaves a new migration ordered before one already applied. Rename
+  the file with a higher prefix so it sorts last.
+
+The `pgmigrations` table, the recorded names, the ordering rules and the
+advisory lock id are all unchanged from `node-pg-migrate`, so databases migrated
+by the old tool continue from exactly where they left off.
+
+Migrations are SQL only. `migrate:create <name>` writes a new file under
+`backend/migrations/` containing both section headers, with a numeric prefix
+chosen so it always sorts after the existing migrations.
 
 ### Repairing a Broken Dev Database
 If you encounter `relation ... already exists` errors during migration, or migration state goes out of sync:
@@ -286,6 +398,29 @@ pnpm --filter near-chat-frontend lint
 docker compose exec frontend pnpm run lint
 ```
 
+### Running Frontend Browser Tests (Playwright)
+These run on the host, not in Docker, and are separate from the Vitest suite in `frontend/tests/`. They exercise a real Chromium against a production build of the frontend; every `/api/v1` call is mocked in the browser, so no backend and no database are needed.
+
+Chromium is not bundled with the npm package. Install it once per machine:
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+```
+
+Then run the suite. `playwright.config.ts` builds and starts Next.js itself, so no server needs to be running first:
+
+```bash
+pnpm --filter near-chat-frontend test:browser
+```
+
+On failure, the HTML report, traces and screenshots land in `frontend/playwright-report/` and `frontend/test-results/`:
+
+```bash
+pnpm --filter near-chat-frontend exec playwright show-report
+```
+
+Specs live in `frontend/tests-browser/`, and the shared REST mock is `frontend/tests-browser/support/api-mock.ts`. Full-stack browser E2E against a real backend and Postgres is tracked separately in issue #544 and will get its own lane rather than extending this one.
+
 ### Running Unit Tests
 Unit tests do not require a database connection.
 ```bash
@@ -399,6 +534,23 @@ describe('userRepository', () => {
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
+* **Backend will not start, and `docker compose ps` shows `redis` unhealthy or exited**:
+  `backend` waits for `redis` to pass its healthcheck, so a Redis that cannot
+  start also blocks `migrate:up`. The usual cause is the host port: check for
+  `port is already allocated` in `docker compose logs redis`, and free
+  `127.0.0.1:6385` or change the mapping in `docker-compose.yml`.
+* **Checking that the backend can actually reach Redis**: the backend image has
+  no `redis-cli`, and its shell is not bash, so `/dev/tcp` is unavailable. Node
+  is present, so use it to prove that `REDIS_URL` landed in the container and
+  resolves:
+  ```bash
+  docker compose exec backend node -e "const u=new URL(process.env.REDIS_URL);require('net').createConnection(u.port||6379,u.hostname).on('connect',()=>{console.log('ok');process.exit(0)}).on('error',e=>{console.error(e.message);process.exit(1)})"
+  ```
+* **Redis logs a memory-overcommit or transparent-hugepage warning at startup**:
+  expected, and safe to ignore here. Those warnings are about `fork()` for
+  background saves, which this deployment disables (`--save "" --appendonly no`).
+  `vm.overcommit_memory` is not namespaced, so it cannot be set per container
+  anyway.
 
 ---
 
