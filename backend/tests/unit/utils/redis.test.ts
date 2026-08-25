@@ -643,6 +643,30 @@ describe('redis manager', () => {
       expect(manager.status.ready).toBe(true);
     });
 
+    it('retries a subscription the replay could not restore', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+      const subscriber = harness.byRole('subscriber');
+      const received: string[] = [];
+      await manager.subscribe('room', (message) => received.push(message));
+
+      // Bun reconnects on its own, and the replay's SUBSCRIBE is rejected by a
+      // connection that stays up. Nothing is left to act on: the socket is
+      // healthy so no reconnect is coming, and the caller that asked for this
+      // channel has no reason to ask again.
+      subscriber.failCommands = true;
+      subscriber.onconnect?.();
+      await settle();
+      expect(subscriber.listeners.get('room')).toBeUndefined();
+
+      subscriber.failCommands = false;
+      harness.tick();
+      await settle();
+      subscriber.emit('room', 'x');
+
+      expect(received).toEqual(['x']);
+    });
+
     it('leaves healthy connections alone', async () => {
       const { manager, harness } = createHarness();
       await manager.connect();

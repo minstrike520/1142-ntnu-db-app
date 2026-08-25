@@ -449,6 +449,16 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
    */
   let staleSubscriber = false;
 
+  /**
+   * True while the reconnect replay is walking the registry.
+   *
+   * The watchdog's repair pass reads the same "registered but not on the wire"
+   * state the replay is in the middle of fixing, so without this the two race:
+   * both are serialised per channel and neither can duplicate a listener, but
+   * they would each spend a wire SUBSCRIBE on the same channel.
+   */
+  let replaying = false;
+
   let reconnects = 0;
   let failedCommands = 0;
   let failedPublishes = 0;
@@ -546,6 +556,15 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
    * times over.
    */
   const resubscribeAll = async (connection: RedisConnection): Promise<void> => {
+    replaying = true;
+    try {
+      await replayChannels(connection);
+    } finally {
+      replaying = false;
+    }
+  };
+
+  const replayChannels = async (connection: RedisConnection): Promise<void> => {
     for (const channel of [...channels.keys()]) {
       // Through the same per-channel queue as the public operations: a caller
       // subscribing while this replay is mid-round-trip would otherwise add its
@@ -734,6 +753,23 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
       }
       setState(entry, 'unavailable');
       void openRole(entry);
+    }
+
+    // Restore any channel that is registered but not on the wire.
+    //
+    // The reconnect replay already does this, but a SUBSCRIBE the server
+    // rejects *without* dropping the connection leaves nothing behind to act
+    // on: the socket stays healthy, so no reconnect is coming, and the callers
+    // that asked for the channel have no reason to ask again. The channel would
+    // then stay deaf for the life of the process. Retrying here is one map
+    // lookup per channel per tick, and it converges the moment whatever
+    // rejected the command stops doing so.
+    const subscriber = supervised.subscriber;
+    if (staleSubscriber || replaying || subscriber.connecting) return;
+    if (!subscriber.connection?.connected) return;
+    for (const channel of channels.keys()) {
+      if (activeListeners.has(channel)) continue;
+      void onChannel(channel, () => attachListener(channel)).catch(() => undefined);
     }
   };
 
