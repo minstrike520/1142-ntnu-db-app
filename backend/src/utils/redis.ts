@@ -402,6 +402,53 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
    */
   const activeListeners = new Map<string, RedisMessageHandler>();
 
+  /**
+   * Serialise every wire operation that touches one channel.
+   *
+   * `subscribe` and `unsubscribe` both await a round trip in the middle of
+   * mutating `channels` and `activeListeners`, so without this an unsubscribe
+   * that arrives while a subscribe is in flight observes bookkeeping that is
+   * only half written: it finds no active listener, reports success, and the
+   * subscribe then finishes and registers its listener on a channel nobody is
+   * subscribed to any more. Bun accumulates listeners, so the next subscribe of
+   * that channel stacks a second one and every publish is dispatched twice.
+   *
+   * Per channel rather than one global lock: operations on different channels
+   * are independent, and a single lock would serialise an entire room's fan-out
+   * behind one slow round trip.
+   */
+  const channelQueue = new Map<string, Promise<unknown>>();
+
+  const onChannel = <T>(channel: string, operation: () => Promise<T>): Promise<T> => {
+    const previous = channelQueue.get(channel) ?? Promise.resolve();
+    // Runs on both settlements: a failed operation must not wedge the channel.
+    const run = previous.then(operation, operation);
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    channelQueue.set(channel, settled);
+    void settled.then(() => {
+      // Only the tail clears the entry, or a queue still being appended to
+      // would be dropped by the operation that happened to finish first.
+      if (channelQueue.get(channel) === settled) channelQueue.delete(channel);
+    });
+    return run;
+  };
+
+  /**
+   * Set when the subscriber may hold a listener this module can no longer
+   * account for — a removal that failed, or one it never got to attempt.
+   *
+   * There is no way to remove such a listener: the two-argument `unsubscribe`
+   * needs the exact function reference, and the only reference is the one whose
+   * removal just failed. Registering another listener for that channel would
+   * therefore double every delivery. Replacing the connection is the only
+   * recovery, and a fresh one starts with no listeners at all, so the watchdog
+   * treats this flag the way it treats a connection that is down.
+   */
+  let staleSubscriber = false;
+
   let reconnects = 0;
   let failedCommands = 0;
   let failedPublishes = 0;
@@ -452,22 +499,38 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
   /**
    * Remove whatever listener this manager last registered for a channel.
    *
-   * Best-effort: the connection may already be gone, and a failure here only
-   * risks a duplicate delivery, never a lost one — so it must not abort the
-   * re-subscribe that follows it.
+   * Reports whether the listener is now certainly gone, and gives up its
+   * bookkeeping entry only when it is. Deleting the entry first — which is what
+   * this did originally — makes a failed removal invisible: the caller sees
+   * success, the listener is still registered on a live connection, and nothing
+   * holds the reference needed to remove it later. The next subscribe of that
+   * channel then stacks a second listener and every publish is dispatched
+   * twice, which is exactly the failure `activeListeners` exists to prevent.
    */
-  const dropListener = async (connection: RedisConnection, channel: string): Promise<void> => {
+  const dropListener = async (connection: RedisConnection, channel: string): Promise<boolean> => {
     const previous = activeListeners.get(channel);
-    if (!previous) return;
-    activeListeners.delete(channel);
+    if (!previous) return true;
     try {
       await connection.unsubscribe(channel, previous);
+      activeListeners.delete(channel);
+      return true;
     } catch (error) {
       logger.debug(
         { channel, error: toError(error).message },
-        'Ignoring error while dropping a stale Redis subscription listener',
+        'Failed to drop a Redis subscription listener',
       );
+      return false;
     }
+  };
+
+  /** Hand the subscriber to the watchdog to be replaced. Logged once. */
+  const flagStaleSubscriber = (channel: string): void => {
+    if (staleSubscriber) return;
+    staleSubscriber = true;
+    logger.warn(
+      { channel, target },
+      'A Redis subscription listener could not be accounted for; the subscriber connection will be rebuilt',
+    );
   };
 
   /**
@@ -483,19 +546,34 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
    * times over.
    */
   const resubscribeAll = async (connection: RedisConnection): Promise<void> => {
-    for (const channel of channels.keys()) {
-      try {
-        await dropListener(connection, channel);
-        const listener = dispatch(channel);
-        await connection.subscribe(channel, listener);
-        activeListeners.set(channel, listener);
-      } catch (error) {
-        recordError('subscriber', error);
-        logger.error(
-          { channel, target, error: toError(error).message },
-          'Failed to restore Redis subscription after reconnect',
-        );
-      }
+    for (const channel of [...channels.keys()]) {
+      // Through the same per-channel queue as the public operations: a caller
+      // subscribing while this replay is mid-round-trip would otherwise add its
+      // own listener alongside the one being restored.
+      const usableConnection = await onChannel(channel, async () => {
+        // The channel may have been dropped while this replay waited its turn.
+        if (!channels.has(channel)) return true;
+        if (!(await dropListener(connection, channel))) {
+          // The previous listener is still registered and now unreachable, so
+          // restoring this channel would double every message on it. A fresh
+          // connection carries none, and its own `onconnect` runs this again.
+          flagStaleSubscriber(channel);
+          return false;
+        }
+        try {
+          const listener = dispatch(channel);
+          await connection.subscribe(channel, listener);
+          activeListeners.set(channel, listener);
+        } catch (error) {
+          recordError('subscriber', error);
+          logger.error(
+            { channel, target, error: toError(error).message },
+            'Failed to restore Redis subscription after reconnect',
+          );
+        }
+        return true;
+      });
+      if (!usableConnection) return;
     }
   };
 
@@ -614,7 +692,10 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
       // A new connection carries none of the old one's listeners, so the map
       // that tracks them has to start empty or `resubscribeAll` would try to
       // remove listeners that live on a connection already retired.
-      if (entry.role === 'subscriber') activeListeners.clear();
+      if (entry.role === 'subscriber') {
+        activeListeners.clear();
+        staleSubscriber = false;
+      }
 
       const connection = connectionFactory(url, entry.role);
       const handlers = attachHandlers(entry, connection);
@@ -646,7 +727,8 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
     for (const role of REDIS_ROLES) {
       const entry = supervised[role];
       if (entry.connecting || entry.state === 'closed') continue;
-      if (entry.connection?.connected) {
+      const suspect = entry.role === 'subscriber' && staleSubscriber;
+      if (entry.connection?.connected && !suspect) {
         setState(entry, 'ready');
         continue;
       }
@@ -672,6 +754,36 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
     const error = new Error(`Redis ${role} connection is not available for ${operation}`);
     lastError = { role, message: error.message, code: 'ERR_REDIS_UNAVAILABLE' };
     return { ok: false, error };
+  };
+
+  /**
+   * Put this manager's listener for a channel on the wire.
+   *
+   * The single place a listener is ever registered, so the invariant that keeps
+   * delivery exactly-once lives here too: never subscribe while `activeListeners`
+   * still holds an entry. An entry at this point means a previous removal did
+   * not complete, and Bun de-duplicates nothing — a second listener would double
+   * every message on the channel. Rebuilding the connection is the only way back,
+   * so this asks for that instead and reports the channel as unavailable.
+   *
+   * Callers must have registered the channel in `channels` first: a failure here
+   * is temporary, and the registry is what the reconnect replays.
+   */
+  const attachListener = async (channel: string): Promise<RedisOutcome<void>> => {
+    const connection = usable('subscriber');
+    if (!connection) return unavailable<void>('subscriber', `SUBSCRIBE ${channel}`);
+    if (activeListeners.has(channel)) {
+      flagStaleSubscriber(channel);
+      return unavailable<void>('subscriber', `SUBSCRIBE ${channel}`);
+    }
+    try {
+      const listener = dispatch(channel);
+      await connection.subscribe(channel, listener);
+      activeListeners.set(channel, listener);
+      return { ok: true as const, value: undefined };
+    } catch (error) {
+      return { ok: false as const, error: recordError('subscriber', error) };
+    }
   };
 
   return {
@@ -737,53 +849,64 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
     },
 
     async subscribe(channel, handler) {
-      const existing = channels.get(channel);
-      if (existing) {
-        // Already subscribed on the wire; this handler joins the fan-out.
-        existing.add(handler);
-        return { ok: true as const, value: undefined };
-      }
-      // Registered before the command is issued, so a failure here still leaves
-      // the channel in the registry for the watchdog's next reconnect to restore
-      // — the caller asked to be subscribed, and a down Redis is temporary.
-      channels.set(channel, new Set([handler]));
-
-      const connection = usable('subscriber');
-      if (!connection) return unavailable<void>('subscriber', `SUBSCRIBE ${channel}`);
-      try {
-        const listener = dispatch(channel);
-        await connection.subscribe(channel, listener);
-        activeListeners.set(channel, listener);
-        return { ok: true as const, value: undefined };
-      } catch (error) {
-        return { ok: false as const, error: recordError('subscriber', error) };
-      }
+      return onChannel(channel, async () => {
+        const existing = channels.get(channel);
+        if (existing) {
+          existing.add(handler);
+          // A registration with no listener behind it is a channel whose wire
+          // SUBSCRIBE never landed — a rejected command on a connection that
+          // stayed up, such as an ACL `NOPERM`, leaves exactly that. Nothing
+          // retries it: the watchdog only rebuilds connections that are down,
+          // and the registry already holds the channel, so every later
+          // subscribe would take the branch above and report success while the
+          // channel stays permanently deaf. Re-issue instead.
+          if (activeListeners.has(channel)) return { ok: true as const, value: undefined };
+          return attachListener(channel);
+        }
+        // Registered before the command is issued, so a failure here still
+        // leaves the channel in the registry for the watchdog's next reconnect
+        // to restore — the caller asked to be subscribed, and a down Redis is
+        // temporary.
+        channels.set(channel, new Set([handler]));
+        return attachListener(channel);
+      });
     },
 
     async unsubscribe(channel, handler) {
-      const handlers = channels.get(channel);
-      if (!handlers) return { ok: true as const, value: undefined };
-      handlers.delete(handler);
-      if (handlers.size > 0) return { ok: true as const, value: undefined };
-      channels.delete(channel);
+      return onChannel(channel, async () => {
+        const handlers = channels.get(channel);
+        if (!handlers) return { ok: true as const, value: undefined };
+        handlers.delete(handler);
+        if (handlers.size > 0) return { ok: true as const, value: undefined };
+        channels.delete(channel);
 
-      const connection = usable('subscriber');
-      if (!connection) {
-        // The registry is what a reconnect replays, and the channel is gone from
-        // it, so a dropped connection has already achieved the intent.
-        activeListeners.delete(channel);
-        return { ok: true as const, value: undefined };
-      }
-      try {
+        const connection = usable('subscriber');
+        if (!connection) {
+          // Nothing can be removed over a connection that is not up, and the
+          // registry — which is what a reconnect replays — no longer holds the
+          // channel, so the caller's intent is met. The `activeListeners` entry
+          // is deliberately kept: the connection may come back up with that
+          // listener still on it, and the entry is what stops a later subscribe
+          // from stacking a second one. A replacement connection clears the map
+          // wholesale.
+          return { ok: true as const, value: undefined };
+        }
         // Through the client rather than a raw `UNSUBSCRIBE` command: the raw
         // form unsubscribes the server but leaves Bun's listener in place, so a
         // later re-subscribe to the same channel would deliver every message
         // twice.
-        await dropListener(connection, channel);
-        return { ok: true as const, value: undefined };
-      } catch (error) {
-        return { ok: false as const, error: recordError('subscriber', error) };
-      }
+        if (await dropListener(connection, channel)) {
+          return { ok: true as const, value: undefined };
+        }
+        flagStaleSubscriber(channel);
+        return {
+          ok: false as const,
+          error: recordError(
+            'subscriber',
+            new Error(`Redis subscriber could not release ${channel}`),
+          ),
+        };
+      });
     },
 
     async ping() {

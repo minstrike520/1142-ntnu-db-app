@@ -49,6 +49,13 @@ interface FakeConnection extends RedisConnection {
   failConnect: boolean;
   /** Makes `unsubscribe()` never settle, as a dead socket does. */
   hangUnsubscribe: boolean;
+  /**
+   * Makes the two-argument `unsubscribe` reject, as a drop mid-round-trip does.
+   *
+   * Only that form: the bare `unsubscribe()` is what retirement uses to leave
+   * subscriber mode, and a connection being replaced still has to close.
+   */
+  failUnsubscribe: boolean;
   /** Makes every command reject, as a mid-flight drop does. */
   failCommands: boolean;
   /**
@@ -62,7 +69,16 @@ interface FakeConnection extends RedisConnection {
   deferConnect: boolean;
   /** With `deferConnect`, whether resolving should also fire `onconnect`. */
   announceOnConnect: boolean;
+  /**
+   * Holds `subscribe()` open until `settleSubscribe()` is called.
+   *
+   * The window a real round trip leaves open, and the only way to test what an
+   * operation arriving in the middle of one observes.
+   */
+  deferSubscribe: boolean;
   settleConnect(): void;
+  /** Release the held `subscribe()`, and stop holding later ones. */
+  settleSubscribe(): void;
   /** Drop the connection the way Bun does for a retryable blip: silently. */
   drop(): void;
   /** Deliver a message as the server would. */
@@ -71,6 +87,7 @@ interface FakeConnection extends RedisConnection {
 
 const createFakeConnection = (role: RedisRole): FakeConnection => {
   let pendingConnect: (() => void) | undefined;
+  let pendingSubscribe: (() => void) | undefined;
   const fake: FakeConnection = {
     role,
     connected: false,
@@ -85,13 +102,21 @@ const createFakeConnection = (role: RedisRole): FakeConnection => {
     connectCalls: 0,
     failConnect: false,
     hangUnsubscribe: false,
+    failUnsubscribe: false,
     failCommands: false,
     deferConnect: false,
     announceOnConnect: true,
+    deferSubscribe: false,
 
     settleConnect() {
       const release = pendingConnect;
       pendingConnect = undefined;
+      release?.();
+    },
+    settleSubscribe() {
+      fake.deferSubscribe = false;
+      const release = pendingSubscribe;
+      pendingSubscribe = undefined;
       release?.();
     },
 
@@ -123,6 +148,11 @@ const createFakeConnection = (role: RedisRole): FakeConnection => {
     },
     async subscribe(channel, listener) {
       if (fake.failCommands) throw new Error('subscribe failed');
+      if (fake.deferSubscribe) {
+        await new Promise<void>((resolve) => {
+          pendingSubscribe = resolve;
+        });
+      }
       fake.subscribeCalls.push(channel);
       fake.listeners.set(channel, [...(fake.listeners.get(channel) ?? []), listener]);
       return fake.listeners.size;
@@ -134,6 +164,7 @@ const createFakeConnection = (role: RedisRole): FakeConnection => {
         fake.listeners.clear();
         return;
       }
+      if (fake.failUnsubscribe) throw new Error(`unsubscribe refused for ${channel}`);
       const remaining = (fake.listeners.get(channel) ?? []).filter((entry) => entry !== listener);
       if (remaining.length > 0) fake.listeners.set(channel, remaining);
       else fake.listeners.delete(channel);
@@ -447,6 +478,98 @@ describe('redis manager', () => {
       // The caller asked to be subscribed and the outage is temporary, so the
       // intent has to survive for the reconnect to replay.
       expect(manager.status.subscribedChannels).toEqual(['room']);
+    });
+
+    it('re-issues a subscription the first attempt never landed', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+      const subscriber = harness.byRole('subscriber');
+
+      // A rejected command rather than a dropped socket — an ACL `NOPERM` is
+      // the real-world shape. Nothing will rebuild a connection that stays up,
+      // so if this registration is treated as complete the channel is deaf for
+      // the lifetime of the process.
+      subscriber.failCommands = true;
+      expect((await manager.subscribe('room', () => {})).ok).toBe(false);
+      expect(subscriber.connected).toBe(true);
+      expect(subscriber.subscribeCalls).toEqual([]);
+
+      subscriber.failCommands = false;
+      const received: string[] = [];
+      const second = await manager.subscribe('room', (message) => received.push(message));
+
+      expect(second.ok).toBe(true);
+      expect(subscriber.subscribeCalls).toEqual(['room']);
+      subscriber.emit('room', 'x');
+      expect(received).toEqual(['x']);
+    });
+
+    it('reports a removal that did not happen instead of claiming success', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+      const subscriber = harness.byRole('subscriber');
+      const handler: RedisMessageHandler = () => {};
+      await manager.subscribe('room', handler);
+
+      subscriber.failUnsubscribe = true;
+      const result = await manager.unsubscribe('room', handler);
+
+      expect(result.ok).toBe(false);
+      // Still registered on a connection that is perfectly healthy, and the
+      // reference needed to remove it is the one that just failed.
+      expect(subscriber.listeners.get('room')).toHaveLength(1);
+      expect(manager.status.subscribedChannels).toEqual([]);
+    });
+
+    it('replaces a subscriber still holding a listener it cannot remove', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+      const first = harness.byRole('subscriber');
+      const handler: RedisMessageHandler = () => {};
+      await manager.subscribe('room', handler);
+
+      first.failUnsubscribe = true;
+      await manager.unsubscribe('room', handler);
+      // Healthy by every signal the watchdog normally reads, and replaced
+      // anyway: a listener nothing can remove is not recoverable in place.
+      expect(first.connected).toBe(true);
+      harness.tick();
+      await settle();
+
+      expect(harness.allFor('subscriber')).toHaveLength(2);
+      const second = harness.byRole('subscriber');
+      const received: string[] = [];
+      await manager.subscribe('room', (message) => received.push(message));
+      second.emit('room', 'x');
+
+      expect(received).toEqual(['x']);
+    });
+
+    it('does not let an unsubscribe overtake a subscribe on the same channel', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+      const subscriber = harness.byRole('subscriber');
+      const handler: RedisMessageHandler = () => {};
+
+      subscriber.deferSubscribe = true;
+      const subscribing = manager.subscribe('room', handler);
+      const unsubscribing = manager.unsubscribe('room', handler);
+      subscriber.settleSubscribe();
+      await subscribing;
+      await unsubscribing;
+
+      // Unserialised, the unsubscribe reads the bookkeeping mid-write: it finds
+      // no listener to remove, reports success, and the subscribe then registers
+      // one for a channel nobody is subscribed to any more.
+      expect(manager.status.subscribedChannels).toEqual([]);
+      expect(subscriber.listeners.get('room')).toBeUndefined();
+
+      const received: string[] = [];
+      await manager.subscribe('room', (message) => received.push(message));
+      subscriber.emit('room', 'x');
+
+      // The listener left behind would have made this two.
+      expect(received).toEqual(['x']);
     });
   });
 
