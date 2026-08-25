@@ -667,6 +667,35 @@ describe('redis manager', () => {
       expect(received).toEqual(['x']);
     });
 
+    it('leaves a subscribe that is merely slow alone', async () => {
+      const { manager, harness } = createHarness();
+      await manager.connect();
+      const subscriber = harness.byRole('subscriber');
+
+      // A first SUBSCRIBE whose round trip outlasts a watchdog interval — a
+      // congested Redis, with TCP perfectly healthy. Mid-flight it looks exactly
+      // like a channel that never reached the wire.
+      subscriber.deferSubscribe = true;
+      const subscribing = manager.subscribe('room', () => {});
+      // The channel queue starts its operation in a microtask, so let the
+      // registration land before the tick — otherwise the repair pass has
+      // nothing to look at and the test proves nothing.
+      await settle();
+      harness.tick();
+      await settle();
+      subscriber.settleSubscribe();
+      await subscribing;
+
+      harness.tick();
+      await settle();
+
+      // A second attach queued behind the first would have found the listener
+      // in place, read it as a removal that failed, and replaced a connection
+      // with nothing wrong with it.
+      expect(harness.allFor('subscriber')).toHaveLength(1);
+      expect(subscriber.subscribeCalls).toEqual(['room']);
+    });
+
     it('leaves healthy connections alone', async () => {
       const { manager, harness } = createHarness();
       await manager.connect();

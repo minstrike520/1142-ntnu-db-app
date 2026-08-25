@@ -769,6 +769,14 @@ export const createRedisManager = (options: CreateRedisManagerOptions): RedisMan
     if (!subscriber.connection?.connected) return;
     for (const channel of channels.keys()) {
       if (activeListeners.has(channel)) continue;
+      // A channel with work already queued is not evidence of anything: the
+      // most likely reason it has no listener yet is that its first SUBSCRIBE
+      // is still out. Queueing a second attach behind it would find the
+      // listener in place, read that as a removal that failed, and rebuild a
+      // healthy connection — turning a slow round trip into a realtime gap.
+      // Whatever is queued will either land, making the repair unnecessary, or
+      // fail, leaving it for the tick after.
+      if (channelQueue.has(channel)) continue;
       void onChannel(channel, () => attachListener(channel)).catch(() => undefined);
     }
   };
