@@ -15,6 +15,32 @@ services:
       timeout: 5s
       retries: 10
 
+  # Optional test dependency, not part of the dev stack: `profiles` keeps it out
+  # of a plain `docker compose up`, and naming it explicitly
+  # (`docker compose up -d --wait db-test`) auto-enables its profile, so no
+  # `--profile test` is needed. Lives here rather than in a separate compose
+  # file so it uses this project's default network instead of requiring one the
+  # dev stack must have created first.
+  db-test:
+    profiles: ["test"]
+    image: postgres:18-alpine
+    # Offset from dev `db` (5435) so both can run at once; `migrate:test` runs
+    # from the host and connects through this published port.
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ntnu_test
+    # tmpfs, not a volume: every run should start from an empty database.
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:8-alpine
     # Offset like every other published port here (db 5435, backend 4005,
