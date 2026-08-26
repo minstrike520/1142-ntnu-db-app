@@ -28,11 +28,26 @@ jobs:
           --health-interval 2s
           --health-timeout 5s
           --health-retries 10
+      # The integration tier pins the Redis semantics that presence leases rest
+      # on — per-field TTLs, HLEN excluding expired fields, the key vanishing
+      # with its last field — and a fake cannot answer for any of them. Same
+      # image as the dev stack, on the same host port, so the default in
+      # tests/integration/realtime/presenceStore.int.test.ts also works locally.
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6385:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
     env:
       # The migration runner reads DATABASE_URL; the test helpers read
       # DATABASE_URL_TEST (tests/helpers/testPool.ts throws without it). Both
       # are needed — see the explicit DATABASE_URL on the migrate step below.
       DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5433/ntnu_test
+      REDIS_URL_TEST: redis://localhost:6385
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace

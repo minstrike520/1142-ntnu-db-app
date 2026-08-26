@@ -2,7 +2,7 @@ import type { FriendResponse } from '@shared/types';
 import { ForbiddenError, ValidationError } from '../utils/AppError';
 import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
 import type { ChatServer } from './authSocket';
-import { trackUserConnection, trackUserDisconnection } from './presence';
+import { trackUserConnection, trackUserDisconnection, type PresenceTracker } from './presence';
 import { mapErrorToApiShape } from '../utils/mapError';
 import { env } from '../config/env';
 
@@ -14,6 +14,14 @@ interface SocketDeps {
     roomId: string,
     operation: () => Promise<T> | T,
   ) => Promise<T>;
+  /**
+   * The presence tracker, defaulting to the process-wide one.
+   *
+   * Injected so a test can watch these two calls without `mock.module`, which
+   * would replace the module for every later test file in the same process.
+   * See backend/tests/CLAUDE.md.
+   */
+  presence?: Pick<PresenceTracker, 'trackUserConnection' | 'trackUserDisconnection'>;
 }
 
 const maxSessionsPerUser = (): number => env().realtime.maxSessionsPerUser;
@@ -36,6 +44,7 @@ const sessionReservationTtlMs = (): number => env().realtime.sessionReservationT
  * authorization and the transaction that creates the durable event.
  */
 export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
+  const presence = deps.presence ?? { trackUserConnection, trackUserDisconnection };
   const sessionLimit = maxSessionsPerUser();
   const sessionCounts = new Map<string, number>();
   const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -170,7 +179,7 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
     );
 
     if (deps.friendRepository) {
-      trackUserConnection(io, userId, socket.id, deps.friendRepository).catch((err) => {
+      presence.trackUserConnection(io, userId, socket.id, deps.friendRepository).catch((err) => {
         console.error('trackUserConnection error:', err);
       });
     }
@@ -181,7 +190,7 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
       releaseSession(userId);
 
       if (deps.friendRepository) {
-        trackUserDisconnection(io, userId, socket.id, deps.friendRepository).catch((err) => {
+        presence.trackUserDisconnection(io, userId, socket.id, deps.friendRepository).catch((err) => {
           console.error('trackUserDisconnection error:', err);
         });
       }

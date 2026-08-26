@@ -1584,7 +1584,7 @@ endpoint sets the flag; see `docs/DEVELOPMENT.md` for the bootstrap procedure.
 | `read_update` | `{ roomId: string, userId: string, messageId: string, readPosition?: number }` | Read receipt updates of other members |
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | Room or membership state change. `type` determines the subtype. See [`room_update` Subtypes](#room_update-subtypes). |
 | `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected' \| 'deleted' \| 'blocked' \| 'unblocked', createdAt: string }` | Friend lifecycle notification. Delivered to the relevant user; the client should refresh friend and pending-request lists upon receiving this event regardless of `status`. |
-| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | Presence update for a friend. Delivered when a friend connects or disconnects. |
+| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | Presence update for a friend. Delivered when a friend connects or disconnects. Whether someone is online is shared across backend instances, but this push is not: it reaches only sockets held by the instance the friend connected to, so a client on a different instance sees the change on its next `GET /api/v1/friends` instead. |
 | `emergency_alert` | `{ userId: string, message: string }` | Receive emergency alert from contact |
 | `realtime_ready` | `void` | Durable room subscriptions have been restored; the client may begin `/sync`. Sent once per connection, and again whenever the server restores a subscription it had revoked |
 | `error` | `ApiError` | Error report for failed event processing |

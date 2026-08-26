@@ -1,16 +1,14 @@
-import { describe, it, expect, beforeEach, afterAll, mock, type Mock } from 'bun:test';
+import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { attachSockets } from '../../../src/realtime/socketServer';
 import type { ChatServer } from '../../../src/realtime/authSocket';
-import { trackUserConnection, trackUserDisconnection } from '../../../src/realtime/presence';
 
-mock.module('../../../src/realtime/presence', () => ({
+// Injected rather than `mock.module`'d: a module mock is process-global within
+// a tier and cannot be undone, so stubbing presence here would also stub it for
+// every later file in this tier. See backend/tests/CLAUDE.md and issue #467.
+const presence = {
   trackUserConnection: mock().mockResolvedValue(undefined),
   trackUserDisconnection: mock().mockResolvedValue(undefined),
-}));
-
-afterAll(() => {
-  mock.module('../../../src/realtime/presence', () => require('../../../src/realtime/presence?original'));
-});
+};
 
 describe('attachSockets', () => {
   let connectionHandler: any;
@@ -119,8 +117,8 @@ describe('attachSockets', () => {
     const friendRepo = { getFriends: mock() };
 
     beforeEach(() => {
-      ((trackUserConnection as any) as Mock<any>).mockClear();
-      ((trackUserDisconnection as any) as Mock<any>).mockClear();
+      presence.trackUserConnection.mockClear();
+      presence.trackUserDisconnection.mockClear();
 
       let frConnectionHandler: any;
       const frHandlers: Record<string, any> = {};
@@ -142,16 +140,20 @@ describe('attachSockets', () => {
         to: mock(() => ({ emit: mock() })),
       } as unknown as ChatServer;
 
-      attachSockets(frIo, { roomMemberRepository: roomMemberRepo, friendRepository: friendRepo });
+      attachSockets(frIo, {
+        roomMemberRepository: roomMemberRepo,
+        friendRepository: friendRepo,
+        presence,
+      });
       frConnectionHandler(frSocket);
       frHandlers.disconnect();
     });
 
     it('tracks a session on connect and disconnect', () => {
-      expect(trackUserConnection).toHaveBeenCalledWith(
+      expect(presence.trackUserConnection).toHaveBeenCalledWith(
         expect.anything(), 'user-1', 'socket-fr-1', friendRepo,
       );
-      expect(trackUserDisconnection).toHaveBeenCalledWith(
+      expect(presence.trackUserDisconnection).toHaveBeenCalledWith(
         expect.anything(), 'user-1', 'socket-fr-1', friendRepo,
       );
     });

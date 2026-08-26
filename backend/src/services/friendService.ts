@@ -1,6 +1,6 @@
 import { AppError, ConflictError, ValidationError } from '../utils/AppError';
 import type { makeFriendRepository } from '../models/friendRepository';
-import { isUserOnline } from '../realtime/presence';
+import { onlineAmong } from '../realtime/presence';
 
 export function makeFriendService(
   repo: ReturnType<typeof makeFriendRepository>,
@@ -12,6 +12,9 @@ export function makeFriendService(
     reopenPrivateRoom?(userA: string, userB: string): Promise<void>;
   },
   removeUserFromRoom?: (userId: string, roomId: string) => void | Promise<void>,
+  // Injected for the same reason as in `roomService`: presence is a
+  // collaborator, not an import a test has to work around.
+  readOnlineAmong: (userIds: string[]) => Promise<Set<string>> = onlineAmong,
 ) {
   return {
     async sendFriendRequest(requesterId: string, targetUserId: string) {
@@ -103,11 +106,17 @@ export function makeFriendService(
 
     async getFriends(userId: string) {
       const friends = await repo.getFriends(userId);
+      // One presence read for the whole list, for the same reason as
+      // `roomService.list`: a per-friend check makes the cost of this endpoint
+      // the size of the person's friend list.
+      const online = await readOnlineAmong(
+        friends.flatMap((f) => (f && f.friend ? [f.friend.userId] : [])),
+      );
       return friends.map((f) => {
         if (f && f.friend) {
           return {
             ...f,
-            status: isUserOnline(f.friend.userId) ? 'online' : 'offline',
+            status: online.has(f.friend.userId) ? 'online' : 'offline',
           };
         }
         return f;

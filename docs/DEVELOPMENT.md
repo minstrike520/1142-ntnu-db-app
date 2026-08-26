@@ -138,8 +138,30 @@ image, or a restart that loses committed state, fails the build.
 `MAX_SESSIONS_PER_USER`, `PRESENCE_GRACE_MS`, `TYPING_TTL_MS` and
 `SESSION_RESERVATION_TTL_MS` control local session, presence-reconnect,
 typing-indication and handshake-slot limits; like every other backend variable
-they are declared in `backend/src/config/env.ts`. Multi-node presence,
-global rate limits, and cross-node change fan-out remain outside this service.
+they are declared in `backend/src/config/env.ts`.
+
+`PRESENCE_TTL_MS` and `INSTANCE_ID` belong to the presence leases the backend
+keeps in Redis. With `REDIS_URL` set, each instance holds one lease per user it
+has a connection for — `presence:user:{userId}` is a hash with one field per
+instance, and each field expires on its own — so `GET /rooms` and `GET /friends`
+answer for the whole deployment rather than for one process, and a user is
+announced online only on the first connection anywhere and offline only when the
+last one goes. `PRESENCE_TTL_MS` bounds how long a crashed instance keeps its
+users showing as online: nothing runs on a dead process to hand the leases back,
+so only the expiry does it. Every lease is refreshed three times per TTL, and a
+graceful shutdown hands them all back rather than waiting the TTL out.
+`INSTANCE_ID` names this process in that hash; left unset one is generated per
+start, which is fine unless your orchestrator already has a stable per-replica
+name to reuse. Per-field TTLs need **Redis 7.4 or newer** — against an older
+server the write fails, the backend logs the requirement once, and presence
+falls back to this instance only.
+
+What is *not* shared yet is the `user_status` push: `io.to()` reaches only the
+sockets held by the emitting process, so a friend connected to a different
+instance sees the change on their next `GET /friends` rather than over the
+socket. Closing that is the Redis event bus in #475/#476. The per-user session
+limit, global rate limits and cross-node change fan-out also remain
+per-instance, so a replica count above one is not yet a supported deployment.
 
 ### Production Ingress & Proxy Trust
 
