@@ -20,7 +20,13 @@ inputs:
   node-version:
     description: Node.js version
     required: false
-    default: '24'
+    # Major form, not a patch pin. An exact pin would only ever prove that one
+    # patch works — the opposite of what CI should show — and would stop
+    # receiving Node's own security fixes the moment the next patch ships. The
+    # floor itself (22.22.2, set by jsdom) is proven instead by the node-version
+    # matrix on ci-frontend.yml's `test` job, which runs that exact version
+    # alongside this default rather than replacing it.
+    default: '22'
   bun-version:
     description: Bun version
     required: false
