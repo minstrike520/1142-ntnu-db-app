@@ -101,6 +101,7 @@ jobs:
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
+              - 'scripts/**'
               - '.dockerignore'
               - 'docker-compose*.yml'
               - '.github/workflows/**'

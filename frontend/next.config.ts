@@ -26,6 +26,15 @@ const nextConfig: NextConfig = {
   // silently changes the paths the production Dockerfile copies from.
   // `next build` always runs with the package directory as cwd.
   outputFileTracingRoot: path.resolve(process.cwd(), ".."),
+  // Node 22.12+ enables require(esm) and selects the `module-sync` export from
+  // @swc/helpers. Next's tracer currently follows only the CommonJS fallback,
+  // which leaves a standalone image that builds successfully but exits at
+  // startup. Force the narrowly-scoped ESM helper files into every server
+  // trace; the glob is project-relative, while the pnpm store is at the
+  // workspace root above this package.
+  outputFileTracingIncludes: {
+    "/*": ["../node_modules/.pnpm/@swc+helpers@*/node_modules/@swc/helpers/esm/**/*"],
+  },
   reactCompiler: true,
   env: {
     NEXT_PUBLIC_APP_VERSION: buildVersion,

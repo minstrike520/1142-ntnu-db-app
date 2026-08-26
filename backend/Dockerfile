@@ -13,7 +13,7 @@ FROM oven/bun:1.3.14-slim
 # other one by replacing `node-pg-migrate` with a `Bun.SQL` runner, so nothing
 # the application itself runs needs node any more. This COPY can go when the
 # package manager does — see #416 for the bun-toolchain proposal.
-COPY --from=node:24-slim /usr/local/ /usr/local/
+COPY --from=node:22-slim /usr/local/ /usr/local/
 
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends openssl \

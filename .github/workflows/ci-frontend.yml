@@ -14,6 +14,16 @@ permissions:
   contents: read
 
 jobs:
+  node-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat
+      - run: pnpm test:node-engine
+      - run: pnpm check:node-engine
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -59,7 +69,8 @@ jobs:
         # is runnable, at the cost of a ~10-20s Node download (it is outside the
         # runner toolcache) and of receiving no later 22.x security fixes. Do
         # not "fix" it into a floating tag — that would delete the coverage.
-        # Keep this literal in step with `engines.node` until #580 derives it.
+        # Keep this literal at the minimum version derived by the node-engine
+        # guard; the other leg intentionally floats to the newest Node 22.
         node-version: ['22', '22.22.2']
     steps:
       - uses: actions/checkout@v7
@@ -78,3 +89,13 @@ jobs:
         with:
           package: near-chat-frontend
       - run: pnpm --filter near-chat-frontend build
+
+  docker-build:
+    if: inputs.run-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the development frontend image
+        run: docker build -f frontend/Dockerfile -t near-chat-frontend-dev:ci .
+      - name: Build the production frontend image
+        run: docker build -f frontend/Dockerfile.prod --build-arg NEXT_PUBLIC_API_URL=http://localhost:4005 -t near-chat-frontend:ci .
