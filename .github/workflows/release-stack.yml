@@ -435,6 +435,10 @@ jobs:
           POSTGRES_PASSWORD=change-me
           POSTGRES_DB=near_chat
           DATABASE_URL=postgresql://change-me:change-me@db:5432/near_chat
+          # Optional. This bundle ships no Redis service, so leave it blank to
+          # run realtime single-node, or point it at a managed endpoint —
+          # rediss://default:<password>@host:6380 — for cross-node fan-out.
+          REDIS_URL=
           JWT_SECRET=change-me-to-a-long-random-secret
           JWT_EXPIRES_IN=15m
           CORS_ORIGINS=http://localhost:3005
