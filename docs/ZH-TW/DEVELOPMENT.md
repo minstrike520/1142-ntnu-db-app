@@ -76,7 +76,7 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 | **前端** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js 前端網頁應用程式 |
 | **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API 與 Socket.IO 伺服器 |
 | **資料庫** | `localhost:5435` | 5432 | PostgreSQL 18 實例 |
-| **Redis** | `localhost:6385` | 6379 | 供即時狀態使用的 Redis 8 實例。因為沒有設定密碼，只綁定在 `127.0.0.1`。後端要到 #472 才會讀取 |
+| **Redis** | `localhost:6385` | 6379 | 供即時狀態使用的 Redis 8 實例。因為沒有設定密碼，只綁定在 `127.0.0.1`。後端啟動時會連線，但不依賴它：Redis 連不上只會讓即時通訊降級，不會讓 API 停擺 |
 
 對於瀏覽器端的前端請求，請將 API 環境變數設定為：
 ```env
@@ -519,11 +519,12 @@ describe('userRepository', () => {
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
-* **backend 起不來，且 `docker compose ps` 顯示 `redis` unhealthy 或已結束**：
-  `backend` 會等 `redis` 通過 healthcheck 才啟動，因此 Redis 起不來也會連帶擋住
-  `migrate:up`。最常見的原因是主機連接埠被占用：請在 `docker compose logs redis`
-  中查看是否有 `port is already allocated`，並釋放 `127.0.0.1:6385`，
-  或直接修改 `docker-compose.yml` 中的對應設定。
+* **`docker compose ps` 顯示 `redis` unhealthy 或已結束**：backend 仍會照常啟動並
+  提供服務——API 完全不受影響，只有即時通訊退回單節點——所以症狀是 presence 與
+  typing 更新消失，而不是啟動失敗。但 `docker compose up -d --wait` 仍會回報失敗，
+  因為它會等待每個服務的 healthcheck，與誰依賴誰無關。最常見的原因是主機連接埠被
+  占用：請在 `docker compose logs redis` 中查看是否有 `port is already allocated`，
+  並釋放 `127.0.0.1:6385`，或直接修改 `docker-compose.yml` 中的對應設定。
 * **確認 backend 真的連得到 Redis**：backend 映像檔內沒有 `redis-cli`，其 shell 也不是
   bash，所以無法使用 `/dev/tcp`。但容器內有 Node，可用以下指令驗證 `REDIS_URL`
   確實有傳進容器且能解析：

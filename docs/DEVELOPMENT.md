@@ -82,7 +82,7 @@ Docker Compose exposes different host ports from the container-internal ports:
 | **Frontend** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js frontend web app |
 | **Backend API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API & Socket.IO server |
 | **Database** | `localhost:5435` | 5432 | PostgreSQL 18 instance |
-| **Redis** | `localhost:6385` | 6379 | Redis 8 instance for realtime state. Bound to `127.0.0.1` only — it runs without a password. Not read by the backend until #472 |
+| **Redis** | `localhost:6385` | 6379 | Redis 8 instance for realtime state. Bound to `127.0.0.1` only — it runs without a password. The backend connects at boot but never depends on it: an unreachable Redis degrades realtime, it does not stop the API |
 
 For browser-facing frontend requests, set the API environment variable to:
 ```env
@@ -562,11 +562,14 @@ describe('userRepository', () => {
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
-* **Backend will not start, and `docker compose ps` shows `redis` unhealthy or exited**:
-  `backend` waits for `redis` to pass its healthcheck, so a Redis that cannot
-  start also blocks `migrate:up`. The usual cause is the host port: check for
-  `port is already allocated` in `docker compose logs redis`, and free
-  `127.0.0.1:6385` or change the mapping in `docker-compose.yml`.
+* **`docker compose ps` shows `redis` unhealthy or exited**: the backend starts
+  and serves anyway — the API is unaffected and realtime falls back to
+  single-node — so this surfaces as missing presence and typing updates rather
+  than as a failed boot. `docker compose up -d --wait` still reports a failure,
+  because it waits on every service's healthcheck regardless of who depends on
+  it. The usual cause is the host port: check for `port is already allocated` in
+  `docker compose logs redis`, and free `127.0.0.1:6385` or change the mapping in
+  `docker-compose.yml`.
 * **Checking that the backend can actually reach Redis**: the backend image has
   no `redis-cli`, and its shell is not bash, so `/dev/tcp` is unavailable. Node
   is present, so use it to prove that `REDIS_URL` landed in the container and

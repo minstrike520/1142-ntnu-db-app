@@ -98,9 +98,14 @@ services:
       # Resolved inside this container, so the host is the compose service name
       # `redis` — not `localhost:6385`, which is only the host-side mapping.
       # Defaulted rather than required so a checkout whose .env predates this
-      # service still starts. No backend code reads this yet; #472 adds the
-      # Redis client module that consumes it.
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      # service still starts. Consumed by src/utils/redis.ts, which treats an
+      # unset or unreachable Redis as a degraded mode rather than a boot failure.
+      #
+      # `-` rather than `:-`: that degraded mode is a supported deployment, and
+      # an empty REDIS_URL is how .env.example says to ask for it. `:-` would
+      # substitute the default for an empty value too, leaving the opt-out
+      # unreachable for anyone running the documented compose flow.
+      - REDIS_URL=${REDIS_URL-redis://redis:6379}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
@@ -140,8 +145,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Started, not healthy. src/utils/redis.ts treats Redis as a degraded mode
+      # rather than a boot dependency, and .env.example documents running without
+      # it as a supported deployment; gating startup on the healthcheck
+      # contradicts both, because a Redis that cannot bind its port would then
+      # stop the API from serving the routes that never touch Redis. Ordering is
+      # still worth keeping: starting redis first means the usual case connects
+      # on the first attempt instead of waiting out a watchdog tick.
       redis:
-        condition: service_healthy
+        condition: service_started
     command: sh -c "pnpm run migrate:up && pnpm run dev"
     # Without this, `up --wait` returns as soon as the container is *running* —
     # which here is while `migrate:up` is still going and nothing is listening

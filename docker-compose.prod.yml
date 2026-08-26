@@ -59,7 +59,12 @@ services:
       # wrong. This one resolves to the same string in both stacks (same service
       # name, same container port), and pointing a deployment at a managed Redis
       # — usually `rediss://` — is an explicit requirement of issue #471.
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      #
+      # `-` rather than `:-`, for the same reason as docker-compose.yml: an
+      # empty REDIS_URL reaches the container empty, and the backend reads that
+      # as "no Redis" and runs realtime single-node — a supported deployment,
+      # not a misconfiguration to be defaulted away.
+      - REDIS_URL=${REDIS_URL-redis://redis:6379}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
@@ -89,8 +94,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Started, not healthy. src/utils/redis.ts treats Redis as a degraded mode
+      # rather than a boot dependency, and .env.example documents running without
+      # it as a supported deployment; gating startup on the healthcheck
+      # contradicts both, because a Redis that cannot bind its port would then
+      # stop the API from serving the routes that never touch Redis. Ordering is
+      # still worth keeping: starting redis first means the usual case connects
+      # on the first attempt instead of waiting out a watchdog tick.
       redis:
-        condition: service_healthy
+        condition: service_started
     volumes:
       - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/app/uploads
 

@@ -36,6 +36,13 @@ services:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      # Optional, and empty by default because this bundle ships no Redis of its
+      # own — bundling one with a pinned digest is #527. Point it at a managed
+      # endpoint (`rediss://`, or the Valkey schemes) to get cross-node realtime;
+      # left unset the backend serves every REST route and runs realtime
+      # single-node, which is a supported deployment rather than a
+      # misconfiguration. Passed through rather than required for that reason.
+      REDIS_URL: ${REDIS_URL:-}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
       RATE_LIMIT_DISABLED: ${RATE_LIMIT_DISABLED:-false}
