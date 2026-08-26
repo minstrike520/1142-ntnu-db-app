@@ -1,5 +1,6 @@
 import type pino from 'pino';
 import type { RedisManager, RedisOutcome } from '../utils/redis';
+import { DEFAULT_PRESENCE_TTL_MS } from '../config/env';
 import { logger as defaultLogger } from '../utils/logger';
 
 /**
@@ -84,11 +85,28 @@ export interface PresenceStore {
  * "first connection anywhere" test a race: two instances taking a user's first
  * lease at the same moment would both read a count that already included the
  * other, and neither would announce the user online.
+ *
+ * `redis.pcall` and the compensating `HDEL` are what make the *script* safe to
+ * run against a server that cannot do the second half. A script is atomic but
+ * it is not transactional: an error partway through does not roll back what ran
+ * before it, so on a Redis older than 7.4 the `HSET` would land, `HPEXPIRE`
+ * would fail as an unknown command, and the degraded mode this module documents
+ * would leave behind exactly the immortal lease it is trying to avoid —
+ * verified against a real server, and pinned in
+ * `tests/integration/realtime/presenceStore.int.test.ts`. Trapping the failure
+ * and undoing the write inside the same script means the operation either takes
+ * an expiring lease or leaves no trace, with no version probe to race and no
+ * state to keep. Returning the error table propagates it as an error reply, so
+ * the caller still sees `{ ok: false }` and degrades to this instance only.
  */
 const HOLD_SCRIPT = `
 local before = redis.call('HLEN', KEYS[1])
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
-redis.call('HPEXPIRE', KEYS[1], ARGV[2], 'FIELDS', 1, ARGV[1])
+local expiry = redis.pcall('HPEXPIRE', KEYS[1], ARGV[2], 'FIELDS', 1, ARGV[1])
+if type(expiry) == 'table' and expiry.err then
+  redis.call('HDEL', KEYS[1], ARGV[1])
+  return expiry
+end
 return before
 `.trim();
 
@@ -142,7 +160,12 @@ export const createRedisPresenceStore = ({
   ttlMs,
   logger = defaultLogger,
 }: CreatePresenceStoreOptions): PresenceStore => {
-  const ttl = String(Math.max(1, Math.trunc(ttlMs)));
+  // Sanitised rather than trusted: a non-finite value would reach Redis as the
+  // literal `NaN` and be rejected there, which the guard in `HOLD_SCRIPT` would
+  // then handle as an unsupported server — a confusing way to report a bad
+  // setting. `config/env.ts` already rejects an unparsable `PRESENCE_TTL_MS`,
+  // so this only covers a caller constructing the store directly.
+  const ttl = String(Number.isFinite(ttlMs) ? Math.max(1, Math.trunc(ttlMs)) : DEFAULT_PRESENCE_TTL_MS);
   // Hash-field TTLs are the one thing here that a Redis older than 7.4 does not
   // have, and its error says only "unknown command". Naming the requirement
   // once turns a silently single-node deployment into a fixable one, and once

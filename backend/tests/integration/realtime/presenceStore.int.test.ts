@@ -126,6 +126,77 @@ describe('redis presence store against a real Redis', () => {
     expect(await beta.isOnline(user('expiring'))).toEqual({ ok: true, value: true });
   });
 
+  describe('a server that cannot expire a hash field', () => {
+    // Redis older than 7.4 has no `HPEXPIRE`, and this module's documented
+    // answer is to degrade to single-node. That answer is only honest if the
+    // failed attempt leaves nothing behind — the two tests below are why the
+    // hold script traps the failure instead of letting it abort.
+    //
+    // `HPEXPIRE` cannot be made unknown on this server, so the *shape* is
+    // reproduced with a command name that never exists. What is being pinned is
+    // Redis's behaviour, not this module's source: that a script is atomic but
+    // not transactional, and that `redis.pcall` can trap an unknown command.
+    const UNGUARDED = `
+local before = redis.call('HLEN', KEYS[1])
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+redis.call('HPEXPIRE_THAT_DOES_NOT_EXIST', KEYS[1], ARGV[2], 'FIELDS', 1, ARGV[1])
+return before
+`.trim();
+
+    const GUARDED = `
+local before = redis.call('HLEN', KEYS[1])
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+local expiry = redis.pcall('HPEXPIRE_THAT_DOES_NOT_EXIST', KEYS[1], ARGV[2], 'FIELDS', 1, ARGV[1])
+if type(expiry) == 'table' and expiry.err then
+  redis.call('HDEL', KEYS[1], ARGV[1])
+  return expiry
+end
+return before
+`.trim();
+
+    const evalHold = (script: string, name: string) =>
+      redis.command('EVAL', [script, '1', presenceKey(user(name)), `${run}-alpha`, '600', '1']);
+
+    it('leaves an immortal lease behind without the guard, which is the bug', async () => {
+      const result = await evalHold(UNGUARDED, 'solo');
+
+      expect(result.ok).toBe(false);
+      // The write that ran before the error is still there, and with no TTL —
+      // so the instance that took it could die and the user would read online
+      // for good.
+      expect(await redis.command('HLEN', [presenceKey(user('solo'))])).toEqual({
+        ok: true,
+        value: 1,
+      });
+      expect(
+        await redis.command('HPTTL', [presenceKey(user('solo')), 'FIELDS', '1', `${run}-alpha`]),
+      ).toEqual({ ok: true, value: [-1] });
+    });
+
+    it('leaves no trace with the guard, and still reports the failure', async () => {
+      const result = await evalHold(GUARDED, 'solo');
+
+      expect(result.ok).toBe(false);
+      expect(await redis.command('EXISTS', [presenceKey(user('solo'))])).toEqual({
+        ok: true,
+        value: 0,
+      });
+    });
+
+    it('rolls back only its own field, not another instance that is holding one', async () => {
+      await beta.hold(user('shared'), 1);
+
+      const result = await evalHold(GUARDED, 'shared');
+
+      expect(result.ok).toBe(false);
+      expect(await alpha.isOnline(user('shared'))).toEqual({ ok: true, value: true });
+      expect(await redis.command('HLEN', [presenceKey(user('shared'))])).toEqual({
+        ok: true,
+        value: 1,
+      });
+    });
+  });
+
   it('resolves a page of users in one round trip', async () => {
     await alpha.hold(user('page-a'), 1);
 

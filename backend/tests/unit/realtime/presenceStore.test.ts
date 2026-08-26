@@ -61,6 +61,12 @@ describe('redis presence store', () => {
     expect(script).toContain('HLEN');
     expect(script).toContain('HSET');
     expect(script).toContain('HPEXPIRE');
+    // A script is atomic but not transactional: an `HPEXPIRE` that fails on an
+    // older server would otherwise leave the `HSET` behind as a lease that never
+    // expires. See the integration tier, which proves both halves against a real
+    // Redis.
+    expect(script).toContain('redis.pcall');
+    expect(script).toContain('HDEL');
   });
 
   it('drops the lease and reports who is left', async () => {
