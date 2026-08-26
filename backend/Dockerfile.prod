@@ -15,7 +15,7 @@ ENV CI=true
 # the other reason by replacing `node-pg-migrate` with a `Bun.SQL` runner, so
 # the migration step the runner executes at startup no longer needs node. This
 # COPY can go when the package manager does — see #416.
-COPY --from=node:24-slim /usr/local/ /usr/local/
+COPY --from=node:22-slim /usr/local/ /usr/local/
 RUN corepack enable pnpm && corepack prepare pnpm@11.15.0 --activate
 
 WORKDIR /workspace

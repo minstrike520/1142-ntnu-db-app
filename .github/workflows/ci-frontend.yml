@@ -14,6 +14,16 @@ permissions:
   contents: read
 
 jobs:
+  node-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat
+      - run: pnpm test:node-engine
+      - run: pnpm check:node-engine
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -34,7 +44,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    # The only job in CI given a Node version matrix, and deliberately so. Both
+    # The only job in CI given a Node version matrix, and deliberately so. All
     # legs install a byte-identical dependency tree — pnpm resolves from the
     # lockfile, and optional-dependency filtering keys on os/cpu/libc, never on
     # the Node version — so the matrix varies exactly one thing: the binary that
@@ -43,11 +53,12 @@ jobs:
     # that sets the 22.22.2 floor, and this job is its only consumer
     # (frontend/vitest.config.ts runs `environment: "jsdom"`). lint, typecheck
     # and build would each cost another runner slot on every workflow-touching
-    # PR to re-prove a floor far below both legs (eslint 22.13.0, next 20.9.0).
+    # PR to re-prove floors already covered by these legs (eslint 22.13.0, next
+    # 20.9.0).
     strategy:
       # Off, not stylistic: with fail-fast on, the failing leg cancels the other
-      # and destroys the one bit this matrix exists to produce — which version
-      # broke it. That would make a two-leg matrix strictly worse than no matrix.
+      # and destroys the signal this matrix exists to produce — which version
+      # broke it. That would make the matrix strictly worse than no matrix.
       fail-fast: false
       matrix:
         # '22' is what every other job resolves to via the setup-workspace
@@ -59,8 +70,10 @@ jobs:
         # is runnable, at the cost of a ~10-20s Node download (it is outside the
         # runner toolcache) and of receiving no later 22.x security fixes. Do
         # not "fix" it into a floating tag — that would delete the coverage.
-        # Keep this literal in step with `engines.node` until #580 derives it.
-        node-version: ['22', '22.22.2']
+        # Keep this literal at the minimum version derived by the node-engine
+        # guard. The other legs intentionally float to the newest releases of
+        # the supported Node 22 and Node 24 lines.
+        node-version: ['22', '22.22.2', '24']
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
@@ -78,3 +91,13 @@ jobs:
         with:
           package: near-chat-frontend
       - run: pnpm --filter near-chat-frontend build
+
+  docker-build:
+    if: inputs.run-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the development frontend image
+        run: docker build -f frontend/Dockerfile -t near-chat-frontend-dev:ci .
+      - name: Build the production frontend image
+        run: docker build -f frontend/Dockerfile.prod --build-arg NEXT_PUBLIC_API_URL=http://localhost:4005 -t near-chat-frontend:ci .
