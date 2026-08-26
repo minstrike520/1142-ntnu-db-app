@@ -72,4 +72,18 @@ COPY --chown=bun:bun backend/tsconfig.json ./tsconfig.json
 EXPOSE 4000
 ENV NODE_ENV=production
 
-CMD ["sh", "-c", "bun run migrate:up && bun src/index.ts"]
+# `exec` is load-bearing, not style. `/bin/sh` here is dash, and the `&&` stops
+# it from exec-optimising the tail, so without `exec` dash stays PID 1 and runs
+# bun as a child. dash never forwards signals, and the kernel discards signals
+# with a default disposition sent to PID 1 — so `docker stop` was a no-op: the
+# container ignored SIGTERM, ran until the grace period expired and died on
+# SIGKILL (exit 137), with src/index.ts's SIGTERM drain never entering. `exec`
+# replaces dash with bun, so the application is PID 1 and receives the signal
+# itself (issue #586).
+#
+# SIGTERM is still ignored while `migrate:up` runs, because dash is PID 1 for
+# that window. That is safe and deliberately not worked around: migrations run
+# in one transaction under a session-scoped advisory lock (src/models/migrate.ts),
+# so a SIGKILL mid-migration rolls back and frees the lock with nothing half
+# applied.
+CMD ["sh", "-c", "bun run migrate:up && exec bun src/index.ts"]

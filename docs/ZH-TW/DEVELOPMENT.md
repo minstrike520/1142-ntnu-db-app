@@ -135,7 +135,12 @@ typing indication TTL 與握手名額保留時間；與其他後端變數一樣�
 而 `online` 只在全域第一條連線建立時發送、`offline` 只在最後一條消失時發送。
 `PRESENCE_TTL_MS` 界定「某個 instance 當掉後，它的使用者最多被誤顯示成在線多
 久」：行程已死就沒有人能把 lease 還回去，只剩過期能清掉它。後端每個 TTL 內會
-續約三次，而正常關機會主動把 lease 全數交還，不需要等 TTL 到期。`INSTANCE_ID`
+續約三次，而正常關機會主動把 lease 全數交還，不需要等 TTL 到期。但這件事成立的
+前提是 SIGTERM 真的送達行程：container 必須讓應用程式位於 PID 1（因此
+`backend/Dockerfile.prod` 的 CMD 使用 `exec`），也必須留足夠時間讓 drain 完成
+（因此 backend service 設定 `stop_grace_period: 30s`）。兩者只要有一項不對，
+container 就會在 lease 尚未交還時被 SIGKILL，外觀上與「instance 當掉」完全相同
+——完整的關機約定見 docs/ZH-TW/RELEASE.md。`INSTANCE_ID`
 是本行程在該 hash 中的名稱；留空時每次啟動自行產生一個，除非編排器本來就有穩
 定的 per-replica 名稱可以沿用，否則不需要設定。欄位層級的 TTL 需要
 **Redis 7.4 以上** —— 對更舊的伺服器寫入會失敗，後端會記錄一次版本需求，

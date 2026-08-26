@@ -75,6 +75,15 @@ services:
     volumes:
       - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/app/uploads
     command: ["bun", "src/index.ts"]
+    # Docker's default is 10s, which is under this backend's own worst-case
+    # drain: src/index.ts forces the HTTP drain after 10s, then spends up to 2s
+    # handing presence leases back and up to 2s closing Redis. At the default a
+    # slow drain is SIGKILLed exactly while releasing those leases, leaving users
+    # showing online until PRESENCE_TTL_MS expires — the outcome presence.stop()
+    # exists to avoid. 30s clears that ~14s worst case and stays above the 20s
+    # shutdown deadline src/index.ts arms, so the process always exits itself
+    # first (issue #586).
+    stop_grace_period: 30s
 
   frontend:
     image: ${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}

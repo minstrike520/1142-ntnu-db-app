@@ -149,7 +149,13 @@ announced online only on the first connection anywhere and offline only when the
 last one goes. `PRESENCE_TTL_MS` bounds how long a crashed instance keeps its
 users showing as online: nothing runs on a dead process to hand the leases back,
 so only the expiry does it. Every lease is refreshed three times per TTL, and a
-graceful shutdown hands them all back rather than waiting the TTL out.
+graceful shutdown hands them all back rather than waiting the TTL out. That last
+part only holds if SIGTERM actually reaches the process: the container has to
+leave the application at PID 1 (hence the `exec` in `backend/Dockerfile.prod`'s
+CMD) and allow enough time for the drain to finish (hence
+`stop_grace_period: 30s` on the backend service). Get either wrong and the
+container is SIGKILLed with its leases still held, which looks exactly like a
+crashed instance — see docs/RELEASE.md for the full stop contract.
 `INSTANCE_ID` names this process in that hash; left unset one is generated per
 start, which is fine unless your orchestrator already has a stable per-replica
 name to reuse. Per-field TTLs need **Redis 7.4 or newer** — against an older

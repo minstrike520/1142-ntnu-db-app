@@ -118,6 +118,107 @@ jobs:
           echo "migrate exit code: $exit_code"
           [[ "$exit_code" == "0" ]]
 
+      # docker-compose.release.yml overrides the backend command, so until issue
+      # #586 nothing here — or anywhere — ran the image's *own* CMD. That is the
+      # command docker-compose.prod.yml inherits, and it left dash at PID 1,
+      # where the kernel discards SIGTERM: `docker stop` was a no-op that ended
+      # in SIGKILL with the drain never entered. Both argv forms are probed,
+      # because the reasoning that says the release form is safe is the same
+      # reasoning about a shell layer that produced the bug.
+      #
+      # Runs after the migrate assertion above, so the schema is already at head
+      # and each probe's own `migrate:up` is the no-op that step 'Assert
+      # re-applying the bundle is a no-op' proves it to be.
+      - name: Assert SIGTERM drains the backend instead of SIGKILLing it
+        run: |
+          set -euo pipefail
+          # Derived rather than hardcoded to the compose project name, so a
+          # project rename does not silently detach the probe from the database.
+          net="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' \
+            "$(docker compose --env-file "$RUNNER_TEMP/release.env" \
+              -f docker-compose.release.yml ps -q db)")"
+
+          probe () {
+            local name="$1"; shift
+            echo "::group::SIGTERM probe: ${name} [$*]"
+            # Publishes no port: 4005 belongs to the compose backend. Not --rm,
+            # because the exit code has to survive the container.
+            docker run -d --name "$name" --network "$net" \
+              -e DATABASE_URL=postgresql://near:near@db:5432/near_chat \
+              -e JWT_SECRET=ci-only-value-not-a-real-secret \
+              -e CORS_ORIGINS=http://localhost:3005 \
+              near-chat-backend:ci "$@" >/dev/null
+
+            # Signalling early would prove nothing: SIGTERM is legitimately
+            # ignored while migrations run and while the module body evaluates,
+            # before src/index.ts installs the handler.
+            local ready=0
+            for _ in $(seq 60); do
+              if docker logs "$name" 2>&1 | grep -q 'successfully listening'; then ready=1; break; fi
+              sleep 1
+            done
+            if [[ "$ready" != 1 ]]; then
+              echo "::endgroup::"
+              echo "::error::${name} never started listening, so its SIGTERM behaviour could not be tested"
+              docker logs "$name" 2>&1 | tail -50
+              return 1
+            fi
+
+            # -t 30 matches stop_grace_period. Docker's 10s default is roughly
+            # the drain's own worst case, which would make a slow drain and a
+            # container that ignores the signal entirely indistinguishable.
+            local start=$SECONDS
+            docker stop -t 30 "$name" >/dev/null
+            local elapsed=$(( SECONDS - start ))
+            local code logs
+            code="$(docker inspect -f '{{.State.ExitCode}}' "$name")"
+            logs="$(docker logs "$name" 2>&1)"
+            echo "exit code ${code} after ${elapsed}s"
+            echo "::endgroup::"
+
+            # 'Realtime server shutting down' is logged by publisher.shutdown(),
+            # the first step of the drain, so it separates "the signal never
+            # arrived" from "the drain ran but did not finish in time".
+            local drained=0
+            grep -q 'Realtime server shutting down' <<<"$logs" && drained=1
+
+            if [[ "$code" != 0 ]]; then
+              if [[ "$drained" == 1 ]]; then
+                echo "::error::${name} entered its drain but exited ${code}: the drain outlived stop_grace_period"
+              elif [[ "$code" == 137 ]]; then
+                echo "::error::${name} exited 137: SIGTERM never reached the application and it was SIGKILLed. A shell left at PID 1 ignores the signal — check for 'exec' in backend/Dockerfile.prod's CMD (issue #586)."
+              else
+                echo "::error::${name} exited ${code}: a shell or init took SIGTERM and the application never saw it"
+              fi
+              tail -50 <<<"$logs"
+              return 1
+            fi
+
+            # Exit 0 on its own only says the process stopped; the marker is what
+            # proves the handler is what stopped it.
+            if [[ "$drained" != 1 ]]; then
+              echo "::error::${name} exited 0 without logging its shutdown, so the drain did not run"
+              tail -50 <<<"$logs"
+              return 1
+            fi
+
+            # With no clients connected the drain is sub-second. This only catches
+            # one that quietly waits out a timeout instead of exiting.
+            if (( elapsed > 20 )); then
+              echo "::error::${name} took ${elapsed}s to stop; the drain is not exiting on its own"
+              return 1
+            fi
+          }
+
+          # No command override: the image's own CMD, the one prod inherits.
+          probe sigterm-probe-image-cmd
+          # The argv docker-compose.release.yml pins.
+          probe sigterm-probe-release-cmd bun src/index.ts
+
+      - name: Remove the SIGTERM probe containers
+        if: always()
+        run: docker rm -f sigterm-probe-image-cmd sigterm-probe-release-cmd >/dev/null 2>&1 || true
+
       - name: Assert the backend serves HTTP
         run: |
           set -euo pipefail

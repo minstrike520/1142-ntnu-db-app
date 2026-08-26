@@ -82,6 +82,16 @@ Compose bundle 會啟動 PostgreSQL，使用固定版本的 backend image 執行
 
 升級 bundle 時請使用 `up -d`，不要用 `restart`：`docker compose restart backend` 不會重新評估 `depends_on`，因此不會執行 `migrate` service，會讓 backend 跑在尚未套用 migration 的 schema 上。
 
+### 停止與重新部署 backend
+
+`docker compose stop`、`down`，以及 `up -d` 對已變更 service 所做的停止動作，都會對 backend 送出 SIGTERM。Backend 收到後會執行 drain 而不是直接中止：停止接受新工作、中斷 realtime 連線、等待處理中的 HTTP request 完成、交還本 instance 持有的 presence lease（避免使用者一直顯示為上線直到 `PRESENCE_TTL_MS` 到期）、關閉 Redis，最後以 exit code 0 結束。每一步都有時間上限；若 drain 仍然卡住，會在 20 秒後自行放棄並結束。
+
+因此 backend service 的 `stop_grace_period` 設為 `30s`，同時高於該 20 秒 deadline 與 drain 本身約 14 秒的最壞情況。Docker 預設值為 10 秒，正好落在 drain 中間，會在交還 presence lease 的過程中把它切斷。若你自行撰寫 Compose 或改用其他 orchestrator，請一併帶上這個 30 秒設定——少了它，應用程式無法履行上述關機約定。
+
+有兩個時間窗刻意不予處理，也不需要處理：`migrate:up` 執行期間，以及 process 尚在啟動、handler 還沒註冊之前，container 會忽略 SIGTERM。Migration 在單一 transaction 中執行，並持有 session-scoped advisory lock，因此在該時間窗被強制終止時會完整 rollback，不會留下套用到一半的 schema 或殘留的 lock。
+
+Backend service 刻意不設定 `init: true`。應用程式本身即為 PID 1 並註冊自己的 handler，且不會產生任何子行程，沒有需要 init 回收的 zombie process。加上 tini 只會讓它卡在 Docker 與應用程式之間，而 Docker 執行 tini 時不帶 `-g`，只會將訊號送給它的直接子行程——若中間仍隔著一層 shell，結果會是快速、看似正常的 exit 143，實際上 drain 從未執行。它不能取代應用層的 handler。
+
 `v2.1.1`（含）以前發布的 bundle，其 `docker-compose.release.yml` 中 backend 的啟動命令（`pnpm run migrate:up`、`node dist/backend/src/index.js`）在它所固定的 backend image 中並不存在。已發布的 tag 不可變更，因此這些 archive 無法就地修正——若要部署這些版本，請自行將該兩個 `command:` 改為上述 bun-only 形式。
 
 正式部署應把 `BACKEND_IMAGE` 與 `FRONTEND_IMAGE` 固定為 manifest 記錄的 digest 參照。Frontend image 預設以 `http://localhost:4005` 建置 API URL；現有前端 runtime 邏輯會對標準 `3005`／`4005` host port 做對應，若公開拓撲不同，需另行設定建置參數。
