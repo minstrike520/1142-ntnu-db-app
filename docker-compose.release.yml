@@ -60,7 +60,15 @@ services:
       ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:-10485760}
       MAX_SESSIONS_PER_USER: ${MAX_SESSIONS_PER_USER:-5}
       PRESENCE_GRACE_MS: ${PRESENCE_GRACE_MS:-3000}
+      # How long a presence lease survives in Redis unrefreshed; it bounds how
+      # long a crashed instance keeps its users showing as online. Inert while
+      # REDIS_URL is blank, which is this bundle's default.
+      PRESENCE_TTL_MS: ${PRESENCE_TTL_MS:-30000}
       TYPING_TTL_MS: ${TYPING_TTL_MS:-3000}
+      # Blank means the backend generates one per process. Set it where the
+      # orchestrator already has a stable per-replica name, so a restarted
+      # process reclaims its own presence lease instead of adding a second one.
+      INSTANCE_ID: ${INSTANCE_ID:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

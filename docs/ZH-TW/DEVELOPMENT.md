@@ -126,8 +126,26 @@ production image（`docker-compose.release.yml`）各執行一次同一份腳本
 `MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS`、
 `SESSION_RESERVATION_TTL_MS` 分別控制單機 session、presence 重連寬限、
 typing indication TTL 與握手名額保留時間；與其他後端變數一樣，宣告位置都在
-`backend/src/config/env.ts`。多節點 presence、全域
-限流與跨節點 change fan-out 仍不在本服務範圍內。
+`backend/src/config/env.ts`。
+
+`PRESENCE_TTL_MS` 與 `INSTANCE_ID` 屬於後端存在 Redis 裡的 presence lease。設定
+`REDIS_URL` 後，每個 instance 會為自己有連線的每位使用者持有一份 lease ——
+`presence:user:{userId}` 是一個 hash，一個 instance 一個欄位，每個欄位各自過期
+—— 因此 `GET /rooms` 與 `GET /friends` 回答的是整個部署而不是單一行程的狀態，
+而 `online` 只在全域第一條連線建立時發送、`offline` 只在最後一條消失時發送。
+`PRESENCE_TTL_MS` 界定「某個 instance 當掉後，它的使用者最多被誤顯示成在線多
+久」：行程已死就沒有人能把 lease 還回去，只剩過期能清掉它。後端每個 TTL 內會
+續約三次，而正常關機會主動把 lease 全數交還，不需要等 TTL 到期。`INSTANCE_ID`
+是本行程在該 hash 中的名稱；留空時每次啟動自行產生一個，除非編排器本來就有穩
+定的 per-replica 名稱可以沿用，否則不需要設定。欄位層級的 TTL 需要
+**Redis 7.4 以上** —— 對更舊的伺服器寫入會失敗，後端會記錄一次版本需求，
+presence 則退回只看本機。
+
+目前**尚未**共享的是 `user_status` 推播：`io.to()` 只會送到發出端行程自己持有
+的 socket，因此連在另一個 instance 上的好友要等到下一次 `GET /friends` 才會看
+到狀態變化。補上這段是 #475／#476 的 Redis event bus。每位使用者的 session 上
+限、全域限流與跨節點 change fan-out 同樣仍是 per-instance，所以把 replica 數量
+調到大於 1 目前還不是受支援的部署方式。
 
 ### 正式環境入口拓撲與代理信任
 

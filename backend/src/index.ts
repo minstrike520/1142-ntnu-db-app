@@ -5,6 +5,7 @@ import { createRepositories } from './bootstrap/repositories';
 import { createServices } from './bootstrap/services';
 import { createHttpApp } from './bootstrap/httpApp';
 import { createRedis } from './bootstrap/redis';
+import { createPresence } from './bootstrap/presence';
 import { createBunRuntimeServer, createRealtime } from './bootstrap/realtime';
 import { createRealtimePublisher } from './realtime/publisher';
 import { createHttpCompatibilityServer } from './bootstrap/httpCompat';
@@ -49,6 +50,11 @@ if (require.main === module) {
   // watchdog, so there is nothing here to catch.
   void redis.connect();
 
+  // Configured only in the real entrypoint, for the same reason as `startJobs`:
+  // importing the app must not leave a heartbeat timer behind, and the E2E
+  // suite has no Redis to share presence through anyway.
+  const presence = createPresence({ config, redis });
+
   const stopJobs = startJobs({ repositories, services });
   void startServer({ server, config });
   let shuttingDown = false;
@@ -68,7 +74,12 @@ if (require.main === module) {
     // (see utils/redis.ts), so a process that lived through a Redis outage would
     // otherwise sit here after the drain until the orchestrator SIGKILLs it.
     server.close(() => {
-      void redis.close().finally(() => process.exit(0));
+      // Presence first: `stop()` hands back every lease this instance holds, so
+      // a redeploy does not leave its users showing online for the rest of the
+      // lease TTL. It needs Redis, which is why `redis.close()` waits for it.
+      void presence
+        .stop()
+        .finally(() => redis.close().finally(() => process.exit(0)));
     });
   };
   process.once('SIGTERM', () => shutdown('SIGTERM'));

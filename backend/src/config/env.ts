@@ -79,6 +79,26 @@ export const DEFAULT_SESSION_RESERVATION_TTL_MS = 10_000;
 export const DEFAULT_PRESENCE_GRACE_MS = 3_000;
 
 /**
+ * How long a presence lease survives in Redis without a refresh.
+ *
+ * This is the bound on how long a crashed instance can leave a user showing as
+ * online: nothing runs on a dead process to release its leases, so only the
+ * expiry does it. Long enough that a brief Redis outage or a paused container
+ * does not flap a connected user offline, short enough that a crash converges
+ * well inside a person's patience. `DEFAULT_PRESENCE_REFRESH_DIVISOR` decides
+ * how many refreshes fit in that window.
+ */
+export const DEFAULT_PRESENCE_TTL_MS = 30_000;
+
+/**
+ * How many heartbeats fit inside one lease.
+ *
+ * Three, so two consecutive refreshes can be lost — to a blip, a GC pause, a
+ * Redis failover — before a live connection is wrongly reported offline.
+ */
+export const DEFAULT_PRESENCE_REFRESH_DIVISOR = 3;
+
+/**
  * pino's severities plus `silent`.
  *
  * Declared here rather than imported from `utils/logger` so the dependency runs
@@ -143,6 +163,23 @@ export interface Env {
    */
   redisUrl: string | undefined;
 
+  /**
+   * A name for this process, or `undefined` to have one generated.
+   *
+   * Presence leases are held per instance rather than per socket — every
+   * process is one row in a user's lease hash — so this is the identity another
+   * instance sees. Left unset it is generated once by `bootstrap/config.ts`,
+   * which is the only correct place for it: `env()` re-reads `process.env` on
+   * every call, so a random default computed *here* would be a different value
+   * on every read.
+   *
+   * Worth setting where the orchestrator already has a stable per-replica name
+   * (a StatefulSet ordinal, a Compose service instance): a restarted process
+   * that reclaims its old name replaces its own stale lease rather than adding
+   * a second one that has to wait out the TTL.
+   */
+  instanceId: string | undefined;
+
   /** Raw `JWT_SECRET`, empty treated as unset. The production rule lives in `assertStartupEnv`/`utils/jwt`. */
   jwtSecret: string | undefined;
   accessTokenTtlSeconds: number;
@@ -189,6 +226,11 @@ export interface Env {
      * Defaults to 0 under the test runner so suites leave no timers behind.
      */
     presenceGraceMs: number;
+    /**
+     * How long this instance's presence lease survives in Redis unrefreshed.
+     * Bounds how long a crashed instance keeps a user showing as online.
+     */
+    presenceTtlMs: number;
   };
 
   attachments: {
@@ -422,6 +464,8 @@ const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
 
     redisUrl: readRedisUrl(source, problems),
 
+    instanceId: source.INSTANCE_ID?.trim() || undefined,
+
     jwtSecret: source.JWT_SECRET || undefined,
     accessTokenTtlSeconds: read(
       source,
@@ -503,6 +547,13 @@ const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
         'PRESENCE_GRACE_MS',
         asNonNegativeNumber,
         isTest ? 0 : DEFAULT_PRESENCE_GRACE_MS,
+        problems,
+      ),
+      presenceTtlMs: read(
+        source,
+        'PRESENCE_TTL_MS',
+        asPositiveNumber,
+        DEFAULT_PRESENCE_TTL_MS,
         problems,
       ),
     },

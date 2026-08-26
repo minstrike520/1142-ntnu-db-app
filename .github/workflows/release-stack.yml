@@ -438,7 +438,17 @@ jobs:
           # Optional. This bundle ships no Redis service, so leave it blank to
           # run realtime single-node, or point it at a managed endpoint —
           # rediss://default:<password>@host:6380 — for cross-node fan-out.
+          # Cross-instance presence needs Redis 7.4 or newer; older servers have
+          # no per-field TTL, so presence quietly stays single-node.
           REDIS_URL=
+          # Only read when REDIS_URL is set. How long a presence lease survives
+          # unrefreshed, which bounds how long a crashed instance keeps its users
+          # showing as online.
+          PRESENCE_TTL_MS=30000
+          # Blank generates one per process. Set it where the orchestrator has a
+          # stable per-replica name, so a restart reclaims its own lease rather
+          # than leaving a second one to expire.
+          INSTANCE_ID=
           JWT_SECRET=change-me-to-a-long-random-secret
           JWT_EXPIRES_IN=15m
           CORS_ORIGINS=http://localhost:3005

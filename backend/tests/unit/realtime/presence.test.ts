@@ -1,100 +1,378 @@
 import { describe, it, expect, beforeEach, mock, spyOn } from 'bun:test';
-// @ts-expect-error - Bypassing Bun mock cache with query parameter
-import { trackUserConnection, trackUserDisconnection, isUserOnline, getOnlineUsers, clearPresence } from '../../../src/realtime/presence?original';
+import { createPresenceTracker, type PresenceTracker } from '../../../src/realtime/presence';
+import type { PresenceStore } from '../../../src/realtime/presenceStore';
+import type { RedisOutcome } from '../../../src/utils/redis';
 import type { ChatServer } from '../../../src/realtime/authSocket';
 
+/**
+ * One shared lease table, viewed through as many instances as a test needs.
+ *
+ * Modelled as intentions rather than as Redis commands, which is the point of
+ * the `PresenceStore` seam: the fake has to be faithful about *who holds a
+ * lease*, and nothing else. Expiry, hash-field TTLs and the atomicity of the
+ * transitions are Redis's semantics, and they are pinned against a real server
+ * in `tests/integration/realtime/presenceStore.test.ts` rather than guessed at
+ * here.
+ */
+const makeSharedLeases = () => {
+  const holders = new Map<string, Set<string>>();
+  let failing = false;
+
+  const down = <T>(): RedisOutcome<T> => ({ ok: false, error: new Error('redis unavailable') });
+
+  const viewFor = (instanceId: string): PresenceStore => ({
+    async hold(userId) {
+      if (failing) return down<number>();
+      const set = holders.get(userId) ?? new Set<string>();
+      const before = set.size;
+      set.add(instanceId);
+      holders.set(userId, set);
+      return { ok: true, value: before };
+    },
+    async release(userId) {
+      if (failing) return down<number>();
+      const set = holders.get(userId);
+      if (!set) return { ok: true, value: 0 };
+      set.delete(instanceId);
+      if (set.size === 0) holders.delete(userId);
+      return { ok: true, value: set.size };
+    },
+    async isOnline(userId) {
+      if (failing) return down<boolean>();
+      return { ok: true, value: (holders.get(userId)?.size ?? 0) > 0 };
+    },
+    async areOnline(userIds) {
+      if (failing) return down<Set<string>>();
+      return {
+        ok: true,
+        value: new Set(userIds.filter((id) => (holders.get(id)?.size ?? 0) > 0)),
+      };
+    },
+    async onlineUsers() {
+      if (failing) return down<string[]>();
+      return { ok: true, value: [...holders.keys()] };
+    },
+  });
+
+  return {
+    holders,
+    viewFor,
+    breakRedis: () => {
+      failing = true;
+    },
+    healRedis: () => {
+      failing = false;
+    },
+  };
+};
+
+const makeIo = () => {
+  const roomEmit = mock();
+  const io = { to: mock(() => ({ emit: roomEmit })) } as unknown as ChatServer;
+  return { io, roomEmit };
+};
+
 describe('presence tracker', () => {
-  let io: any;
-  let roomEmit: any;
-  let friendRepo: any;
+  let io: ChatServer;
+  let roomEmit: ReturnType<typeof mock>;
+  let friendRepo: { getFriends: ReturnType<typeof mock> };
+  let tracker: PresenceTracker;
 
   beforeEach(() => {
-    clearPresence();
-    roomEmit = mock();
-    io = {
-      to: mock(() => ({ emit: roomEmit })),
-    } as unknown as ChatServer;
-
+    ({ io, roomEmit } = makeIo());
     friendRepo = {
       getFriends: mock().mockResolvedValue([
         { friend: { userId: 'friend-1' } },
-        { friend: { userId: 'friend-2' } }
-      ])
+        { friend: { userId: 'friend-2' } },
+      ]),
     };
+    tracker = createPresenceTracker({ graceMs: () => 0 });
   });
 
-  it('tracks connection, reports online status, and notifies online friends', async () => {
-    // Initially offline
-    expect(isUserOnline('user-1')).toBe(false);
+  describe('without a store (single node)', () => {
+    it('tracks connection, reports online status, and notifies online friends', async () => {
+      expect(await tracker.isUserOnline('user-1')).toBe(false);
 
-    // Friend-1 is online (has socket registered)
-    await trackUserConnection(io, 'friend-1', 'socket-friend', friendRepo);
-    expect(isUserOnline('friend-1')).toBe(true);
+      await tracker.trackUserConnection(io, 'friend-1', 'socket-friend', friendRepo);
+      expect(await tracker.isUserOnline('friend-1')).toBe(true);
 
-    // User-1 connects
-    await trackUserConnection(io, 'user-1', 'socket-1', friendRepo);
-    expect(isUserOnline('user-1')).toBe(true);
-    expect(getOnlineUsers()).toContain('user-1');
+      await tracker.trackUserConnection(io, 'user-1', 'socket-1', friendRepo);
+      expect(await tracker.isUserOnline('user-1')).toBe(true);
+      expect(await tracker.getOnlineUsers()).toContain('user-1');
 
-    // Should broadcast status 'online' to friend-1's room, but not friend-2 (since friend-2 is offline)
-    expect(io.to).toHaveBeenCalledWith('user_friend-1');
-    expect(io.to).not.toHaveBeenCalledWith('user_friend-2');
-    expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'online' });
+      // friend-2 has no connection here, so there is no local room to reach.
+      expect(io.to).toHaveBeenCalledWith('user_friend-1');
+      expect(io.to).not.toHaveBeenCalledWith('user_friend-2');
+      expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'online' });
+    });
+
+    it('handles trackUserDisconnection gracefully when userId was never tracked', async () => {
+      await expect(
+        tracker.trackUserDisconnection(io, 'unknown-user', 'socket-1', friendRepo),
+      ).resolves.toBeUndefined();
+    });
+
+    it('suppresses and logs errors from getFriends during trackUserConnection', async () => {
+      const errorRepo = { getFriends: mock().mockRejectedValue(new Error('DB down')) };
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(
+        tracker.trackUserConnection(io, 'user-x', 'socket-1', errorRepo),
+      ).resolves.toBeUndefined();
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    it('suppresses and logs errors from getFriends during trackUserDisconnection', async () => {
+      await tracker.trackUserConnection(io, 'user-y', 'socket-1', friendRepo);
+      const errorRepo = { getFriends: mock().mockRejectedValue(new Error('DB down')) };
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(
+        tracker.trackUserDisconnection(io, 'user-y', 'socket-1', errorRepo),
+      ).resolves.toBeUndefined();
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    it('handles multiple socket connections per user and tracks disconnection', async () => {
+      await tracker.trackUserConnection(io, 'user-1', 'socket-tab-1', friendRepo);
+      await tracker.trackUserConnection(io, 'user-1', 'socket-tab-2', friendRepo);
+
+      expect(await tracker.isUserOnline('user-1')).toBe(true);
+
+      await tracker.trackUserDisconnection(io, 'user-1', 'socket-tab-1', friendRepo);
+      expect(await tracker.isUserOnline('user-1')).toBe(true);
+      expect(roomEmit).not.toHaveBeenCalledWith('user_status', {
+        userId: 'user-1',
+        status: 'offline',
+      });
+
+      await tracker.trackUserConnection(io, 'friend-1', 'socket-friend', friendRepo);
+      roomEmit.mockClear();
+
+      await tracker.trackUserDisconnection(io, 'user-1', 'socket-tab-2', friendRepo);
+      expect(await tracker.isUserOnline('user-1')).toBe(false);
+      expect(io.to).toHaveBeenCalledWith('user_friend-1');
+      expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'offline' });
+    });
+
+    it('answers offline rather than unknown, because one process is the whole deployment', async () => {
+      expect(await tracker.presenceOf('nobody')).toBe('offline');
+    });
   });
 
-  it('handles trackUserDisconnection gracefully when userId was never tracked', async () => {
-    await expect(
-      trackUserDisconnection(io, 'unknown-user', 'socket-1', friendRepo)
-    ).resolves.toBeUndefined();
+  describe('across instances', () => {
+    let leases: ReturnType<typeof makeSharedLeases>;
+    let alpha: PresenceTracker;
+    let beta: PresenceTracker;
+    let betaIo: ChatServer;
+    let betaEmit: ReturnType<typeof mock>;
+
+    beforeEach(() => {
+      leases = makeSharedLeases();
+      alpha = createPresenceTracker({ store: leases.viewFor('alpha'), graceMs: () => 0 });
+      const second = makeIo();
+      betaIo = second.io;
+      betaEmit = second.roomEmit;
+      beta = createPresenceTracker({ store: leases.viewFor('beta'), graceMs: () => 0 });
+    });
+
+    /**
+     * `user_status` only reaches a friend whose socket is on the emitting
+     * instance, so an audience has to be seated on both before the transitions
+     * are observable at all. That limit is the subject of #475/#476, not of
+     * this module — see `broadcastStatus`.
+     */
+    const seatAudience = async () => {
+      await alpha.trackUserConnection(io, 'friend-1', 'socket-f-a', friendRepo);
+      await beta.trackUserConnection(betaIo, 'friend-1', 'socket-f-b', friendRepo);
+      roomEmit.mockClear();
+      betaEmit.mockClear();
+    };
+
+    it('announces online only for the first connection anywhere', async () => {
+      await seatAudience();
+
+      await alpha.trackUserConnection(io, 'user-1', 'socket-a', friendRepo);
+      expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'online' });
+
+      // The same user arriving on a second instance is not a new arrival.
+      await beta.trackUserConnection(betaIo, 'user-1', 'socket-b', friendRepo);
+      expect(betaEmit).not.toHaveBeenCalledWith('user_status', {
+        userId: 'user-1',
+        status: 'online',
+      });
+    });
+
+    it('does not announce offline while another instance still holds a connection', async () => {
+      await seatAudience();
+      await alpha.trackUserConnection(io, 'user-1', 'socket-a', friendRepo);
+      await beta.trackUserConnection(betaIo, 'user-1', 'socket-b', friendRepo);
+      roomEmit.mockClear();
+      betaEmit.mockClear();
+
+      await alpha.trackUserDisconnection(io, 'user-1', 'socket-a', friendRepo);
+      expect(roomEmit).not.toHaveBeenCalledWith('user_status', {
+        userId: 'user-1',
+        status: 'offline',
+      });
+      // ...and the instance that lost the socket still reports the user online,
+      // because the other one answered for them.
+      expect(await alpha.isUserOnline('user-1')).toBe(true);
+
+      await beta.trackUserDisconnection(betaIo, 'user-1', 'socket-b', friendRepo);
+      expect(betaEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'offline' });
+      expect(await alpha.isUserOnline('user-1')).toBe(false);
+    });
+
+    it('reports a user connected elsewhere as online', async () => {
+      await beta.trackUserConnection(betaIo, 'user-1', 'socket-b', friendRepo);
+      expect(await alpha.isUserOnline('user-1')).toBe(true);
+      expect(await alpha.getOnlineUsers()).toContain('user-1');
+    });
+
+    it('resolves a whole page of users in one read', async () => {
+      await beta.trackUserConnection(betaIo, 'user-1', 'socket-b', friendRepo);
+      await alpha.trackUserConnection(io, 'user-2', 'socket-a', friendRepo);
+
+      const online = await alpha.onlineAmong(['user-1', 'user-2', 'user-3']);
+      expect([...online].sort()).toEqual(['user-1', 'user-2']);
+    });
+
+    it('holds the lease through the reconnect grace period, wherever the reconnect lands', async () => {
+      const gracefulAlpha = createPresenceTracker({
+        store: leases.viewFor('alpha'),
+        graceMs: () => 50,
+      });
+      await gracefulAlpha.trackUserConnection(io, 'user-1', 'socket-a', friendRepo);
+      roomEmit.mockClear();
+
+      await gracefulAlpha.trackUserDisconnection(io, 'user-1', 'socket-a', friendRepo);
+      // Still leased: another instance must not see a gap during the grace window.
+      expect(await beta.isUserOnline('user-1')).toBe(true);
+
+      // The reconnect lands on the *other* instance, which is exactly the case a
+      // local grace timer cannot see.
+      await beta.trackUserConnection(betaIo, 'user-1', 'socket-b', friendRepo);
+      expect(betaEmit).not.toHaveBeenCalledWith('user_status', {
+        userId: 'user-1',
+        status: 'online',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      // The grace timer fired on alpha and dropped alpha's lease — but beta is
+      // holding one, so nobody was told the user went offline.
+      expect(roomEmit).not.toHaveBeenCalledWith('user_status', {
+        userId: 'user-1',
+        status: 'offline',
+      });
+      expect(await beta.isUserOnline('user-1')).toBe(true);
+    });
+
+    it('hands leases back on shutdown instead of waiting out the TTL', async () => {
+      await alpha.trackUserConnection(io, 'user-1', 'socket-a', friendRepo);
+      expect(leases.holders.get('user-1')?.has('alpha')).toBe(true);
+
+      await alpha.stop();
+      expect(leases.holders.has('user-1')).toBe(false);
+    });
   });
 
-  it('suppresses and logs errors from getFriends during trackUserConnection', async () => {
-    const errorRepo = { getFriends: mock().mockRejectedValue(new Error('DB down')) };
-    const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+  describe('when Redis is unreachable', () => {
+    let leases: ReturnType<typeof makeSharedLeases>;
 
-    await expect(trackUserConnection(io, 'user-x', 'socket-1', errorRepo)).resolves.toBeUndefined();
+    beforeEach(() => {
+      leases = makeSharedLeases();
+      tracker = createPresenceTracker({ store: leases.viewFor('alpha'), graceMs: () => 0 });
+    });
 
-    expect(consoleSpy).toHaveBeenCalled();
-    consoleSpy.mockRestore();
-    clearPresence();
+    it('still tracks connections and announces the local edges', async () => {
+      await tracker.trackUserConnection(io, 'friend-1', 'socket-friend', friendRepo);
+      roomEmit.mockClear();
+      leases.breakRedis();
+
+      await expect(
+        tracker.trackUserConnection(io, 'user-1', 'socket-1', friendRepo),
+      ).resolves.toBeUndefined();
+      expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'online' });
+
+      roomEmit.mockClear();
+      await tracker.trackUserDisconnection(io, 'user-1', 'socket-1', friendRepo);
+      expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'offline' });
+    });
+
+    it('says "unknown" rather than "offline" for a user it cannot ask about', async () => {
+      leases.breakRedis();
+      expect(await tracker.presenceOf('someone-elsewhere')).toBe('unknown');
+      // The display collapse is still offline — a screen has to show something.
+      expect(await tracker.isUserOnline('someone-elsewhere')).toBe(false);
+    });
+
+    it('never says "unknown" about a user connected to this instance', async () => {
+      await tracker.trackUserConnection(io, 'user-1', 'socket-1', friendRepo);
+      leases.breakRedis();
+      expect(await tracker.presenceOf('user-1')).toBe('online');
+    });
   });
 
-  it('suppresses and logs errors from getFriends during trackUserDisconnection', async () => {
-    await trackUserConnection(io, 'user-y', 'socket-1', friendRepo);
+  describe('lease heartbeat', () => {
+    it('re-takes every lease it holds, so a live connection outlives the TTL', async () => {
+      const leases = makeSharedLeases();
+      let beat: (() => void) | undefined;
+      const heartbeatTracker = createPresenceTracker({
+        store: leases.viewFor('alpha'),
+        graceMs: () => 0,
+        ttlMs: 300,
+        refreshDivisor: 3,
+        setIntervalFn: (handler) => {
+          beat = handler;
+          return 0;
+        },
+        clearIntervalFn: () => {},
+      });
 
-    const errorRepo = { getFriends: mock().mockRejectedValue(new Error('DB down')) };
-    const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+      await heartbeatTracker.trackUserConnection(io, 'user-1', 'socket-1', friendRepo);
+      expect(beat).toBeDefined();
 
-    await expect(trackUserDisconnection(io, 'user-y', 'socket-1', errorRepo)).resolves.toBeUndefined();
+      // Something else expired the lease — a Redis restart, a TTL that elapsed
+      // during an outage. The next beat must put it back.
+      leases.holders.delete('user-1');
+      beat!();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(leases.holders.get('user-1')?.has('alpha')).toBe(true);
+    });
 
-    expect(consoleSpy).toHaveBeenCalled();
-    consoleSpy.mockRestore();
-  });
+    it('does not re-take a lease for a user who has already left', async () => {
+      const leases = makeSharedLeases();
+      let beat: (() => void) | undefined;
+      const heartbeatTracker = createPresenceTracker({
+        store: leases.viewFor('alpha'),
+        graceMs: () => 0,
+        ttlMs: 300,
+        setIntervalFn: (handler) => {
+          beat = handler;
+          return 0;
+        },
+        clearIntervalFn: () => {},
+      });
 
-  it('handles multiple socket connections per user and tracks disconnection', async () => {
-    // User connects on tab 1
-    await trackUserConnection(io, 'user-1', 'socket-tab-1', friendRepo);
-    // User connects on tab 2
-    await trackUserConnection(io, 'user-1', 'socket-tab-2', friendRepo);
+      await heartbeatTracker.trackUserConnection(io, 'user-1', 'socket-1', friendRepo);
+      await heartbeatTracker.trackUserDisconnection(io, 'user-1', 'socket-1', friendRepo);
+      expect(leases.holders.has('user-1')).toBe(false);
 
-    expect(isUserOnline('user-1')).toBe(true);
+      beat!();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(leases.holders.has('user-1')).toBe(false);
+    });
 
-    // Disconnect tab 1
-    await trackUserDisconnection(io, 'user-1', 'socket-tab-1', friendRepo);
-    // User is still online because tab 2 is open
-    expect(isUserOnline('user-1')).toBe(true);
-    expect(roomEmit).not.toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'offline' });
-
-    // Friend-1 is online
-    await trackUserConnection(io, 'friend-1', 'socket-friend', friendRepo);
-    roomEmit.mockClear();
-
-    // Disconnect tab 2
-    await trackUserDisconnection(io, 'user-1', 'socket-tab-2', friendRepo);
-    // User is now offline
-    expect(isUserOnline('user-1')).toBe(false);
-    // Should broadcast offline status to friend-1
-    expect(io.to).toHaveBeenCalledWith('user_friend-1');
-    expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'offline' });
+    it('starts no timer at all without a store', async () => {
+      const setIntervalFn = mock(() => 0);
+      const local = createPresenceTracker({ graceMs: () => 0, setIntervalFn });
+      await local.trackUserConnection(io, 'user-1', 'socket-1', friendRepo);
+      expect(setIntervalFn).not.toHaveBeenCalled();
+    });
   });
 });

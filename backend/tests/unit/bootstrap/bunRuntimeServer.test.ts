@@ -73,7 +73,7 @@ describe('createBunRuntimeServer', () => {
 describe('createRealtime', () => {
   it('configures CORS on the engine, which owns the handshake request', () => {
     const { engine } = createRealtime({
-      config: { port: 4000, corsOrigins: ['http://localhost:3000'] },
+      config: { port: 4000, corsOrigins: ['http://localhost:3000'], instanceId: 'test-instance' },
       repositories: {
         roomMembers: { findByUser: mock(), findMember: mock() },
         friends: { getFriends: mock() },

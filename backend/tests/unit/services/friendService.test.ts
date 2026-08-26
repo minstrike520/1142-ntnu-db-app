@@ -3,6 +3,24 @@ import { makeFriendService } from '../../../src/services/friendService';
 import { AppError } from '../../../src/utils/AppError';
 
 describe('friendService', () => {
+  it('getFriends labels each friend from one presence read for the whole list', async () => {
+    const mockRepo = {
+      getFriends: mock().mockResolvedValue([
+        { friend: { userId: 'u2' } },
+        { friend: { userId: 'u3' } },
+      ]),
+    } as any;
+    // Injected rather than `mock.module`'d; see backend/tests/CLAUDE.md.
+    const readOnlineAmong = mock(async () => new Set(['u2']));
+    const service = makeFriendService(mockRepo, undefined, undefined, undefined, readOnlineAmong);
+
+    const result = (await service.getFriends('u1')) as any[];
+
+    expect(result.map((f) => f.status)).toEqual(['online', 'offline']);
+    expect(readOnlineAmong).toHaveBeenCalledTimes(1);
+    expect(readOnlineAmong).toHaveBeenCalledWith(['u2', 'u3']);
+  });
+
   it('respondFriendRequest throws NOT_FOUND when accepting non-existent request', async () => {
     const mockRepo = {
       isBlocked: mock().mockResolvedValue(false),

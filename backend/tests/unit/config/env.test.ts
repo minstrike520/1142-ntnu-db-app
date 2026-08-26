@@ -11,6 +11,7 @@ import {
   DEFAULT_MAX_SESSIONS_PER_USER,
   DEFAULT_PORT,
   DEFAULT_PRESENCE_GRACE_MS,
+  DEFAULT_PRESENCE_TTL_MS,
   DEFAULT_RATE_LIMIT_MAX,
   DEFAULT_RATE_LIMIT_WINDOW_MS,
   DEFAULT_REFRESH_TTL_DAYS,
@@ -51,6 +52,7 @@ describe('env', () => {
       typingTtlMs: DEFAULT_TYPING_TTL_MS,
       sessionReservationTtlMs: DEFAULT_SESSION_RESERVATION_TTL_MS,
       presenceGraceMs: DEFAULT_PRESENCE_GRACE_MS,
+      presenceTtlMs: DEFAULT_PRESENCE_TTL_MS,
     });
     expect(config.attachments).toEqual({
       restrictionEnabled: false,
@@ -147,6 +149,7 @@ describe('env', () => {
         TYPING_TTL_MS: '250',
         SESSION_RESERVATION_TTL_MS: '500',
         PRESENCE_GRACE_MS: '0',
+        PRESENCE_TTL_MS: '12000',
       });
 
       expect(config.realtime).toEqual({
@@ -154,6 +157,7 @@ describe('env', () => {
         typingTtlMs: 250,
         sessionReservationTtlMs: 500,
         presenceGraceMs: 0,
+        presenceTtlMs: 12000,
       });
     });
 

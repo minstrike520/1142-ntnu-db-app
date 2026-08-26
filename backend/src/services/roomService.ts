@@ -1,7 +1,7 @@
 import type { UploadedFile } from '../utils/fileUpload';
 import type { Room, RoomInvitePreview, RoomSummary } from '@shared/types';
 import { randomBytes } from 'crypto';
-import { isUserOnline } from '../realtime/presence';
+import { onlineAmong } from '../realtime/presence';
 import { defaultAvatarStore, type AvatarStore } from '../utils/avatarUpload';
 import type { IRoomRepository } from '../models/IRoomRepository';
 import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
@@ -38,6 +38,10 @@ export const makeRoomService = (
   avatarStore: AvatarStore = defaultAvatarStore,
   onMembershipRevoked?: (userId: string, roomId: string) => void | Promise<void>,
   onMembershipGranted?: (userId: string, roomId: string) => void | Promise<void>,
+  // Injected rather than imported at the call site so a test can decide who is
+  // online without reaching for `mock.module` — the same trailing-parameter
+  // shape as `avatarStore` above. See backend/tests/CLAUDE.md.
+  readOnlineAmong: (userIds: string[]) => Promise<Set<string>> = onlineAmong,
 ) => {
   const ensureMember = async (roomId: string, userId: string) => {
     const existing = await roomMemberRepo.findMember(roomId, userId);
@@ -75,11 +79,19 @@ export const makeRoomService = (
 
     async list(userId: string): Promise<RoomSummary[]> {
       const rooms = await repo.findByMember(userId);
+      // One presence read for the whole page. Asking per room would put the
+      // number of a person's private chats into the round-trip count of the
+      // endpoint their client calls on every load.
+      const online = await readOnlineAmong(
+        rooms.flatMap((room) =>
+          room.type === 'private' && room.otherMemberId ? [room.otherMemberId] : [],
+        ),
+      );
       return rooms.map((room) => {
         if (room.type === 'private' && room.otherMemberId) {
           return {
             ...room,
-            isOnline: isUserOnline(room.otherMemberId),
+            isOnline: online.has(room.otherMemberId),
           };
         }
         return room;

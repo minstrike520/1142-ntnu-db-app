@@ -1,17 +1,14 @@
-import { describe, it, expect, beforeEach, afterAll, mock, type Mock } from 'bun:test';
+import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { makeRoomService } from '../../../src/services/roomService';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../../src/utils/AppError';
 import type { IRoomRepository } from '../../../src/models/IRoomRepository';
 import type { IRoomMemberRepository } from '../../../src/models/IRoomMemberRepository';
 import type { Room, RoomMember } from '../../../../shared/types';
 
-mock.module('../../../src/realtime/presence', () => ({
-  isUserOnline: mock().mockReturnValue(false),
-}));
-
-afterAll(() => {
-  mock.module('../../../src/realtime/presence', () => require('../../../src/realtime/presence?original'));
-});
+// Injected below rather than `mock.module`'d, for the same reason as
+// `avatarStore`: a module mock is process-global within a tier and cannot be
+// undone. See backend/tests/CLAUDE.md and issue #467.
+const readOnlineAmong = mock(async () => new Set<string>());
 
 type Mocked<T> = {
   [P in keyof T]: T[P] extends Function ? Mock<any> : T[P];
@@ -67,8 +64,11 @@ describe('roomService', () => {
       saveAvatarUpload: mock(),
       removeManagedAvatar: mock(),
     };
+    readOnlineAmong.mockReset();
+    readOnlineAmong.mockResolvedValue(new Set<string>());
     roomService = makeRoomService(
       mockRepo, mockMemberRepo, undefined, undefined, undefined, undefined, undefined, avatarStore,
+      undefined, undefined, readOnlineAmong,
     );
   });
 
@@ -580,6 +580,29 @@ describe('roomService', () => {
       mockRepo.findByMember.mockResolvedValue([room] as any);
       const result = await roomService.list('user-1');
       expect(result[0]).not.toHaveProperty('isOnline');
+    });
+
+    it('reports the other member online when any instance holds a lease on them', async () => {
+      const privateRoom = { ...room, type: 'private' as const, otherMemberId: 'user-2' };
+      mockRepo.findByMember.mockResolvedValue([privateRoom] as any);
+      readOnlineAmong.mockResolvedValue(new Set(['user-2']));
+
+      const result = await roomService.list('user-1');
+
+      expect((result[0] as any).isOnline).toBe(true);
+    });
+
+    it('asks about the whole page once instead of once per room', async () => {
+      mockRepo.findByMember.mockResolvedValue([
+        { ...room, roomId: 'r1', type: 'private' as const, otherMemberId: 'user-2' },
+        { ...room, roomId: 'r2', type: 'private' as const, otherMemberId: 'user-3' },
+        { ...room, roomId: 'r3', type: 'group' as const },
+      ] as any);
+
+      await roomService.list('user-1');
+
+      expect(readOnlineAmong).toHaveBeenCalledTimes(1);
+      expect(readOnlineAmong).toHaveBeenCalledWith(['user-2', 'user-3']);
     });
   });
 

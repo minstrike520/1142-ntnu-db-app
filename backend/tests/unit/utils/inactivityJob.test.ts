@@ -95,6 +95,36 @@ describe('inactivityJob', () => {
     consoleSpy.mockRestore();
   });
 
+  it('refreshes lastActivity instead of escalating when the user is online', async () => {
+    mockUserRepo.findAllWarningEnabled.mockResolvedValue([{ userId: 'u1' }] as any);
+
+    const intervalId = startInactivityJob(mockUserRepo, mockUserService, 2, async () => 'online');
+    activeIntervals.push(intervalId);
+
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    await Promise.resolve();
+
+    expect(mockUserRepo.update).toHaveBeenCalledWith('u1', { lastActivity: expect.any(Date) });
+    expect(mockUserService.checkInactivity).not.toHaveBeenCalled();
+  });
+
+  it('skips the user entirely when presence is unknown rather than escalating', async () => {
+    // `unknown` is a Redis this instance could not reach, not a user who left.
+    // Escalating on it reaches `checkInactivity`, which past the warning
+    // threshold notifies the user's emergency contacts once and never retracts
+    // it — so a Redis blip must not be able to trigger that.
+    mockUserRepo.findAllWarningEnabled.mockResolvedValue([{ userId: 'u1' }] as any);
+
+    const intervalId = startInactivityJob(mockUserRepo, mockUserService, 2, async () => 'unknown');
+    activeIntervals.push(intervalId);
+
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    await Promise.resolve();
+
+    expect(mockUserService.checkInactivity).not.toHaveBeenCalled();
+    expect(mockUserRepo.update).not.toHaveBeenCalled();
+  });
+
   it('logs and releases the lock when findAllWarningEnabled fails', async () => {
     const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
     mockUserRepo.findAllWarningEnabled
