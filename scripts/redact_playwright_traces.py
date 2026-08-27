@@ -106,7 +106,7 @@ def redact_text(text: str) -> str:
 
 def redact_archive(path: Path) -> None:
     """Atomically replace one diagnostics archive with a redacted copy."""
-    with zipfile.ZipFile(path, "r") as source, tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
     ) as temporary:
         temporary_path = Path(temporary.name)

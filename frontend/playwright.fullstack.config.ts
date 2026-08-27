@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { FRONTEND_ORIGIN } from "./tests-fullstack/support/api";
 
 /**
  * Full-stack browser E2E (issue #544).
@@ -28,9 +29,6 @@ import { defineConfig, devices } from "@playwright/test";
 // must agree on it. The refresh cookie is `SameSite=Strict` (backend
 // src/utils/cookies.ts), so mixing the two spellings across the 3000/4000
 // boundary would drop it and the session bootstrap would bounce to /login.
-const PORT = 3000;
-const BASE_URL = process.env.E2E_FRONTEND_ORIGIN ?? `http://127.0.0.1:${PORT}`;
-
 const isCI = !!process.env.CI;
 
 export default defineConfig({
@@ -50,7 +48,7 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report-fullstack" }]],
   outputDir: "test-results-fullstack",
   use: {
-    baseURL: BASE_URL,
+    baseURL: FRONTEND_ORIGIN,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",

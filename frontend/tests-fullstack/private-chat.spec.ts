@@ -32,8 +32,10 @@ test.describe("two-user private chat", () => {
     // fixture, and deliberate: driving the friends panel through search →
     // request → accept inside a realtime test would make a friends-UI
     // regression and a realtime regression report identically.
-    const alice = await registerUser(request, "alice");
-    const bob = await registerUser(request, "bob");
+    const [alice, bob] = await Promise.all([
+      registerUser(request, "alice"),
+      registerUser(request, "bob"),
+    ]);
     await makeFriends(request, alice, bob);
     const roomId = await createPrivateRoom(request, alice, bob);
 
