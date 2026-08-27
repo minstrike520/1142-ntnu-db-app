@@ -151,7 +151,9 @@ export const createPrivateRoom = async (
  * session and the test would prove nothing about two real participants.
  */
 export const newIsolatedContext = async (browser: Browser): Promise<BrowserContext> =>
-  browser.newContext({ baseURL: FRONTEND_ORIGIN });
+  // Raw contexts do not inherit Playwright Test's `use` options. Keep PWA
+  // caching out of this realtime lane just as the config does for fixtures.
+  browser.newContext({ baseURL: FRONTEND_ORIGIN, serviceWorkers: "block" });
 
 /**
  * Sign in through the real login form and wait until the app is usable.

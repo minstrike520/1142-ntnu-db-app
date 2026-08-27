@@ -138,9 +138,12 @@ def main() -> None:
     parser.add_argument("diagnostics_directory", type=Path, help="Playwright diagnostics directory")
     args = parser.parse_args()
 
-    archives = sorted(
-        path for path in args.diagnostics_directory.rglob("*.zip") if zipfile.is_zipfile(path)
-    )
+    # Every archive-shaped diagnostic must be verified and rewritten. Silently
+    # skipping a truncated ZIP would mark redaction successful and allow the
+    # workflow to upload an uninspected file which may still contain tokens.
+    # `redact_archive` opens each candidate and raises `BadZipFile` (or another
+    # I/O error) before any upload when the archive is not readable.
+    archives = sorted(args.diagnostics_directory.rglob("*.zip"))
     if not archives:
         print(f"No ZIP diagnostics found under {args.diagnostics_directory}")
         return
