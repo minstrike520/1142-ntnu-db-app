@@ -433,7 +433,71 @@ pnpm --filter near-chat-frontend test:browser
 pnpm --filter near-chat-frontend exec playwright show-report
 ```
 
-測試檔案位於 `frontend/tests-browser/`，共用的 REST mock 為 `frontend/tests-browser/support/api-mock.ts`。串接真實後端與 Postgres 的 full-stack 瀏覽器 E2E 由 Issue #544 另行追蹤，屆時會建立獨立 lane，而不是擴張這條 lane 的責任。
+測試檔案位於 `frontend/tests-browser/`，共用的 REST mock 為
+`frontend/tests-browser/support/api-mock.ts`。下方的真實環境測試使用獨立的
+test directory 與 config，但會以 `fullstack-browser-tests` job 擴增既有的
+`.github/workflows/ci-browser.yml` workflow。
+
+### 執行 Full-Stack 瀏覽器測試
+
+Full-stack 測試不會 mock application API。Chromium 會操作 production Next.js
+build，fixture 透過真實 REST API 建立前置資料，而 assertion 會完整經過 Bun
+backend、PostgreSQL 與 Socket.IO。`playwright.fullstack.config.ts` 刻意不設定
+`webServer`，因此執行測試前必須先啟動資料庫與兩個 application process。
+
+以下命令都從 repository root 執行。每台機器只需安裝一次 Chromium，接著啟動
+臨時的 `db-test` service 並套用 migrations：
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+pnpm --filter near-chat-backend test:db:up
+```
+
+在 **terminal A** 啟動 port 4000 的 backend：
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5436/ntnu_test \
+NODE_ENV=development \
+PORT=4000 \
+JWT_SECRET=local-fullstack-browser-e2e-secret \
+CORS_ORIGINS=http://127.0.0.1:3000 \
+REDIS_URL='' \
+RATE_LIMIT_DISABLED=true \
+pnpm --filter near-chat-backend start
+```
+
+在 **terminal B** build 並啟動 port 3000 的 production frontend：
+
+```bash
+NEXT_PUBLIC_API_URL=http://127.0.0.1:4000 \
+pnpm --filter near-chat-frontend exec next build
+
+NEXT_PUBLIC_API_URL=http://127.0.0.1:4000 \
+pnpm --filter near-chat-frontend exec next start --hostname 127.0.0.1 --port 3000
+```
+
+兩個 server 都 ready 後，在 **terminal C** 執行測試：
+
+```bash
+E2E_FRONTEND_ORIGIN=http://127.0.0.1:3000 \
+E2E_API_ORIGIN=http://127.0.0.1:4000 \
+CI=1 \
+pnpm --filter near-chat-frontend test:browser:fullstack
+```
+
+三個 terminal 都必須一致使用 `127.0.0.1`：refresh cookie 設為
+`SameSite=Strict`，若與 `localhost` 混用會使 session bootstrap 失敗。
+`NODE_ENV=development` 讓 refresh cookie 可在本機 HTTP 使用，而空的
+`REDIS_URL` 是此單一 backend topology 的刻意設定。
+
+使用 `Ctrl+C` 停止 backend 與 frontend 後，移除臨時測試資料庫；開發資料庫不受影響：
+
+```bash
+pnpm --filter near-chat-backend test:db:down
+```
+
+測試失敗時，diagnostics 會產生在 `frontend/playwright-report-fullstack/` 與
+`frontend/test-results-fullstack/`。
 
 ### 執行單元測試
 單元測試不需要資料庫連線。

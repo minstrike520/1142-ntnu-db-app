@@ -46,6 +46,8 @@ next-env.d.ts
 
 # playwright browser lane output (report, traces, screenshots, videos)
 /playwright-report/
+/playwright-report-fullstack/
 /test-results/
+/test-results-fullstack/
 /blob-report/
 /playwright/.cache/

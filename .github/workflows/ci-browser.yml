@@ -1,14 +1,27 @@
 name: CI Browser
-
-# Real-Chromium smoke tests (issue #543). Deliberately a lane of its own rather
-# than another job inside ci-frontend.yml: that workflow's `test` job owns the
-# Vitest/jsdom suite, and folding a browser download plus a Next.js server into
-# it would make one job responsible for two unrelated kinds of failure.
+# Every lane that drives a real Chromium lives here.
 #
-# Phase 1 is frontend-only — no Postgres service, no Bun, no backend process.
-# Every /api/v1 call is fulfilled in-browser by tests-browser/support/api-mock.ts.
-# The full-stack browser lane is tracked separately in issue #544 and must land
-# as its own workflow, not as an extension of this one.
+# Two jobs, deliberately not one:
+#
+#   browser-tests            frontend-only smoke (issue #543). No database, no
+#                            Bun, no backend process — every /api/v1 call is
+#                            fulfilled in-browser by
+#                            tests-browser/support/api-mock.ts.
+#
+#   fullstack-browser-tests  full-stack E2E (issue #544). Real PostgreSQL, real
+#                            Bun backend, real Next.js, real Socket.IO.
+#
+# They are separate jobs rather than separate workflows because ci.yml's
+# `required-checks` gate keys off the single `browser` lane: a second job here
+# is covered by that gate automatically, whereas a new workflow would need a new
+# detect output, a new gate entry and a new required status name. The isolation
+# issue #544's own-workflow proposal was protecting is preserved by the job
+# boundary — the two share no process, no database and no test command.
+#
+# Keeping them as separate *jobs* still matters: a browser download plus a
+# Next.js server plus a Postgres service plus two application processes in one
+# job would make a single unit responsible for several unrelated kinds of
+# failure.
 
 on:
   workflow_call:
@@ -58,5 +71,180 @@ jobs:
           path: |
             frontend/playwright-report/
             frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Full-stack browser E2E (issue #544): Chromium → Next.js → Hono/Bun →
+  # PostgreSQL → Socket.IO, with nothing mocked.
+  fullstack-browser-tests:
+    runs-on: ubuntu-latest
+    services:
+      # Same image, port and health options as ci-database.yml. Reused rather
+      # than reinvented, and deliberately not Docker Compose: this lane needs an
+      # ephemeral database, which is exactly what a service container is.
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ntnu_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # 127.0.0.1 everywhere, never `localhost`. The refresh cookie is
+      # SameSite=Strict (backend/src/utils/cookies.ts) and Chromium treats the
+      # two spellings as different hosts, so mixing them across the 3000/4000
+      # boundary silently drops the cookie and every session bootstrap bounces
+      # to /login.
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/ntnu_test
+      # One name per origin, shared by the shell health checks and by the specs
+      # (tests-fullstack/support/api.ts reads both, and the Playwright config
+      # takes its baseURL from the frontend one). A raw `browser.newContext()`
+      # does not inherit `use.baseURL` the way the `page`/`context` fixtures do,
+      # so E2E_FRONTEND_ORIGIN is what makes relative `page.goto('/login')`
+      # navigations correct there.
+      E2E_API_ORIGIN: http://127.0.0.1:4000
+      E2E_FRONTEND_ORIGIN: http://127.0.0.1:3000
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      # No `package:` filter, then a full install. The composite action installs
+      # one package's dependency closure, and this job runs both the frontend
+      # and the backend; two filtered calls would also re-run the Node/pnpm
+      # setup steps for no benefit.
+      - uses: ./.github/actions/setup-workspace
+        with:
+          bun: 'true'
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium and system dependencies
+        run: pnpm --filter near-chat-frontend exec playwright install --with-deps chromium
+
+      # The existing migration path, not a schema dump: this lane is also the
+      # only place a migration is proven to produce a schema the real
+      # application can actually serve.
+      - name: Migrate database
+        run: pnpm --filter near-chat-backend migrate:up
+
+      # NODE_ENV=development is load-bearing and is not a sloppy default.
+      # `secureCookies` is derived, not configured — backend/src/config/env.ts
+      # computes `nodeEnv !== 'development' && nodeEnv !== 'test'` — so any
+      # other value marks the refresh cookie Secure, Chromium drops it over
+      # plain HTTP, and every authenticated flow fails. `test` would also work
+      # for the cookie but silences the logs and changes realtime timing
+      # defaults, which is the opposite of what a diagnostic lane wants.
+      #
+      # REDIS_URL is empty on purpose. Redis holds only derived state, so a
+      # single backend instance serves realtime without it; multi-instance
+      # realtime belongs to #540, not here. It must be empty rather than absent:
+      # an unparseable value would be reported and ignored, but a stale one
+      # would produce a reconnect loop.
+      - name: Start backend
+        env:
+          NODE_ENV: development
+          PORT: '4000'
+          JWT_SECRET: ci-fullstack-browser-e2e-secret
+          CORS_ORIGINS: ${{ env.E2E_FRONTEND_ORIGIN }}
+          REDIS_URL: ''
+          RATE_LIMIT_DISABLED: 'true'
+        run: |
+          pnpm --filter near-chat-backend start > backend.log 2>&1 &
+          echo "$!" > backend.pid
+
+      # Liveness-aware health gate; see scripts/wait-for-service.sh.
+      - name: Wait for backend
+        run: ./scripts/wait-for-service.sh Backend backend.pid "$E2E_API_ORIGIN/api/v1/health" backend.log
+
+      # Built here rather than inside a Playwright `webServer` block: this lane
+      # starts the servers itself so it can capture their logs and fail fast,
+      # which is why playwright.fullstack.config.ts has no webServer at all. A
+      # build failure also stays a build failure instead of being reported as a
+      # server timeout.
+      #
+      # `next start` warns that it "does not work with output: standalone"
+      # because next.config.ts sets that for the production image. It is a
+      # warning: the server starts and serves normally.
+      - name: Build frontend
+        env:
+          NEXT_PUBLIC_API_URL: ${{ env.E2E_API_ORIGIN }}
+        run: pnpm --filter near-chat-frontend exec next build
+
+      - name: Start frontend
+        env:
+          NEXT_PUBLIC_API_URL: ${{ env.E2E_API_ORIGIN }}
+        run: |
+          pnpm --filter near-chat-frontend exec next start --hostname 127.0.0.1 --port 3000 > frontend.log 2>&1 &
+          echo "$!" > frontend.pid
+
+      - name: Wait for frontend
+        run: ./scripts/wait-for-service.sh Frontend frontend.pid "$E2E_FRONTEND_ORIGIN/login" frontend.log
+
+      - name: Run full-stack browser tests
+        run: pnpm --filter near-chat-frontend test:browser:fullstack
+
+      # Only the PIDs this job started. `pkill -f bun` or `pkill node` would
+      # also take out the runner's own tooling.
+      - name: Stop application processes
+        if: always()
+        run: |
+          for pidfile in backend.pid frontend.pid; do
+            [ -f "$pidfile" ] || continue
+            kill "$(cat "$pidfile")" 2>/dev/null || true
+          done
+
+      # Playwright network traces may include the bearer access token and the
+      # HttpOnly refresh cookie in request headers. Keep the traces — they are
+      # essential when diagnosing a browser failure — but make the artifact
+      # safe before it leaves the runner. The standard-library script rewrites
+      # JSON/JSONL trace entries in-place and redacts credential-bearing header
+      # values plus bearer/JWT/cookie text forms. Playwright can copy an archive
+      # into both test-results and the HTML report, so both locations are
+      # rewritten before either is uploaded.
+      - name: Redact credentials from Playwright diagnostics
+        id: redact-playwright-diagnostics
+        if: failure()
+        run: |
+          python3 scripts/redact_playwright_traces.py frontend/test-results-fullstack
+          python3 scripts/redact_playwright_traces.py frontend/playwright-report-fullstack
+
+      # A distinct artifact name from the smoke job's `playwright-report`:
+      # two uploads sharing one name inside a workflow collide.
+      #
+      # The application logs are the point of this upload as much as the report
+      # is — a spec that fails because the backend threw is unreadable from the
+      # Playwright side alone. Raw Playwright diagnostics are redacted in the
+      # prior step; backend logs no request bodies, and every account here is a
+      # disposable fixture created for this run.
+      - name: Upload full-stack diagnostics
+        # A failed redactor is a security event. Do not upload a potentially raw
+        # trace archive; the fallback step below still preserves safe process
+        # logs, so the root cause remains diagnosable.
+        if: failure() && steps.redact-playwright-diagnostics.outcome == 'success'
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-fullstack-diagnostics
+          path: |
+            frontend/playwright-report-fullstack/
+            frontend/test-results-fullstack/
+            backend.log
+            frontend.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload application logs when diagnostic redaction fails
+        if: failure() && steps.redact-playwright-diagnostics.outcome != 'success'
+        uses: actions/upload-artifact@v5
+        with:
+          name: fullstack-application-logs
+          path: |
+            backend.log
+            frontend.log
           retention-days: 7
           if-no-files-found: ignore
