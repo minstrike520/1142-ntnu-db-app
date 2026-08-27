@@ -115,6 +115,21 @@ services:
         condition: service_started
     volumes:
       - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/app/uploads
+    # Matches docker-compose.release.yml: Docker's 10s default is under this
+    # backend's own worst-case drain (10s to force the HTTP drain, then up to 2s
+    # for presence leases and 2s for Redis), so at the default a slow drain is
+    # SIGKILLed exactly while handing leases back. 30s clears that ~14s and stays
+    # above the 20s shutdown deadline src/index.ts arms (issue #586).
+    #
+    # No `init: true` here, deliberately. The application is PID 1 — see the CMD
+    # in backend/Dockerfile.prod — and installs its own SIGTERM handler, and it
+    # spawns no child processes, so there is nothing for an init to reap. tini
+    # would only insert itself between the orchestrator and the application, and
+    # Docker runs it without `-g`, so it signals just its direct child. That is
+    # actively worse here: with a shell still in between it would have produced a
+    # fast, clean-looking exit 143 while the drain never ran, hiding #586 rather
+    # than fixing it.
+    stop_grace_period: 30s
 
   frontend:
     build:

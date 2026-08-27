@@ -30,6 +30,17 @@ const server = createBunRuntimeServer({ app: honoApp, engine: realtime.engine })
 const app = createHttpCompatibilityServer(honoApp);
 const io = realtime.io;
 
+/**
+ * Outer bound on the shutdown drain, in milliseconds.
+ *
+ * Kept strictly between the drain's step-wise worst case (10s HTTP force-stop +
+ * 2s presence + 2s Redis) and the 30s `stop_grace_period` that
+ * docker-compose.prod.yml and docker-compose.release.yml set, so a drain that
+ * hangs still exits on its own before the orchestrator resorts to SIGKILL.
+ * Changing any of those three numbers means revisiting this one.
+ */
+const SHUTDOWN_DEADLINE_MS = 20_000;
+
 if (require.main === module) {
   // Only the real entrypoint validates: importing the app (as the E2E suite
   // does) must not decide whether this environment is fit to serve traffic.
@@ -63,6 +74,22 @@ if (require.main === module) {
     shuttingDown = true;
     stopJobs();
     publisher.shutdown(signal);
+    // Every step below is individually bounded — 10s to force the HTTP drain
+    // (bootstrap/realtime.ts), 2s for presence, 2s for Redis — but the chain as a
+    // whole was not: each bound is enforced by a timer, and the HTTP one is
+    // `unref`'d, so a step that never settles strands the callbacks after it and
+    // nothing here would ever call `process.exit`. This deadline is the outer
+    // guarantee, and is the reason the container can promise it exits on its own
+    // rather than waiting to be SIGKILLed. It sits above the ~14s step-wise worst
+    // case and below the 30s `stop_grace_period` the compose files set, so the
+    // process always wins the race against the orchestrator (issue #586).
+    const deadline = setTimeout(() => {
+      console.error('Shutdown deadline exceeded, exiting anyway', {
+        signal,
+        deadlineMs: SHUTDOWN_DEADLINE_MS,
+      });
+      process.exit(0);
+    }, SHUTDOWN_DEADLINE_MS);
     // Redis is released last, inside the drain callback. `publisher.shutdown`
     // above disconnects every socket, which runs the disconnect handlers — and
     // those are the writes that release presence leases, so Redis has to still
@@ -77,9 +104,19 @@ if (require.main === module) {
       // Presence first: `stop()` hands back every lease this instance holds, so
       // a redeploy does not leave its users showing online for the rest of the
       // lease TTL. It needs Redis, which is why `redis.close()` waits for it.
-      void presence
-        .stop()
-        .finally(() => redis.close().finally(() => process.exit(0)));
+      //
+      // Postgres is deliberately not closed here. `Bun.SQL.close()` waits on
+      // in-flight queries with no bound of its own, which would put an unbounded
+      // step on the one path whose whole design property is being bounded — and
+      // it would buy nothing: the pool holds no lease or advisory lock at steady
+      // state, and `process.exit(0)` drops the sockets for Postgres to reap
+      // immediately. Do not "complete" the drain by adding it.
+      void presence.stop().finally(() =>
+        redis.close().finally(() => {
+          clearTimeout(deadline);
+          process.exit(0);
+        }),
+      );
     });
   };
   process.once('SIGTERM', () => shutdown('SIGTERM'));

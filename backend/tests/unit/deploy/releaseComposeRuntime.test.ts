@@ -122,6 +122,40 @@ function resolveInRunner(target: string): { inImage: boolean; onDisk: boolean } 
   };
 }
 
+/**
+ * The runner stage's own `CMD`, as an argv array.
+ *
+ * A compose service with no `command:` runs this instead, so it is just as much
+ * a startup command as the ones spelled out in the compose files — and until
+ * issue #586 it was the one nothing checked.
+ */
+function runnerCmd(): string[] {
+  const { lines } = runnerStage();
+  let last: string | undefined;
+  for (const line of lines) {
+    const match = /^CMD\s+(.+)$/i.exec(line.trim());
+    if (match) last = match[1]!;
+  }
+  if (last === undefined) throw new Error('Dockerfile.prod runner stage has no CMD');
+  // Only the exec form is parseable, and it is the only form that reaches the
+  // kernel without a shell of Docker's own choosing in the way.
+  if (!last.startsWith('[')) throw new Error(`Dockerfile.prod CMD is not in exec form: ${last}`);
+  return JSON.parse(last) as string[];
+}
+
+/**
+ * `["sh", "-c", "a && b"]` -> `[["a"], ["b"]]`, or null when argv is not a shell
+ * wrapper. Each segment is the argv of one command the container really runs.
+ */
+function shellSegments(argv: string[]): string[][] | null {
+  const isShell = argv[0] === 'sh' || argv[0] === '/bin/sh';
+  if (!isShell || argv[1] !== '-c' || typeof argv[2] !== 'string') return null;
+  return argv[2]
+    .split('&&')
+    .map((segment) => segment.trim().split(/\s+/))
+    .filter((segment) => segment.length > 0 && segment[0] !== '');
+}
+
 function composeServices(file: string): Record<string, { image?: string; command?: unknown }> {
   const parsed = Bun.YAML.parse(readFileSync(path.join(repoRoot, file), 'utf8')) as {
     services?: Record<string, { image?: string; command?: unknown }>;
@@ -139,10 +173,13 @@ function backendImageCommands(): Array<{ id: string; command: unknown }> {
       // ${BACKEND_IMAGE}. Either way only the backend/migrate services run it.
       const usesBackendImage = service.image?.includes('BACKEND_IMAGE') ?? ['backend', 'migrate'].includes(name);
       if (!usesBackendImage) continue;
-      // No `command:` at all means the image's own CMD runs, which is by
-      // construction in sync with the Dockerfile and needs no guarding here.
-      if (service.command === undefined) continue;
-      found.push({ id: `${file}:${name}`, command: service.command });
+      // A service with no `command:` runs the image's own CMD. This used to be
+      // skipped as "in sync with the Dockerfile by construction" — that
+      // assumption is exactly what let issue #586 through, because the CMD
+      // itself was the broken part and docker-compose.prod.yml's backend is the
+      // one service that inherits it. Check the CMD in its place instead.
+      const command = service.command ?? runnerCmd();
+      found.push({ id: service.command === undefined ? `${file}:${name} (image CMD)` : `${file}:${name}`, command });
     }
   }
 
@@ -180,6 +217,7 @@ describe('compose commands against the backend production image', () => {
     expect(backendImageCommands().map((entry) => entry.id)).toEqual([
       'docker-compose.release.yml:migrate',
       'docker-compose.release.yml:backend',
+      'docker-compose.prod.yml:backend (image CMD)',
     ]);
   });
 
@@ -193,35 +231,90 @@ describe('compose commands against the backend production image', () => {
       });
 
       const argv = (Array.isArray(command) ? command : []) as string[];
+      const segments = shellSegments(argv);
+      // A shell wrapper is tolerable only if it hands the container off before
+      // the long-running command; each `&&` segment is then checked as its own
+      // argv. Without one, `argv` is already the single command.
+      const commands = segments ?? [argv];
 
-      it('invokes bun, the only interpreter in the runner stage', () => {
-        expect(argv[0]).toBe('bun');
-      });
+      if (segments) {
+        it('execs its last command, so the application ends up as PID 1', () => {
+          // The container's process tree decides whether SIGTERM is ever seen.
+          // `/bin/sh` here is dash, which does not forward signals, and the
+          // kernel discards default-disposition signals aimed at PID 1 — so a
+          // shell left at PID 1 makes `docker stop` a no-op: SIGTERM is ignored,
+          // the grace period expires and the container dies on SIGKILL with
+          // src/index.ts's drain never entered (issue #586).
+          expect(segments.at(-1)![0]).toBe('exec');
 
-      it('resolves to a package script or a file the runner stage contains', () => {
-        if (argv[1] === 'run') {
-          const script = argv[2]!;
-          expect(Object.keys(backendPackageJson.scripts)).toContain(script);
+          // Only the last one: an earlier `exec` would replace the shell before
+          // the commands after it could run at all.
+          for (const segment of segments.slice(0, -1)) {
+            expect(segment[0]).not.toBe('exec');
+          }
+        });
+      }
 
-          // The script itself must also be bun-only: `bun run migrate:up` is no
-          // better than `pnpm run migrate:up` if migrate:up shells out to node.
-          const body = backendPackageJson.scripts[script]!;
-          expect(body).toMatch(/^bun\s/);
+      for (const [index, segment] of commands.entries()) {
+        // `exec bun src/index.ts` is checked as `bun src/index.ts`; the exec
+        // itself is asserted above.
+        const words = segment[0] === 'exec' ? segment.slice(1) : segment;
+        const label = commands.length > 1 ? `part ${index + 1}: ${segment.join(' ')}` : segment.join(' ');
 
-          // And the path *inside* the script has to ship too, or moving
-          // src/models/migrate.ts would break the container while this test
-          // stayed green.
-          const scriptTarget = scriptPathArgument(body);
-          expect(scriptTarget).toBeDefined();
-          expect(resolveInRunner(scriptTarget!)).toEqual({ inImage: true, onDisk: true });
-          return;
-        }
+        describe(label, () => {
+          it('invokes bun, the only interpreter in the runner stage', () => {
+            expect(words[0]).toBe('bun');
+          });
 
-        // Otherwise bun is handed a path directly, which must live under a
-        // directory the runner stage actually copied in. `dist/backend/src/index.js`
-        // failed exactly here: nothing in the runner stage creates a dist/.
-        expect(resolveInRunner(argv[1]!)).toEqual({ inImage: true, onDisk: true });
-      });
+          it('resolves to a package script or a file the runner stage contains', () => {
+            if (words[1] === 'run') {
+              const script = words[2]!;
+              expect(Object.keys(backendPackageJson.scripts)).toContain(script);
+
+              // The script itself must also be bun-only: `bun run migrate:up` is no
+              // better than `pnpm run migrate:up` if migrate:up shells out to node.
+              const body = backendPackageJson.scripts[script]!;
+              expect(body).toMatch(/^bun\s/);
+
+              // And the path *inside* the script has to ship too, or moving
+              // src/models/migrate.ts would break the container while this test
+              // stayed green.
+              const scriptTarget = scriptPathArgument(body);
+              expect(scriptTarget).toBeDefined();
+              expect(resolveInRunner(scriptTarget!)).toEqual({ inImage: true, onDisk: true });
+              return;
+            }
+
+            // Otherwise bun is handed a path directly, which must live under a
+            // directory the runner stage actually copied in. `dist/backend/src/index.js`
+            // failed exactly here: nothing in the runner stage creates a dist/.
+            expect(resolveInRunner(words[1]!)).toEqual({ inImage: true, onDisk: true });
+          });
+        });
+      }
+    });
+  }
+});
+
+/**
+ * The stop budget the drain in src/index.ts depends on. Docker's default grace
+ * period is 10s; the drain's own worst case is ~14s (10s to force the HTTP
+ * drain, 2s for presence leases, 2s for Redis), so at the default a slow drain
+ * is SIGKILLed part-way through handing presence leases back (issue #586).
+ */
+describe('backend stop grace period', () => {
+  for (const file of ['docker-compose.release.yml', 'docker-compose.prod.yml']) {
+    it(`${file} gives the backend longer than its own drain`, () => {
+      const services = composeServices(file) as Record<string, { stop_grace_period?: string }>;
+      const grace = services.backend?.stop_grace_period;
+      expect(grace).toBeDefined();
+
+      const seconds = /^(\d+)s$/.exec(grace!);
+      expect(seconds).not.toBeNull();
+      // Above the 20s deadline src/index.ts arms, which is itself above the
+      // ~14s step-wise worst case, so the process always exits before Docker
+      // reaches for SIGKILL.
+      expect(Number(seconds![1])).toBeGreaterThan(20);
     });
   }
 });

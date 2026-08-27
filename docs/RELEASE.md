@@ -82,6 +82,16 @@ The Compose bundle starts PostgreSQL, runs `bun run migrate:up` once from the pi
 
 Apply an upgraded bundle with `up -d`, not `restart`: `docker compose restart backend` does not re-evaluate `depends_on`, so it never runs the `migrate` service and would leave the backend on an unmigrated schema.
 
+### Stopping and redeploying the backend
+
+`docker compose stop`, `down`, and the stop half of `up -d` on a changed service all send SIGTERM to the backend, which drains rather than dying where it stands: it stops accepting new work, disconnects realtime sessions, waits for in-flight HTTP requests, hands back the presence leases this instance holds so its users are not left showing online until `PRESENCE_TTL_MS` expires, closes Redis, and exits 0. Every step is bounded, and a drain that stalls anyway gives up after 20s and exits on its own.
+
+`stop_grace_period` is therefore set to `30s` on the backend service, above both that deadline and the drain's own ~14s worst case. Docker's default is 10s, which lands in the middle of the drain and cuts it off exactly while presence leases are being released. If you write your own Compose or move the backend to another orchestrator, carry the 30s over — the application cannot honour the shutdown contract without it.
+
+Two windows are exempt by design and need no handling: the container ignores SIGTERM while `migrate:up` runs and while the process is still starting up, before the handler is installed. Migrations run in a single transaction under a session-scoped advisory lock, so a container killed in that window rolls back with nothing half-applied and no lock left behind.
+
+The backend service deliberately sets no `init: true`. The application is PID 1 and installs its own handler, and it spawns no child processes, so there is nothing for an init to reap. Adding tini would put it between Docker and the application, and Docker runs it without `-g`, so it signals only its direct child — with a shell in between that produces a fast, clean-looking exit 143 while the drain never runs. It is not a substitute for the application-level handler.
+
 Bundles published before `v2.1.1` inclusive carry a `docker-compose.release.yml` whose backend commands (`pnpm run migrate:up`, `node dist/backend/src/index.js`) do not exist in the backend image they pin. Published tags are immutable, so those archives cannot be corrected in place — to deploy one of them, replace the two `command:` entries with the bun-only forms above.
 
 For production deployments, keep `BACKEND_IMAGE` and `FRONTEND_IMAGE` pinned to the manifest's digest references. The frontend image is built with `http://localhost:4005` as the default API URL; the existing frontend runtime logic maps the standard `3005`/`4005` host ports, while a different public topology requires a separately configured build.
