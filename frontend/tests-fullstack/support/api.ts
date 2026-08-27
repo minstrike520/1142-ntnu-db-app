@@ -28,7 +28,17 @@ import { randomUUID } from "node:crypto";
  */
 export const API_ORIGIN = process.env.E2E_API_ORIGIN ?? "http://127.0.0.1:4000";
 
-/** Where Chromium reaches the real Next.js frontend. */
+/**
+ * Where Chromium reaches the real Next.js frontend, and the suite's `baseURL`
+ * (playwright.fullstack.config.ts imports this rather than restating it).
+ *
+ * Port 3000 is load-bearing, not a default, and must stay in sync with the
+ * backend's CORS_ORIGINS and PORT. `getApiBaseUrl()` in src/lib/api.ts branches
+ * on `window.location.port`: served on 3000 it resolves the API origin to
+ * `<protocol>//<hostname>:4000`. Serving the app anywhere else silently
+ * repoints every REST call and the Socket.IO handshake. The `127.0.0.1`
+ * spelling is required for the same SameSite=Strict reason as API_ORIGIN above.
+ */
 export const FRONTEND_ORIGIN = process.env.E2E_FRONTEND_ORIGIN ?? "http://127.0.0.1:3000";
 
 const apiUrl = (path: string): string => `${API_ORIGIN}/api/v1${path}`;

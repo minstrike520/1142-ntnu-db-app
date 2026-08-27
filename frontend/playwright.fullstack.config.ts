@@ -19,16 +19,9 @@ import { FRONTEND_ORIGIN } from "./tests-fullstack/support/api";
  * assertion is made against what the browser ends up showing.
  */
 
-// Load-bearing, not a default, and it must stay in sync with the backend's
-// CORS_ORIGINS and with PORT below. `getApiBaseUrl()` in src/lib/api.ts
-// branches on `window.location.port`: served on 3000 it resolves the API origin
-// to `<protocol>//<hostname>:4000`. Serving the app anywhere else silently
-// repoints every REST call and the Socket.IO handshake.
-//
-// The host is `127.0.0.1` rather than `localhost` on purpose, and both servers
-// must agree on it. The refresh cookie is `SameSite=Strict` (backend
-// src/utils/cookies.ts), so mixing the two spellings across the 3000/4000
-// boundary would drop it and the session bootstrap would bounce to /login.
+// `FRONTEND_ORIGIN` is defined once in tests-fullstack/support/api.ts, which
+// documents why its host and port are load-bearing, and is imported here so the
+// suite's `baseURL` and its manually-created BrowserContexts cannot drift apart.
 const isCI = !!process.env.CI;
 
 export default defineConfig({

@@ -14,10 +14,8 @@ name: CI Browser
 # They are separate jobs rather than separate workflows because ci.yml's
 # `required-checks` gate keys off the single `browser` lane: a second job here
 # is covered by that gate automatically, whereas a new workflow would need a new
-# detect output, a new gate entry and a new required status name. Issue #544
-# proposed its own workflow and an earlier version of this comment said the
-# full-stack lane "must land as its own workflow"; that was reversed
-# deliberately, and the isolation it was protecting is preserved by the job
+# detect output, a new gate entry and a new required status name. The isolation
+# issue #544's own-workflow proposal was protecting is preserved by the job
 # boundary — the two share no process, no database and no test command.
 #
 # Keeping them as separate *jobs* still matters: a browser download plus a
@@ -92,8 +90,12 @@ jobs:
           POSTGRES_DB: ntnu_test
         ports:
           - 5433:5432
+        # Named user and database, matching ci-database.yml: a bare
+        # `pg_isready` probes as the container's own root user and fills the
+        # service container log with `FATAL: role "root" does not exist` every
+        # 2s, which buries real errors when diagnosing a failed run.
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres -d ntnu_test"
           --health-interval 2s
           --health-timeout 5s
           --health-retries 10
@@ -104,12 +106,13 @@ jobs:
       # boundary silently drops the cookie and every session bootstrap bounces
       # to /login.
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/ntnu_test
-      BACKEND_ORIGIN: http://127.0.0.1:4000
-      FRONTEND_ORIGIN: http://127.0.0.1:3000
-      # Passed to the Playwright config and its manually-created BrowserContext
-      # fixtures. Unlike Playwright Test's `page`/`context` fixtures, a raw
-      # `browser.newContext()` does not inherit `use.baseURL`, so this explicit
-      # value is what makes relative `page.goto('/login')` navigations correct.
+      # One name per origin, shared by the shell health checks and by the specs
+      # (tests-fullstack/support/api.ts reads both, and the Playwright config
+      # takes its baseURL from the frontend one). A raw `browser.newContext()`
+      # does not inherit `use.baseURL` the way the `page`/`context` fixtures do,
+      # so E2E_FRONTEND_ORIGIN is what makes relative `page.goto('/login')`
+      # navigations correct there.
+      E2E_API_ORIGIN: http://127.0.0.1:4000
       E2E_FRONTEND_ORIGIN: http://127.0.0.1:3000
     steps:
       - uses: actions/checkout@v7
@@ -152,36 +155,16 @@ jobs:
           NODE_ENV: development
           PORT: '4000'
           JWT_SECRET: ci-fullstack-browser-e2e-secret
-          CORS_ORIGINS: http://127.0.0.1:3000
+          CORS_ORIGINS: ${{ env.E2E_FRONTEND_ORIGIN }}
           REDIS_URL: ''
           RATE_LIMIT_DISABLED: 'true'
         run: |
           pnpm --filter near-chat-backend start > backend.log 2>&1 &
           echo "$!" > backend.pid
 
-      # Polls readiness *and* liveness. Waiting on the port alone would spend
-      # the full timeout on a backend that already exited — the acceptance
-      # criterion is that a startup failure fails fast instead of surfacing as a
-      # Playwright timeout minutes later.
+      # Liveness-aware health gate; see scripts/wait-for-service.sh.
       - name: Wait for backend
-        run: |
-          set -uo pipefail
-          pid="$(cat backend.pid)"
-          for _ in $(seq 1 60); do
-            if ! kill -0 "$pid" 2>/dev/null; then
-              echo "::error::Backend exited during startup"
-              cat backend.log
-              exit 1
-            fi
-            if curl -fsS "$BACKEND_ORIGIN/api/v1/health" >/dev/null 2>&1; then
-              echo "Backend is up"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "::error::Backend did not become healthy within 120s"
-          cat backend.log
-          exit 1
+        run: ./scripts/wait-for-service.sh Backend backend.pid "$E2E_API_ORIGIN/api/v1/health" backend.log
 
       # Built here rather than inside a Playwright `webServer` block: this lane
       # starts the servers itself so it can capture their logs and fail fast,
@@ -194,35 +177,18 @@ jobs:
       # warning: the server starts and serves normally.
       - name: Build frontend
         env:
-          NEXT_PUBLIC_API_URL: http://127.0.0.1:4000
+          NEXT_PUBLIC_API_URL: ${{ env.E2E_API_ORIGIN }}
         run: pnpm --filter near-chat-frontend exec next build
 
       - name: Start frontend
         env:
-          NEXT_PUBLIC_API_URL: http://127.0.0.1:4000
+          NEXT_PUBLIC_API_URL: ${{ env.E2E_API_ORIGIN }}
         run: |
           pnpm --filter near-chat-frontend exec next start --hostname 127.0.0.1 --port 3000 > frontend.log 2>&1 &
           echo "$!" > frontend.pid
 
       - name: Wait for frontend
-        run: |
-          set -uo pipefail
-          pid="$(cat frontend.pid)"
-          for _ in $(seq 1 60); do
-            if ! kill -0 "$pid" 2>/dev/null; then
-              echo "::error::Frontend exited during startup"
-              cat frontend.log
-              exit 1
-            fi
-            if curl -fsS "$FRONTEND_ORIGIN/login" >/dev/null 2>&1; then
-              echo "Frontend is up"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "::error::Frontend did not become healthy within 120s"
-          cat frontend.log
-          exit 1
+        run: ./scripts/wait-for-service.sh Frontend frontend.pid "$E2E_FRONTEND_ORIGIN/login" frontend.log
 
       - name: Run full-stack browser tests
         run: pnpm --filter near-chat-frontend test:browser:fullstack

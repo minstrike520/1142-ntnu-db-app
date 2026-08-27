@@ -48,39 +48,31 @@ def redact_string(value: str) -> str:
     return COOKIE_ASSIGNMENT.sub(lambda match: match.group(0).split("=", 1)[0] + "=" + REDACTED, value)
 
 
-def redact_headers(headers: Any) -> Any:
-    """Redact both header representations Playwright has used in trace files."""
-    if isinstance(headers, dict):
-        return {
-            key: REDACTED if key.lower() in SENSITIVE_HEADER_NAMES else redact_value(value)
-            for key, value in headers.items()
-        }
-
-    if isinstance(headers, list):
-        redacted: list[Any] = []
-        for header in headers:
-            if isinstance(header, dict) and isinstance(header.get("name"), str):
-                copied = {key: redact_value(value) for key, value in header.items()}
-                if header["name"].lower() in SENSITIVE_HEADER_NAMES and "value" in copied:
-                    copied["value"] = REDACTED
-                redacted.append(copied)
-            else:
-                redacted.append(redact_value(header))
-        return redacted
-
-    return redact_value(headers)
-
-
 def redact_value(value: Any) -> Any:
+    """Redact credentials anywhere in a decoded trace payload.
+
+    Playwright has used two header representations — a `{name, value}` list and
+    a plain object — and stores cookies in the same two shapes. Rather than
+    tracking which subtree is a header block, any key (or `{name, value}` pair)
+    whose name is credential-bearing is redacted wherever it occurs. Everything
+    else keeps its structure, with token-shaped text rewritten by
+    `redact_string`, so the trace viewer still renders the archive.
+    """
     if isinstance(value, str):
         return redact_string(value)
+
     if isinstance(value, list):
         return [redact_value(item) for item in value]
+
     if isinstance(value, dict):
+        name = value.get("name")
+        if isinstance(name, str) and name.lower() in SENSITIVE_HEADER_NAMES and "value" in value:
+            return {key: REDACTED if key == "value" else redact_value(item) for key, item in value.items()}
         return {
-            key: redact_headers(item) if key.lower() == "headers" else redact_value(item)
+            key: REDACTED if key.lower() in SENSITIVE_HEADER_NAMES else redact_value(item)
             for key, item in value.items()
         }
+
     return value
 
 
