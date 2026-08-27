@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:browser": "playwright test",
+    "test:browser:fullstack": "playwright test -c playwright.fullstack.config.ts",
     "analyze": "next experimental-analyze --output"
   },
   "dependencies": {

@@ -153,8 +153,21 @@ jobs:
           # lints, typechecks and unit-tests, so it follows that decision rather
           # than carrying a fifth near-identical path list that would drift.
           # This mirrors how the database lane follows backend.
+          #
+          # It follows the BACKEND decision too, which the frontend-only version
+          # of this rule did not. ci-browser.yml gained a full-stack job (issue
+          # #544) that drives a real Bun backend and a real PostgreSQL, so a
+          # backend-only or migration-only change can now break the browser lane
+          # while touching nothing under frontend/. Without this second
+          # condition that change would skip the lane, and `required-checks`
+          # accepts a skip for a lane marked not-required — the regression would
+          # reach main with the gate green.
           if [[ "$EVENT_NAME" == "workflow_dispatch" || "$FRONTEND_CHANGED" == "true" ]]; then
             frontend_required=true
+            browser_required=true
+          fi
+
+          if [[ "$BACKEND_CHANGED" == "true" ]]; then
             browser_required=true
           fi
 
