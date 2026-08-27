@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type BrowserContext, type TestInfo } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import {
   createPrivateRoom,
@@ -27,7 +27,7 @@ test.describe("two-user private chat", () => {
   test("delivers a message to the other user's browser without a reload", async ({
     browser,
     request,
-  }) => {
+  }, testInfo) => {
     // Prerequisite data through the public REST API. Allowed by the issue as a
     // fixture, and deliberate: driving the friends panel through search →
     // request → accept inside a realtime test would make a friends-UI
@@ -42,6 +42,7 @@ test.describe("two-user private chat", () => {
     // prove nothing about two participants.
     const aliceContext = await newIsolatedContext(browser);
     const bobContext = await newIsolatedContext(browser);
+    let testFailed = false;
 
     try {
       const alicePage = await aliceContext.newPage();
@@ -108,7 +109,13 @@ test.describe("two-user private chat", () => {
 
         await expect(messageBubble(bobPage, messageText)).toBeVisible();
       });
+    } catch (error) {
+      testFailed = true;
+      throw error;
     } finally {
+      await attachFailureScreenshots(aliceContext, "alice", testInfo, testFailed);
+      await attachFailureScreenshots(bobContext, "bob", testInfo, testFailed);
+
       // Closed even when an assertion above fails, so a red test does not leak
       // two browser contexts into the rest of the run.
       await aliceContext.close();
@@ -139,4 +146,30 @@ const waitForInitialRealtimeSync = async (page: import("@playwright/test").Page)
       candidate.request().method() === "GET",
   );
   expect(response.ok(), `initial realtime sync returned ${response.status()}`).toBeTruthy();
+};
+
+/** Attach every still-open page before raw contexts bypass fixture teardown. */
+const attachFailureScreenshots = async (
+  context: BrowserContext,
+  participant: string,
+  testInfo: TestInfo,
+  testFailed: boolean,
+): Promise<void> => {
+  if (!testFailed) return;
+
+  for (const [index, page] of context.pages().entries()) {
+    try {
+      await testInfo.attach(`${participant}-page-${index + 1}`, {
+        body: await page.screenshot({ fullPage: true }),
+        contentType: "image/png",
+      });
+    } catch (error) {
+      // Diagnostics must never replace the original assertion failure, but a
+      // capture failure must remain visible rather than disappearing silently.
+      testInfo.annotations.push({
+        type: "diagnostic-error",
+        description: `${participant} screenshot failed: ${String(error)}`,
+      });
+    }
+  }
 };
