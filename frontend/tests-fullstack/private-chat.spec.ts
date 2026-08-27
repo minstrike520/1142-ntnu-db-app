@@ -48,16 +48,24 @@ test.describe("two-user private chat", () => {
       const bobPage = await bobContext.newPage();
 
       await test.step("both users sign in and open the private room", async () => {
+        // `realtime_ready` starts the initial durable `/sync`. Register these
+        // waiters before login so a fast socket cannot finish its sync before
+        // the test starts observing responses. A visible composer alone is not
+        // enough: it can render before the socket has joined its room channels.
+        const aliceRealtimeReady = waitForInitialRealtimeSync(alicePage);
+        const bobRealtimeReady = waitForInitialRealtimeSync(bobPage);
+
         await signInThroughUi(alicePage, alice);
         await signInThroughUi(bobPage, bob);
+
+        await aliceRealtimeReady;
+        await bobRealtimeReady;
 
         await alicePage.goto(`/chat/${roomId}`);
         await bobPage.goto(`/chat/${roomId}`);
 
-        // Gate on the composer existing in both browsers. Without this, Alice
-        // could send before Bob's Socket.IO connection has been established,
-        // and the message would only ever arrive on a later fetch — the test
-        // would then be measuring history loading, not realtime delivery.
+        // The sync gates above prove both realtime sessions are ready; these
+        // assertions additionally prove both room pages are usable.
         await expect(alicePage.getByPlaceholder("Type a message...")).toBeVisible();
         await expect(bobPage.getByPlaceholder("Type a message...")).toBeVisible();
       });
@@ -122,3 +130,13 @@ test.describe("two-user private chat", () => {
  */
 const messageBubble = (page: import("@playwright/test").Page, text: string) =>
   page.locator("[data-msg-id]").filter({ hasText: text });
+
+/** Wait for the initial sync that the app starts after `realtime_ready`. */
+const waitForInitialRealtimeSync = async (page: import("@playwright/test").Page): Promise<void> => {
+  const response = await page.waitForResponse(
+    (candidate) =>
+      new URL(candidate.url()).pathname === "/api/v1/sync" &&
+      candidate.request().method() === "GET",
+  );
+  expect(response.ok(), `initial realtime sync returned ${response.status()}`).toBeTruthy();
+};

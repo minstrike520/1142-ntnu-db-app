@@ -55,8 +55,17 @@ test.describe("authentication lifecycle", () => {
       // `aria-label` comes from `t("sidebar.logout")`. The language settles on
       // English because `lang_preference` defaults to 'en' in the initial
       // migration and the bootstrap applies the value it just fetched.
+      const logoutResponse = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === "/api/v1/auth/logout" &&
+          response.request().method() === "POST",
+      );
       await page.getByRole("button", { name: "Logout" }).click();
 
+      // ChatContext intentionally navigates immediately after starting this
+      // request. Wait for the real backend response so the next navigation
+      // cannot race refresh-token revocation (or cancel an in-flight logout).
+      expect((await logoutResponse).status()).toBe(204);
       await expect(page).toHaveURL("/login");
       expect(await page.evaluate(() => window.localStorage.getItem("user"))).toBeNull();
     });
