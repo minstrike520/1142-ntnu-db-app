@@ -164,6 +164,11 @@ jobs:
           # reach main with the gate green.
           if [[ "$EVENT_NAME" == "workflow_dispatch" || "$FRONTEND_CHANGED" == "true" ]]; then
             frontend_required=true
+          fi
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || \
+                "$FRONTEND_CHANGED" == "true" || \
+                "$BACKEND_CHANGED" == "true" ]]; then
             browser_required=true
           fi
 
