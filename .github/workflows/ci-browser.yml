@@ -90,8 +90,12 @@ jobs:
           POSTGRES_DB: ntnu_test
         ports:
           - 5433:5432
+        # Named user and database, matching ci-database.yml: a bare
+        # `pg_isready` probes as the container's own root user and fills the
+        # service container log with `FATAL: role "root" does not exist` every
+        # 2s, which buries real errors when diagnosing a failed run.
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres -d ntnu_test"
           --health-interval 2s
           --health-timeout 5s
           --health-retries 10
