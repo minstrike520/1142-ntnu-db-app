@@ -73,5 +73,5 @@ export default defineConfig({
   // minutes later. Startup, health-gating and log capture are the workflow's
   // job — see the `fullstack-browser-tests` job in
   // .github/workflows/ci-browser.yml, and the local recipe in
-  // tests-fullstack/README.md.
+  // ../docs/DEVELOPMENT.md#running-full-stack-browser-tests.
 });

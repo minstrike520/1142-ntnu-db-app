@@ -475,7 +475,73 @@ On failure, the HTML report, traces and screenshots land in `frontend/playwright
 pnpm --filter near-chat-frontend exec playwright show-report
 ```
 
-Specs live in `frontend/tests-browser/`, and the shared REST mock is `frontend/tests-browser/support/api-mock.ts`. Full-stack browser E2E against a real backend and Postgres is tracked separately in issue #544 and will get its own lane rather than extending this one.
+Specs live in `frontend/tests-browser/`, and the shared REST mock is
+`frontend/tests-browser/support/api-mock.ts`. The real-stack suite below has a
+separate test directory and config, but runs as the `fullstack-browser-tests` job
+in the existing `.github/workflows/ci-browser.yml` workflow.
+
+### Running Full-Stack Browser Tests
+
+The full-stack suite does not mock application APIs. Chromium drives a
+production Next.js build, fixtures create prerequisite data through the real
+REST API, and assertions cross the Bun backend, PostgreSQL and Socket.IO. Because
+`playwright.fullstack.config.ts` intentionally has no `webServer`, start the
+database and both application processes before running the suite.
+
+Run all commands from the repository root. Install Chromium once per machine,
+then start the ephemeral `db-test` service and apply migrations:
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+pnpm --filter near-chat-backend test:db:up
+```
+
+In **terminal A**, start the backend on port 4000:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5436/ntnu_test \
+NODE_ENV=development \
+PORT=4000 \
+JWT_SECRET=local-fullstack-browser-e2e-secret \
+CORS_ORIGINS=http://127.0.0.1:3000 \
+REDIS_URL='' \
+RATE_LIMIT_DISABLED=true \
+pnpm --filter near-chat-backend start
+```
+
+In **terminal B**, build and start the production frontend on port 3000:
+
+```bash
+NEXT_PUBLIC_API_URL=http://127.0.0.1:4000 \
+pnpm --filter near-chat-frontend exec next build
+
+NEXT_PUBLIC_API_URL=http://127.0.0.1:4000 \
+pnpm --filter near-chat-frontend exec next start --hostname 127.0.0.1 --port 3000
+```
+
+After both servers are ready, run the suite in **terminal C**:
+
+```bash
+E2E_FRONTEND_ORIGIN=http://127.0.0.1:3000 \
+E2E_API_ORIGIN=http://127.0.0.1:4000 \
+CI=1 \
+pnpm --filter near-chat-frontend test:browser:fullstack
+```
+
+Keep `127.0.0.1` consistent across all three terminals: the refresh cookie is
+`SameSite=Strict`, so mixing it with `localhost` breaks session bootstrap.
+`NODE_ENV=development` keeps the refresh cookie usable over local HTTP, and the
+empty `REDIS_URL` is intentional for this single-backend topology.
+
+Stop the backend and frontend with `Ctrl+C`, then remove only the ephemeral test
+database (the development database is unaffected):
+
+```bash
+pnpm --filter near-chat-backend test:db:down
+```
+
+On failure, diagnostics land in `frontend/playwright-report-fullstack/` and
+`frontend/test-results-fullstack/`.
 
 ### Running Unit Tests
 Unit tests do not require a database connection.
