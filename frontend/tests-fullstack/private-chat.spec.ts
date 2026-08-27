@@ -42,7 +42,6 @@ test.describe("two-user private chat", () => {
     // prove nothing about two participants.
     const aliceContext = await newIsolatedContext(browser);
     const bobContext = await newIsolatedContext(browser);
-    let testFailed = false;
 
     try {
       const alicePage = await aliceContext.newPage();
@@ -110,12 +109,14 @@ test.describe("two-user private chat", () => {
         await expect(messageBubble(bobPage, messageText)).toBeVisible();
       });
     } catch (error) {
-      testFailed = true;
+      // These contexts come from `browser.newContext()`, which Playwright's
+      // worker-scoped `browser` fixture does not photograph on failure the way
+      // it does the `page` fixture. Capture here, where the failure is known,
+      // rather than in `finally` behind a flag.
+      await attachScreenshots(aliceContext, "alice", testInfo);
+      await attachScreenshots(bobContext, "bob", testInfo);
       throw error;
     } finally {
-      await attachFailureScreenshots(aliceContext, "alice", testInfo, testFailed);
-      await attachFailureScreenshots(bobContext, "bob", testInfo, testFailed);
-
       // Closed even when an assertion above fails, so a red test does not leak
       // two browser contexts into the rest of the run.
       await aliceContext.close();
@@ -149,14 +150,11 @@ const waitForInitialRealtimeSync = async (page: import("@playwright/test").Page)
 };
 
 /** Attach every still-open page before raw contexts bypass fixture teardown. */
-const attachFailureScreenshots = async (
+const attachScreenshots = async (
   context: BrowserContext,
   participant: string,
   testInfo: TestInfo,
-  testFailed: boolean,
 ): Promise<void> => {
-  if (!testFailed) return;
-
   for (const [index, page] of context.pages().entries()) {
     try {
       await testInfo.attach(`${participant}-page-${index + 1}`, {
