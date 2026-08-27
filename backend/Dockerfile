@@ -3,7 +3,7 @@
 # Built from the REPOSITORY ROOT as context (see docker-compose.yml), because
 # this repo is a single-lockfile pnpm workspace: the lockfile, the workspace
 # manifest and every package's package.json all live outside backend/.
-FROM oven/bun:1.3.14-slim
+FROM oven/bun:1.4.0-slim
 
 # pnpm 11 requires `node:sqlite`, which bun does not implement, so pnpm cannot
 # execute on a bun-only image. Graft the node toolchain in rather than switching
