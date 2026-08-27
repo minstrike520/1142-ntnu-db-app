@@ -64,8 +64,18 @@ test.describe("two-user private chat", () => {
         await aliceRealtimeReady;
         await bobRealtimeReady;
 
+        // Navigation remounts ChatProvider, so the sync/session observed during
+        // login does not belong to the room pages below. Register new waiters
+        // before navigating to prove both room sessions complete their own
+        // realtime bootstrap before either browser sends a message.
+        const aliceRoomRealtimeReady = waitForInitialRealtimeSync(alicePage);
+        const bobRoomRealtimeReady = waitForInitialRealtimeSync(bobPage);
+
         await alicePage.goto(`/chat/${roomId}`);
         await bobPage.goto(`/chat/${roomId}`);
+
+        await aliceRoomRealtimeReady;
+        await bobRoomRealtimeReady;
 
         // The sync gates above prove both realtime sessions are ready; these
         // assertions additionally prove both room pages are usable.
