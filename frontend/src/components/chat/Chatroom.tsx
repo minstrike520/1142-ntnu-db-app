@@ -9,7 +9,10 @@ import {
   getAvatarForUser,
   Message,
 } from "@/context/ChatContext";
-import { useRoomWorkspace } from "@/context/RoomWorkspaceContext";
+import {
+  useRoomUploadStatus,
+  useRoomWorkspace,
+} from "@/context/RoomWorkspaceContext";
 import { resolveAssetUrl } from "@/lib/assets";
 import { Button } from "@/components/ui/Button";
 import { Dropdown } from "@/components/ui/Dropdown";
@@ -319,27 +322,37 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     markRoomAsRead,
   } = useChat();
   const { showRightPanel, setShowRightPanel } = useRightPanel();
-  const { readWorkspace, writeWorkspace, clearWorkspace, rememberRoom } = useRoomWorkspace();
+  const {
+    readWorkspace,
+    writeWorkspace,
+    clearWorkspace,
+    rememberRoom,
+    setRoomUploadStatus,
+  } = useRoomWorkspace();
+  const initialWorkspace = readWorkspace(roomId);
+  const initialReplyTarget = restoreMessageTarget(initialWorkspace?.replyTarget, roomId, messages);
+  const initialEditingMessage = restoreMessageTarget(initialWorkspace?.editingMessage, roomId, messages);
+  const isUploadingAttachment = useRoomUploadStatus(roomId);
 
   // Lazy initialisers restore the draft when the chat route remounts after a
   // trip to /friends, /settings or /emergency (issue #539). They run on the
   // first render only. Room *switches* go through the roomId-change block
   // further down instead, because the component stays mounted there.
-  const [inputText, setInputText] = useState(() => readWorkspace(roomId)?.inputText ?? "");
+  const [inputText, setInputText] = useState(() =>
+    initialWorkspace?.editingMessage && !initialEditingMessage
+      ? ""
+      : initialWorkspace?.inputText ?? "",
+  );
   const [mentionDraft, setMentionDraft] = useState<MentionDraft | null>(null);
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
-  const [replyTarget, setReplyTarget] = useState<Message | null>(() =>
-    restoreMessageTarget(readWorkspace(roomId)?.replyTarget, roomId, messages),
-  );
-  const [editingMessage, setEditingMessage] = useState<Message | null>(() =>
-    restoreMessageTarget(readWorkspace(roomId)?.editingMessage, roomId, messages),
-  );
+  const [replyTarget, setReplyTarget] = useState<Message | null>(() => initialReplyTarget);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(() => initialEditingMessage);
   const [isModifyNickOpen, setIsModifyNickOpen] = useState(false);
   const [nickInputValue, setNickInputValue] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<File[]>(
     () => readWorkspace(roomId)?.pendingAttachments ?? [],
   );
-  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
+
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [msgSearchQuery, setMsgSearchQuery] = useState("");
   const messageEndRef = useRef<HTMLDivElement>(null);
@@ -408,19 +421,52 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     // restored from the room the user is switching into, defaulting to empty
     // for a room with no draft yet.
     const restored = readWorkspace(roomId);
+    const restoredReplyTarget = restoreMessageTarget(restored?.replyTarget, roomId, messages);
+    const restoredEditingMessage = restoreMessageTarget(restored?.editingMessage, roomId, messages);
     setIsSearchOpen(false);
     setMsgSearchQuery("");
-    setIsUploadingAttachment(false);
     setPendingAttachments(restored?.pendingAttachments ?? []);
-    setInputText(restored?.inputText ?? "");
-    setReplyTarget(restoreMessageTarget(restored?.replyTarget, roomId, messages));
+    setInputText(
+      restored?.editingMessage && !restoredEditingMessage
+        ? ""
+        : restored?.inputText ?? "",
+    );
+    setReplyTarget(restoredReplyTarget);
     // Previously left untouched on room switch, which leaked an in-progress
     // edit (and its banner) into the next room — and, because handleSend sends
     // editingMessage.id against the *current* room, could edit a message that
     // belongs to the room the user just left.
-    setEditingMessage(restoreMessageTarget(restored?.editingMessage, roomId, messages));
+    setEditingMessage(restoredEditingMessage);
     setHasInitializedUnread(false);
     setCurrentRoomUnreadId(null);
+  }
+
+  const [prevMessages, setPrevMessages] = useState(messages);
+  if (prevMessages !== messages) {
+    setPrevMessages(messages);
+    const roomMessages = messages.filter((message) => message.roomId === roomId);
+    if (roomMessages.length > 0) {
+      if (replyTarget && !restoreMessageTarget(replyTarget, roomId, messages)) {
+        setReplyTarget(null);
+      }
+      if (editingMessage && !restoreMessageTarget(editingMessage, roomId, messages)) {
+        setEditingMessage(null);
+        setInputText("");
+      }
+    }
+  }
+
+  const [prevUploadStatus, setPrevUploadStatus] = useState(isUploadingAttachment);
+  if (prevUploadStatus !== isUploadingAttachment) {
+    setPrevUploadStatus(isUploadingAttachment);
+    if (!isUploadingAttachment && pendingAttachments.length > 0) {
+      const workspace = readWorkspace(roomId);
+      if ((workspace?.pendingAttachments.length ?? 0) === 0) {
+        setPendingAttachments([]);
+        setInputText(workspace?.inputText ?? "");
+        setReplyTarget(workspace?.replyTarget ?? null);
+      }
+    }
   }
 
   // Mirror the live composer state into the session store on every change, so
@@ -430,7 +476,6 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
   useEffect(() => {
     writeWorkspace(roomId, { inputText, replyTarget, editingMessage, pendingAttachments });
   }, [roomId, inputText, replyTarget, editingMessage, pendingAttachments, writeWorkspace]);
-
 
   // Track whether the user is at the bottom of the message list
   useEffect(() => {
@@ -729,34 +774,40 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
 
     // No `finally` here: a try/finally (or conditional expressions inside
     // try/catch) makes the React Compiler bail out of the entire component.
+    const sendRoomId = activeRoom.id;
     try {
       if (pendingAttachments.length > 0) {
-        setIsUploadingAttachment(true);
-        await handleUploadAttachments(activeRoom.id, pendingAttachments, {
+        setRoomUploadStatus(sendRoomId, true);
+        await handleUploadAttachments(sendRoomId, pendingAttachments, {
           content: inputText,
           replyTarget,
         });
-        setPendingAttachments([]);
         // Clear the stored draft imperatively too. If the user navigated off
         // the chat route while the upload was in flight, this component is
         // already unmounted and the setState calls are no-ops — the snapshot
         // would keep the files and offer them for a second send on return.
-        writeWorkspace(activeRoom.id, {
+        writeWorkspace(sendRoomId, {
           pendingAttachments: [],
           inputText: "",
           replyTarget: null,
         });
+        setRoomUploadStatus(sendRoomId, false);
+        if (roomId !== sendRoomId) {
+          handleTyping(sendRoomId, false);
+          return;
+        }
+        setPendingAttachments([]);
       } else {
-        handleSendMessage(activeRoom.id, inputText, replyTarget);
+        handleSendMessage(sendRoomId, inputText, replyTarget);
       }
 
-      handleTyping(activeRoom.id, false);
+      handleTyping(sendRoomId, false);
       setInputText("");
       setReplyTarget(null);
-      setIsUploadingAttachment(false);
     } catch (error) {
+      setRoomUploadStatus(sendRoomId, false);
+      if (roomId !== sendRoomId) return;
       reportActionError(error, "Failed to send message");
-      setIsUploadingAttachment(false);
     }
   };
 

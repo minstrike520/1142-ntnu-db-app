@@ -63,6 +63,9 @@ interface RoomWorkspaceContextType {
   readWorkspace: (roomId: string) => RoomWorkspaceSnapshot | undefined;
   writeWorkspace: (roomId: string, snapshot: Partial<RoomWorkspaceSnapshot>) => void;
   clearWorkspace: (roomId: string) => void;
+  subscribeRoomUpload: (roomId: string, listener: () => void) => () => void;
+  getRoomUploadStatus: (roomId: string) => boolean;
+  setRoomUploadStatus: (roomId: string, uploading: boolean) => void;
   subscribeLastViewedRoom: (listener: () => void) => () => void;
   getLastViewedRoomId: () => string | null;
   rememberRoom: (roomId: string) => void;
@@ -96,6 +99,8 @@ const isEmpty = (snapshot: RoomWorkspaceSnapshot): boolean =>
 
 export function RoomWorkspaceProvider({ children }: { children: React.ReactNode }) {
   const workspacesRef = useRef<Map<string, RoomWorkspaceSnapshot>>(new Map());
+  const uploadingRoomIdsRef = useRef(new Set<string>());
+  const roomUploadListenersRef = useRef(new Map<string, Set<() => void>>());
   const lastViewedRoomIdRef = useRef<string | null>(null);
   const lastViewedRoomListenersRef = useRef(new Set<() => void>());
   // Mirrors "some room holds unsent files" into render-visible state so the
@@ -152,6 +157,38 @@ export function RoomWorkspaceProvider({ children }: { children: React.ReactNode 
     [syncPendingFlag],
   );
 
+  const subscribeRoomUpload = useCallback((roomId: string, listener: () => void) => {
+    let listeners = roomUploadListenersRef.current.get(roomId);
+    if (!listeners) {
+      listeners = new Set();
+      roomUploadListenersRef.current.set(roomId, listeners);
+    }
+    listeners.add(listener);
+    return () => {
+      listeners?.delete(listener);
+      if (listeners?.size === 0) roomUploadListenersRef.current.delete(roomId);
+    };
+  }, []);
+
+  const getRoomUploadStatus = useCallback(
+    (roomId: string) => uploadingRoomIdsRef.current.has(roomId),
+    [],
+  );
+
+  const setRoomUploadStatus = useCallback((roomId: string, uploading: boolean) => {
+    const uploadingRoomIds = uploadingRoomIdsRef.current;
+    const currentlyUploading = uploadingRoomIds.has(roomId);
+    if (currentlyUploading === uploading) return;
+
+    if (uploading) {
+      uploadingRoomIds.add(roomId);
+    } else {
+      uploadingRoomIds.delete(roomId);
+    }
+
+    for (const listener of roomUploadListenersRef.current.get(roomId) ?? []) listener();
+  }, []);
+
   const subscribeLastViewedRoom = useCallback((listener: () => void) => {
     lastViewedRoomListenersRef.current.add(listener);
     return () => lastViewedRoomListenersRef.current.delete(listener);
@@ -189,6 +226,9 @@ export function RoomWorkspaceProvider({ children }: { children: React.ReactNode 
       readWorkspace,
       writeWorkspace,
       clearWorkspace,
+      subscribeRoomUpload,
+      getRoomUploadStatus,
+      setRoomUploadStatus,
       subscribeLastViewedRoom,
       getLastViewedRoomId,
       rememberRoom,
@@ -197,6 +237,9 @@ export function RoomWorkspaceProvider({ children }: { children: React.ReactNode 
       readWorkspace,
       writeWorkspace,
       clearWorkspace,
+      subscribeRoomUpload,
+      getRoomUploadStatus,
+      setRoomUploadStatus,
       subscribeLastViewedRoom,
       getLastViewedRoomId,
       rememberRoom,
@@ -222,4 +265,17 @@ export function useRoomWorkspace() {
 export function useLastViewedRoomId(): string | null {
   const { subscribeLastViewedRoom, getLastViewedRoomId } = useRoomWorkspace();
   return useSyncExternalStore(subscribeLastViewedRoom, getLastViewedRoomId, getLastViewedRoomId);
+}
+
+export function useRoomUploadStatus(roomId: string): boolean {
+  const { subscribeRoomUpload, getRoomUploadStatus } = useRoomWorkspace();
+  const subscribe = useCallback(
+    (listener: () => void) => subscribeRoomUpload(roomId, listener),
+    [roomId, subscribeRoomUpload],
+  );
+  const getSnapshot = useCallback(
+    () => getRoomUploadStatus(roomId),
+    [roomId, getRoomUploadStatus],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

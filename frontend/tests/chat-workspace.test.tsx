@@ -14,8 +14,9 @@
  * load, and the absence of a visible jump need a real browser (#543 / #544).
  */
 import { describe, expect, test } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { mountChatApp } from "./harness";
+import { __holdNextAttachmentUpload } from "./mocks/api";
 
 const composer = () => screen.getByPlaceholderText<HTMLTextAreaElement>("Type a message...");
 
@@ -160,6 +161,28 @@ describe("reply target preservation", () => {
 });
 
 describe("pending attachment preservation", () => {
+  test("keeps an attachment upload locked across route remounts", async () => {
+    const app = await mountChatApp("/chat/room-1");
+    const releaseUpload = __holdNextAttachmentUpload();
+
+    attachFile(app.view.container, "quarterly.txt");
+    await app.settle();
+    fireEvent.click(screen.getByText("Send"));
+    await waitFor(() => expect(screen.getByText("Uploading...")).toBeTruthy());
+
+    await app.navigate("/friends");
+    await app.settle();
+    await app.navigate("/chat/room-1");
+    await app.settle();
+
+    expect(screen.getByText("Uploading...")).toBeTruthy();
+    fireEvent.click(screen.getByText("Uploading..."));
+    releaseUpload();
+    await app.settle();
+
+    expect(app.socket().countEmitted("send_message")).toBe(1);
+  });
+
   test("keeps unsent attachments across navigation", async () => {
     const app = await mountChatApp("/chat/room-1");
 
@@ -213,6 +236,28 @@ describe("right panel preservation", () => {
 });
 
 describe("edit state isolation", () => {
+  test("clears an edit when its message is recalled after restoration", async () => {
+    const app = await mountChatApp("/chat/room-1");
+
+    openOwnMessageMenu();
+    fireEvent.click(screen.getByText("Edit Message"));
+    await app.settle();
+    await app.navigate("/friends");
+    await app.settle();
+    await app.navigate("/chat/room-1");
+    await app.settle();
+    expect(screen.getByText("Editing message (Press Esc to cancel)")).toBeTruthy();
+
+    act(() => {
+      app.socket().serverEmit("message_recalled", { messageId: "room-1-msg-004" });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Editing message (Press Esc to cancel)")).toBeNull();
+    });
+
+    expect(composer().value).toBe("");
+  });
+
   test("does not carry an in-progress edit into another room", async () => {
     const app = await mountChatApp("/chat/room-1");
 
