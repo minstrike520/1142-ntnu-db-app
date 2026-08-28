@@ -56,6 +56,37 @@ const openOwnMessageMenu = () => {
 };
 
 describe("draft preservation across navigation", () => {
+  test("returns to the last viewed room from the chats navigation", async () => {
+    const app = await mountChatApp("/chat/room-1");
+
+    fireEvent.click(screen.getByText("Beta Group"));
+    await app.settle();
+    expect(screen.getAllByText("Message 15 in room-2").length).toBeGreaterThan(0);
+
+    await app.navigate("/friends");
+    await app.settle();
+    fireEvent.click(screen.getAllByRole("button", { name: "Chats" })[0]);
+    await app.settle();
+
+    expect(screen.getAllByText("Message 15 in room-2").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Message 15 in room-1")).toBeNull();
+  });
+
+  test("returns to the last viewed room from the mobile chats navigation", async () => {
+    const app = await mountChatApp("/chat/room-1");
+
+    fireEvent.click(screen.getByText("Beta Group"));
+    await app.settle();
+    await app.navigate("/friends");
+    await app.settle();
+    const chatsButtons = screen.getAllByRole("button", { name: "Chats" });
+    fireEvent.click(chatsButtons[chatsButtons.length - 1]);
+    await app.settle();
+
+    expect(screen.getAllByText("Message 15 in room-2").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Message 15 in room-1")).toBeNull();
+  });
+
   test("restores the typed draft after leaving and re-entering the chat route", async () => {
     const app = await mountChatApp("/chat/room-1");
 

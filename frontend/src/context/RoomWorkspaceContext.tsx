@@ -1,6 +1,15 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { Message } from "@/context/ChatContext";
 
 /**
@@ -9,7 +18,9 @@ import type { Message } from "@/context/ChatContext";
  * Navigating to /friends, /settings or /emergency unmounts the chat route, and
  * switching rooms re-keys <Chatroom>, so every draft the user had typed used to
  * be dropped (issue #539). This store keeps one snapshot per room for the
- * lifetime of the login session.
+ * lifetime of the login session. The same session store also records the last
+ * room visited, so returning from another authenticated page can reopen that
+ * room instead of defaulting to the first room in the list.
  *
  * Deliberately backed by a ref-held Map rather than React state: <Chatroom>
  * writes a snapshot on every keystroke, and routing that through state would
@@ -52,6 +63,9 @@ interface RoomWorkspaceContextType {
   readWorkspace: (roomId: string) => RoomWorkspaceSnapshot | undefined;
   writeWorkspace: (roomId: string, snapshot: Partial<RoomWorkspaceSnapshot>) => void;
   clearWorkspace: (roomId: string) => void;
+  subscribeLastViewedRoom: (listener: () => void) => () => void;
+  getLastViewedRoomId: () => string | null;
+  rememberRoom: (roomId: string) => void;
 }
 
 const RoomWorkspaceContext = createContext<RoomWorkspaceContextType | undefined>(undefined);
@@ -82,6 +96,8 @@ const isEmpty = (snapshot: RoomWorkspaceSnapshot): boolean =>
 
 export function RoomWorkspaceProvider({ children }: { children: React.ReactNode }) {
   const workspacesRef = useRef<Map<string, RoomWorkspaceSnapshot>>(new Map());
+  const lastViewedRoomIdRef = useRef<string | null>(null);
+  const lastViewedRoomListenersRef = useRef(new Set<() => void>());
   // Mirrors "some room holds unsent files" into render-visible state so the
   // beforeunload listener is only registered when it can actually fire. An
   // always-on beforeunload handler makes the page ineligible for bfcache.
@@ -136,6 +152,19 @@ export function RoomWorkspaceProvider({ children }: { children: React.ReactNode 
     [syncPendingFlag],
   );
 
+  const subscribeLastViewedRoom = useCallback((listener: () => void) => {
+    lastViewedRoomListenersRef.current.add(listener);
+    return () => lastViewedRoomListenersRef.current.delete(listener);
+  }, []);
+
+  const getLastViewedRoomId = useCallback(() => lastViewedRoomIdRef.current, []);
+
+  const rememberRoom = useCallback((roomId: string) => {
+    if (lastViewedRoomIdRef.current === roomId) return;
+    lastViewedRoomIdRef.current = roomId;
+    for (const listener of lastViewedRoomListenersRef.current) listener();
+  }, []);
+
   // Pending attachments only live in memory, so a reload silently loses them.
   // Registered here rather than in <Chatroom> so the warning still fires while
   // the user is on /friends or /settings with a draft left behind.
@@ -156,8 +185,22 @@ export function RoomWorkspaceProvider({ children }: { children: React.ReactNode 
 
   // Identity-stable: the callbacks close over a ref, never over state.
   const value = useMemo<RoomWorkspaceContextType>(
-    () => ({ readWorkspace, writeWorkspace, clearWorkspace }),
-    [readWorkspace, writeWorkspace, clearWorkspace],
+    () => ({
+      readWorkspace,
+      writeWorkspace,
+      clearWorkspace,
+      subscribeLastViewedRoom,
+      getLastViewedRoomId,
+      rememberRoom,
+    }),
+    [
+      readWorkspace,
+      writeWorkspace,
+      clearWorkspace,
+      subscribeLastViewedRoom,
+      getLastViewedRoomId,
+      rememberRoom,
+    ],
   );
 
   return (
@@ -174,4 +217,9 @@ export function useRoomWorkspace() {
     throw new Error("useRoomWorkspace must be used within a RoomWorkspaceProvider");
   }
   return context;
+}
+
+export function useLastViewedRoomId(): string | null {
+  const { subscribeLastViewedRoom, getLastViewedRoomId } = useRoomWorkspace();
+  return useSyncExternalStore(subscribeLastViewedRoom, getLastViewedRoomId, getLastViewedRoomId);
 }

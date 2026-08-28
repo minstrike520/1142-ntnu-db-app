@@ -319,7 +319,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     markRoomAsRead,
   } = useChat();
   const { showRightPanel, setShowRightPanel } = useRightPanel();
-  const { readWorkspace, writeWorkspace, clearWorkspace } = useRoomWorkspace();
+  const { readWorkspace, writeWorkspace, clearWorkspace, rememberRoom } = useRoomWorkspace();
 
   // Lazy initialisers restore the draft when the chat route remounts after a
   // trip to /friends, /settings or /emergency (issue #539). They run on the
@@ -353,6 +353,10 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
   const [currentRoomUnreadId, setCurrentRoomUnreadId] = useState<string | null>(null);
   const [hasInitializedUnread, setHasInitializedUnread] = useState(false);
   const maxMessageLength = Number(process.env.NEXT_PUBLIC_MAX_MESSAGE_LENGTH || 1000);
+
+  useEffect(() => {
+    rememberRoom(roomId);
+  }, [roomId, rememberRoom]);
 
   const activeRoom = rooms.find((r) => r.id === roomId);
   const currentMember = activeRoom?.members?.find((m) => m.userId === user.userId || m.name === user.username);

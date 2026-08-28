@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useChat } from "@/context/ChatContext";
+import { useLastViewedRoomId } from "@/context/RoomWorkspaceContext";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -39,6 +40,7 @@ export default function Sidebar() {
     setSelectedFriendForSidebar,
     hasUnsavedChanges,
   } = useChat();
+  const lastViewedRoomId = useLastViewedRoomId();
 
   const [searchQuery, setSearchQuery] = useState("");
   const isSettingsPage = pathname === "/settings";
@@ -107,13 +109,14 @@ export default function Sidebar() {
   };
 
   const pendingIncoming = friendRequests?.filter((request) => request.direction === "incoming").length || 0;
-  const firstChatPath = rooms[0] ? `/chat/${rooms[0].id}` : "/";
+  const lastChat = rooms.find((room) => room.id === lastViewedRoomId);
+  const chatPath = lastChat ? `/chat/${lastChat.id}` : rooms[0] ? `/chat/${rooms[0].id}` : "/";
 
   const menuItems = [
     {
       label: t("rail.chats"),
       active: pathname === "/" || pathname.startsWith("/chat"),
-      onClick: () => router.push(firstChatPath),
+      onClick: () => router.push(chatPath),
       icon: <MessageDetailIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
     {
