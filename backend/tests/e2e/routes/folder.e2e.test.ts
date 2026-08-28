@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
-import request from 'supertest';
-import { app } from '../../../src/index';
+import { request } from '../../helpers/http';
+import { honoApp as app } from '../../../src/index';
 import { resetDb } from '../../helpers/resetDb';
 
 describe('Folder E2E', () => {

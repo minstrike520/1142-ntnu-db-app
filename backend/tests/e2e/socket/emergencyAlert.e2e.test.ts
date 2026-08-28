@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'bun:test';
 import { AddressInfo } from 'net';
-import request from 'supertest';
+import { request } from '../../helpers/http';
 import { io as createClient, type Socket as ClientSocket } from 'socket.io-client';
-import { app, server } from '../../../src/index';
+import { honoApp as app, server } from '../../../src/index';
 import { resetDb } from '../../helpers/resetDb';
 import type { ClientToServerEvents, ServerToClientEvents, Message } from '../../../../shared/types';
 

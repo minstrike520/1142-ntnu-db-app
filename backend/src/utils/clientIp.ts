@@ -46,13 +46,7 @@ export const getClientIp = (c: Context): string | undefined => {
     const address = getConnInfo(c).remote?.address;
     if (address) return address;
   } catch {
-    // Fall through to the compatibility shape below.
+    // Synthetic requests do not have connection information.
   }
-
-  // Hono's Bun adapter is authoritative in production. The small fallback is
-  // intentionally structural: it keeps synthetic tests and the Node-shaped
-  // supertest adapter attributable without importing @hono/node-server into
-  // the production path.
-  const legacyIncoming = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming;
-  return legacyIncoming?.socket?.remoteAddress || undefined;
+  return undefined;
 };
