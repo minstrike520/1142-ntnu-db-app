@@ -19,7 +19,7 @@
     "test:e2e:local": "pnpm run test:db:up && bun test tests/e2e",
     "test:db:up": "docker compose -f ../docker-compose.yml up -d --wait db-test && pnpm run migrate:test",
     "test:db:down": "docker compose -f ../docker-compose.yml stop db-test && docker compose -f ../docker-compose.yml rm -f db-test",
-    "migrate:test": "bun src/models/migrate.ts up --database-url=postgresql://postgres:***@localhost:5436/ntnu_test",
+    "migrate:test": "bun src/models/migrate.ts up --database-url=postgresql://postgres:postgres@localhost:5436/ntnu_test",
     "lint": "eslint src && tsc --noEmit",
     "smoke": "bun run scripts/smoke.ts"
   },
