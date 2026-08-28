@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'bun:test';
 import { request } from '../../helpers/http';
 import { honoApp as app } from '../../../src/index';
 import { resetDb } from '../../helpers/resetDb';
+import type { AuthResponse, FolderResponse, RoomResponse } from '../../helpers/responseTypes';
 
 describe('Folder E2E', () => {
   let token: string;
@@ -12,7 +13,7 @@ describe('Folder E2E', () => {
     await resetDb();
     
     // Create user
-    const res = await request(app).post('/api/v1/auth/register').send({
+    const res = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'User',
       email: 'user@example.com',
       password: 'Password123!',
@@ -22,7 +23,7 @@ describe('Folder E2E', () => {
 
     // Create room
     const roomRes = await request(app)
-      .post('/api/v1/rooms')
+      .post<RoomResponse>('/api/v1/rooms')
       .set('Authorization', `Bearer ${token}`)
       .send({ type: 'group', name: 'Test Room' });
     roomId = roomRes.body.roomId;
@@ -30,7 +31,7 @@ describe('Folder E2E', () => {
 
   it('should create a new folder', async () => {
     const res = await request(app)
-      .post('/api/v1/folders')
+      .post<FolderResponse>('/api/v1/folders')
       .set('Authorization', `Bearer ${token}`)
       .send({ name: 'My Folder' });
     expect(res.status).toBe(201);
@@ -40,12 +41,12 @@ describe('Folder E2E', () => {
 
   it('should list folders', async () => {
     await request(app)
-      .post('/api/v1/folders')
+      .post<FolderResponse>('/api/v1/folders')
       .set('Authorization', `Bearer ${token}`)
       .send({ name: 'Folder 1' });
 
     const res = await request(app)
-      .get('/api/v1/folders')
+      .get<FolderResponse[]>('/api/v1/folders')
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body).toBeInstanceOf(Array);
@@ -56,7 +57,7 @@ describe('Folder E2E', () => {
 
   it('should delete a folder', async () => {
     const createRes = await request(app)
-      .post('/api/v1/folders')
+      .post<FolderResponse>('/api/v1/folders')
       .set('Authorization', `Bearer ${token}`)
       .send({ name: 'Folder to Delete' });
     const folderId = createRes.body.folderId;
@@ -67,14 +68,14 @@ describe('Folder E2E', () => {
     expect(deleteRes.status).toBe(204);
 
     const getRes = await request(app)
-      .get('/api/v1/folders')
+      .get<FolderResponse[]>('/api/v1/folders')
       .set('Authorization', `Bearer ${token}`);
     expect(getRes.body.length).toBe(0);
   });
 
   it('should move rooms into a folder', async () => {
     const createRes = await request(app)
-      .post('/api/v1/folders')
+      .post<FolderResponse>('/api/v1/folders')
       .set('Authorization', `Bearer ${token}`)
       .send({ name: 'Folder with Rooms' });
     const folderId = createRes.body.folderId;
@@ -86,25 +87,25 @@ describe('Folder E2E', () => {
     expect(moveRes.status).toBe(200);
 
     const getRes = await request(app)
-      .get('/api/v1/folders')
+      .get<FolderResponse[]>('/api/v1/folders')
       .set('Authorization', `Bearer ${token}`);
     expect(getRes.body[0].roomIds).toContain(roomId);
   });
 
   it('should reject moving rooms the user does not belong to into a folder', async () => {
-    const otherUser = await request(app).post('/api/v1/auth/register').send({
+    const otherUser = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'Other User',
       email: 'other@example.com',
       password: 'Password123!',
     });
 
     const otherRoom = await request(app)
-      .post('/api/v1/rooms')
+      .post<RoomResponse>('/api/v1/rooms')
       .set('Authorization', `Bearer ${otherUser.body.token}`)
       .send({ type: 'group', name: 'Other Room' });
 
     const createRes = await request(app)
-      .post('/api/v1/folders')
+      .post<FolderResponse>('/api/v1/folders')
       .set('Authorization', `Bearer ${token}`)
       .send({ name: 'Secure Folder' });
 

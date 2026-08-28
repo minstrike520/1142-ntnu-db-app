@@ -1,9 +1,11 @@
+import type { Hono } from 'hono';
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'bun:test';
 import { request } from '../../helpers/http';
 import { resetDb } from '../../helpers/resetDb';
+import type { AuthResponse, RoomResponse, RoomMemberResponse } from '../../helpers/responseTypes';
 import { testPool } from '../../helpers/testPool';
 
-let app: any;
+let app: Hono;
 
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
@@ -28,39 +30,39 @@ describe('Room Members E2E', () => {
     await resetDb();
     
     // Register owner
-    let res = await request(app).post('/api/v1/auth/register').send({
+    let res = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'Owner', email: 'owner@example.com', password: 'Password123!',
     });
     ownerToken = res.body.token;
     ownerId = res.body.user.userId;
 
     // Register admin
-    res = await request(app).post('/api/v1/auth/register').send({
+    res = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'Admin', email: 'admin@example.com', password: 'Password123!',
     });
     adminToken = res.body.token;
     adminId = res.body.user.userId;
 
     // Register member
-    res = await request(app).post('/api/v1/auth/register').send({
+    res = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'Member', email: 'member@example.com', password: 'Password123!',
     });
     memberToken = res.body.token;
     memberId = res.body.user.userId;
     
     // Register pending
-    res = await request(app).post('/api/v1/auth/register').send({
+    res = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'Pending', email: 'pending@example.com', password: 'Password123!',
     });
     pendingToken = res.body.token;
     pendingId = res.body.user.userId;
 
     // Create room
-    res = await request(app)
-      .post('/api/v1/rooms')
+    const roomRes = await request(app)
+      .post<RoomResponse>('/api/v1/rooms')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ type: 'group', name: 'Test Room', requireApproval: true });
-    roomId = res.body.roomId;
+    roomId = roomRes.body.roomId;
 
     const adminRole = 'admin';
     const memberRole = 'member';
@@ -96,7 +98,7 @@ describe('Room Members E2E', () => {
   describe('GET /rooms/:id/members', () => {
     it('should list room members for an existing member', async () => {
       const res = await request(app)
-        .get(`/api/v1/rooms/${roomId}/members`)
+        .get<RoomMemberResponse[]>(`/api/v1/rooms/${roomId}/members`)
         .set('Authorization', `Bearer ${memberToken}`);
 
       expect(res.status).toBe(200);
@@ -110,12 +112,12 @@ describe('Room Members E2E', () => {
     });
 
     it('should reject non-members', async () => {
-      const outsider = await request(app).post('/api/v1/auth/register').send({
+      const outsider = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
         name: 'Outsider', email: 'outsider@example.com', password: 'Password123!',
       });
 
       const res = await request(app)
-        .get(`/api/v1/rooms/${roomId}/members`)
+        .get<RoomMemberResponse[]>(`/api/v1/rooms/${roomId}/members`)
         .set('Authorization', `Bearer ${outsider.body.token}`);
 
       expect(res.status).toBe(403);
@@ -181,7 +183,7 @@ describe('Room Members E2E', () => {
 
     it('should transfer ownership from owner to admin', async () => {
       const res = await request(app)
-        .patch(`/api/v1/rooms/${roomId}`)
+        .patch<{ message: string; name?: string }>(`/api/v1/rooms/${roomId}`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ ownerId: adminId });
 
@@ -195,7 +197,7 @@ describe('Room Members E2E', () => {
 
     it('should not allow a non-owner to transfer ownership', async () => {
       const res = await request(app)
-        .patch(`/api/v1/rooms/${roomId}`)
+        .patch<{ message: string; name?: string }>(`/api/v1/rooms/${roomId}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ ownerId: memberId });
 
@@ -205,7 +207,7 @@ describe('Room Members E2E', () => {
 
     it('should reject transferring ownership to a pending member', async () => {
       const res = await request(app)
-        .patch(`/api/v1/rooms/${roomId}`)
+        .patch<{ message: string; name?: string }>(`/api/v1/rooms/${roomId}`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ ownerId: pendingId });
 
@@ -215,7 +217,7 @@ describe('Room Members E2E', () => {
 
     it('should still update room settings when no ownerId is sent', async () => {
       const res = await request(app)
-        .patch(`/api/v1/rooms/${roomId}`)
+        .patch<{ message: string; name?: string }>(`/api/v1/rooms/${roomId}`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ name: 'Renamed Room' });
 
