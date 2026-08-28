@@ -172,10 +172,6 @@ jobs:
             browser_required=true
           fi
 
-          if [[ "$BACKEND_CHANGED" == "true" ]]; then
-            browser_required=true
-          fi
-
           # The database lane verifies the same code the backend lane builds, so
           # it follows the backend decision rather than a filter of its own.
           if [[ "$EVENT_NAME" == "workflow_dispatch" || "$BACKEND_CHANGED" == "true" ]]; then

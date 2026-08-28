@@ -16,7 +16,7 @@
   "dependencies": {
     "@iconify-react/boxicons": "^1.0.2",
     "clsx": "^2.1.1",
-    "next": "16.3.1",
+    "next": "16.3.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "socket.io-client": "^4.8.3",
@@ -31,14 +31,14 @@
     "@types/babel__core": "^7.20.5",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
+    "@types/react-dom": "^19.2.5",
     "babel-plugin-react-compiler": "^1.0.0",
     "eslint": "^9.39.5",
-    "eslint-config-next": "16.3.1",
+    "eslint-config-next": "16.3.2",
     "eslint-plugin-react-compiler": "19.1.0-rc.2",
     "jsdom": "^30.0.1",
     "tailwindcss": "^4.3.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }
