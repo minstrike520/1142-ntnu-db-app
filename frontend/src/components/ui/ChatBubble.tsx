@@ -94,12 +94,14 @@ function ImageAttachmentPreview({
   isOutgoing,
   isHighEmphasis,
   onDownload,
+  onView,
   isDownloading,
 }: {
   file: Attachment;
   isOutgoing: boolean;
   isHighEmphasis: boolean;
   onDownload: () => void;
+  onView: (blobUrl: string) => void;
   isDownloading: boolean;
 }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -183,12 +185,82 @@ function ImageAttachmentPreview({
         src={blobUrl}
         alt={file.filename}
         className="max-w-full max-h-64 rounded-sm object-contain cursor-pointer"
-        onClick={onDownload}
-        title="Click to download"
+        onClick={() => onView(blobUrl)}
+        title="Click to view"
       />
       <p className={cn("text-[9px] font-mono truncate", isOutgoing && isHighEmphasis ? "text-white/60" : "text-text-muted")}>
         {file.filename}
       </p>
+    </div>
+  );
+}
+
+function AttachmentLightbox({
+  filename,
+  blobUrl,
+  onClose,
+  onDownload,
+  isDownloading,
+}: {
+  filename: string;
+  blobUrl: string;
+  onClose: () => void;
+  onDownload: () => void;
+  isDownloading: boolean;
+}) {
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = "unset";
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={filename}
+      className="fixed inset-0 z-[120] flex items-center justify-center p-4"
+    >
+      <div className="fixed inset-0 bg-black/80" onClick={onClose} />
+      <button
+        type="button"
+        onClick={onClose}
+        title="Close preview"
+        aria-label="Close preview"
+        className="absolute top-4 right-4 z-10 p-1.5 border border-white/30 text-white hover:bg-white/10 transition-colors cursor-pointer rounded-sm"
+      >
+        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+      <div className="relative z-10 flex flex-col items-center gap-3 max-w-full max-h-full" onClick={(event) => event.stopPropagation()}>
+        <img
+          src={blobUrl}
+          alt={filename}
+          className="max-w-full max-h-[80vh] rounded-sm object-contain"
+        />
+        <div className="flex items-center gap-3 max-w-full">
+          <p className="text-white/70 text-xs font-mono truncate">{filename}</p>
+          <button
+            type="button"
+            onClick={onDownload}
+            disabled={isDownloading}
+            title={isDownloading ? "Downloading attachment" : "Download attachment"}
+            aria-label="Download attachment"
+            className="shrink-0 p-1.5 border border-white/30 text-white hover:bg-white/10 transition-colors cursor-pointer rounded-sm disabled:cursor-wait disabled:opacity-70"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M7 10l5 5 5-5M12 15V3" />
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -218,6 +290,7 @@ export function ChatBubble({
   const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({});
   const [downloadingUrl, setDownloadingUrl] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState("");
+  const [lightboxAttachment, setLightboxAttachment] = useState<{ file: Attachment; blobUrl: string } | null>(null);
 
   const { activeProfilePopover, setActiveProfilePopover } = useProfilePopover();
   const showPopover = messageId ? activeProfilePopover?.instanceId === messageId : false;
@@ -367,10 +440,19 @@ export function ChatBubble({
     }
   };
 
+  const handleViewAttachment = (file: Attachment, blobUrl: string) => {
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    setLightboxAttachment({ file, blobUrl });
+  };
+
   const menuItemClass =
     "w-full px-3 py-2 text-left text-xs hover:bg-surface-muted";
 
   return (
+    <>
     <div
       className={cn(
         "flex gap-2 max-w-[85%] font-sans",
@@ -503,6 +585,7 @@ export function ChatBubble({
                         isOutgoing={isOutgoing}
                         isHighEmphasis={isHighEmphasis}
                         onDownload={() => void handleDownloadAttachment(file)}
+                        onView={(blobUrl) => handleViewAttachment(file, blobUrl)}
                         isDownloading={downloadingUrl === file.url}
                       />
                     );
@@ -646,5 +729,15 @@ export function ChatBubble({
 
       </div>
     </div>
+    {lightboxAttachment && (
+      <AttachmentLightbox
+        filename={lightboxAttachment.file.filename}
+        blobUrl={lightboxAttachment.blobUrl}
+        onClose={() => setLightboxAttachment(null)}
+        onDownload={() => void handleDownloadAttachment(lightboxAttachment.file)}
+        isDownloading={downloadingUrl === lightboxAttachment.file.url}
+      />
+    )}
+    </>
   );
 }
