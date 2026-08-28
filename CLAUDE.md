@@ -9,10 +9,10 @@ This is a real-time group chat application built as a database course project. I
 
 | File | Description |
 |------|-------------|
-| [docker-compose.yml](docker-compose.yml) | Defines the local three-service development stack: `db` (PostgreSQL 18), `backend` (Bun + Hono), and `frontend` (Next.js) |
-| [docker-compose.prod.yml](docker-compose.prod.yml) | Defines the local three-service production stack with optimized builds and Cloudflare Tunnel |
+| [docker-compose.yml](docker-compose.yml) | Defines the local four-service development stack: `db` (PostgreSQL 18), `redis` (Redis 8), `backend` (Bun + Hono), and `frontend` (Next.js) |
+| [docker-compose.prod.yml](docker-compose.prod.yml) | Defines the local four-service production stack with optimized builds and Cloudflare Tunnel |
 | [.env.example](.env.example) | Template for environment variables. Must be copied to `.env` in the root folder before local runs |
-| [issues.json](issues.json) | **CRITICAL TASK LIST**: Contains the active catalog of outstanding issues, bugs, refactorings, and features to implement with detailed tasks and acceptance criteria |
+| [docs/README.md](docs/README.md) | Index of the API, schema, setup and release documentation |
 
 ## Documentation Roadmap
 
@@ -31,8 +31,8 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 | [backend/](backend/) | Hono + Socket.IO API server | See [backend/CLAUDE.md](backend/CLAUDE.md) |
 | [frontend/](frontend/) | Next.js 16 + React 19 Client Web App | See [frontend/CLAUDE.md](frontend/CLAUDE.md) |
 | [shared/](shared/) | Shared TypeScript models and interfaces | Mounts read-only into both services |
-| [docs/](docs/) | Design specifications and guidelines | See [docs/CLAUDE.md](docs/CLAUDE.md) |
-| [reference/](reference/) | Course materials (original ER diagram, project reports) | Reference only |
+| [docs/](docs/) | API, schema, setup and release documentation (EN + 繁中) | See [docs/CLAUDE.md](docs/CLAUDE.md) |
+| [docs/archive/](docs/archive/) | Frozen course deliverables (original ER diagram, graded reports) | Reference only — never modify |
 
 ## AI Agent Guidelines
 
@@ -54,7 +54,7 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 - For more setup troubleshooting, refer to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ### 4. Git Workflows
-- The active branch is `dev`.
+- The active branch is `main`. Branch off it and target it with every PR; see [CONTRIBUTING.md](CONTRIBUTING.md#1-git-workflow--branching).
 - Code changes should be verified with TypeScript compiler checks (`pnpm exec tsc --noEmit` on both backend and frontend) and E2E/integration tests.
 
 ### 5. Language Usage Conventions
@@ -66,4 +66,25 @@ To get details on database schemas, REST APIs, or local setups, refer to the fol
 - **Code identifiers** (class, function, variable, type, interface, enum, constant, file/directory names, API and other code identifiers): English.
 - Technical terms, code identifiers, CLI commands, API names, package names, and proper nouns without a suitable Chinese translation must stay in their original English form even inside Traditional Chinese text.
 
+### 6. Frequently Used Commands
+Prefer these quieter forms over their default equivalents to keep session output focused on what matters:
+- `docker compose up -d` — start the stack detached instead of streaming build/boot logs.
+- `docker compose logs -f --tail=50 backend` — tail recent logs for one service instead of dumping full history.
+- `docker compose exec backend pnpm run db:seed` — reseed reproducible test data (wipes the DB first).
+- See [backend/CLAUDE.md](backend/CLAUDE.md) and [frontend/CLAUDE.md](frontend/CLAUDE.md) for the per-package test/lint/typecheck commands run most often.
+
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues using the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the five default canonical labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single-context domain layout. See `docs/agents/domain.md`.

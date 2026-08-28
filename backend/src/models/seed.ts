@@ -1,4 +1,6 @@
-if (!process.env.DATABASE_URL) {
+import { env } from '../config/env';
+
+if (!env().databaseUrl) {
   console.error('DATABASE_URL is not set. Copy .env.example to .env or run via: docker compose exec backend pnpm run db:seed');
   process.exit(1);
 }

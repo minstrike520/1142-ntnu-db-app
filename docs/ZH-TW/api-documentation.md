@@ -39,6 +39,11 @@
 | | `PATCH` | [`/rooms/:id/members/:userId`](#patch-roomsidmembersuserid) | 需驗證 | 審核成員加入或修改成員權限與暱稱 |
 | | `DELETE` | [`/rooms/:id/members/:userId`](#delete-roomsidmembersuserid) | 需驗證 | 踢出成員（需擁有者或管理員） |
 | **訊息與附件** | `GET` | [`/rooms/:roomId/messages`](#get-roomsroomidmessages) | 需驗證 | 取得聊天室歷史訊息（分頁） |
+| | `POST` | [`/rooms/:roomId/messages`](#post-roomsroomidmessages) | 需驗證 | 建立具持久性的訊息命令 |
+| | `PATCH` | [`/rooms/:roomId/messages/:messageId`](#patch-roomsroomidmessagesmessageid) | 需驗證 | 以 optimistic concurrency 編輯訊息 |
+| | `POST` | [`/rooms/:roomId/messages/:messageId/recall`](#post-roomsroomidmessagesmessageidrecall) | 需驗證 | 以 optimistic concurrency 收回訊息 |
+| | `PUT` | [`/rooms/:roomId/read-position`](#put-roomsroomidread-position) | 需驗證 | 推進成員已讀位置 |
+| **復原** | `GET` | [`/sync`](#get-sync) | 需驗證 | 依 cursor 復原持久化訊息變更 |
 | | `POST` | [`/attachments`](#post-attachments) | 需驗證 | 上傳附件檔案 |
 | | `GET` | [`/attachments/:id`](#get-attachmentsid) | 需驗證 | 下載附件檔案 |
 | **資料夾分類** | `GET` | [`/folders`](#get-folders) | 需驗證 | 取得資料夾列表 |
@@ -49,17 +54,20 @@
 | | `POST` | [`/users/me/emergency-contacts`](#post-usersmeemergency-contacts) | 需驗證 | 新增或更新緊急聯絡人設定 |
 | | `DELETE` | [`/users/me/emergency-contacts/:contactId`](#delete-usersmeemergency-contactscontactid) | 需驗證 | 刪除緊急聯絡人設定 |
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | 需驗證 | 檢查不活躍狀態以判定是否發送警報 |
+| **管理員** | `GET` | [`/admin/health`](#get-adminhealth) | 需驗證（管理員） | 管理員守門機制後方的存活探測 |
+| | `GET` | [`/admin/metrics`](#get-adminmetrics) | 需驗證（管理員） | 請求吞吐量、延遲百分位數與程序資源使用量 |
+| | `GET` | [`/admin/logs`](#get-adminlogs) | 需驗證（管理員） | 最近的結構化日誌記錄（輪詢） |
+| | `GET` | [`/admin/slow-queries`](#get-adminslow-queries) | 需驗證（管理員） | 超過慢查詢門檻的資料庫查詢 |
 
 ### Socket.io 即時通訊
 
+Socket.IO 是伺服器到客戶端的事件傳輸層。持久化命令統一走 REST，讓
+驗證、`Idempotency-Key`、`If-Match`、交易與重試使用同一份契約。socket
+建立連線時，伺服器會依目前有效的 `room_members` 自動建立聊天室訂閱。
+
 | 類型 | 事件名稱 | 驗證要求 | 說明 |
 | :--- | :--- | :--- | :--- |
-| **客戶端發送** | `join_room` | 連線需驗證 | 訂閱特定聊天室的訊息推播 |
-| | `leave_room` | 連線需驗證 | 取消訂閱聊天室的訊息推播 |
-| | `send_message` | 連線需驗證 | 發送聊天訊息（可帶附件與引用） |
-| | `recall_message` | 連線需驗證 | 收回訊息（僅限原發送者） |
 | | `typing` | 連線需驗證 | 廣播輸入狀態給房間內其他使用者 |
-| | `read_receipt` | 連線需驗證 | 更新已讀游標至指定訊息 |
 | **伺服器推送** | `new_message` | 連線需驗證 | 收到新訊息通知（含提及訊息） |
 | | `message_recalled` | 連線需驗證 | 訊息已被原發送者收回 |
 | | `user_typing` | 連線需驗證 | 其他成員正在輸入中之狀態 |
@@ -1191,6 +1199,37 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 
 ---
 
+#### `POST /rooms/:roomId/messages`
+- **說明**: 建立一筆持久化訊息及其 `created` Message Change。
+- **標頭**: 必須提供重試時保持不變的 `Idempotency-Key`。
+- **請求主體**: `{ "content": "Hello", "replyToId": null, "attachmentIds": [] }`。
+- **回應**: `201 Created`，回傳含 `messageSequence`、`changeSequence`、`revision` 的 `MessageWithSender`。
+- **重試規則**: 同一發送者重送相同 key 會回傳原訊息，不會再分配序號。
+
+#### `PATCH /rooms/:roomId/messages/:messageId`
+- **說明**: 編輯訊息。
+- **標頭**: 必須提供 `Idempotency-Key` 與包含預期整數 `revision` 的 `If-Match`。
+- **回應**: `200 OK`，回傳更新後且 revision 增加的訊息。
+- **衝突**: revision 過期時回傳 `409 CONFLICT`。
+
+#### `POST /rooms/:roomId/messages/:messageId/recall`
+- **說明**: 收回訊息。
+- **標頭**: 必須提供 `Idempotency-Key` 與 `If-Match`。
+- **回應**: `200 OK`，回傳收回後的訊息投影。
+- **重試規則**: 對已收回的訊息再次收回會直接成功，不會配發新的變更，也不會再發布事件；但該 key 仍算已使用。建立、編輯與收回共用同一個 idempotency namespace，把同一個 key 用於其他操作會得到 `409 CONFLICT`。
+
+#### `PUT /rooms/:roomId/read-position`
+- **說明**: 將呼叫者的持久化已讀位置推進至指定訊息。
+- **標頭**: 必須提供 `Idempotency-Key`。
+- **請求主體**: `{ "messageId": "..." }`。
+- **回應**: `200 OK`，已讀位置只會向前推進。
+
+#### `GET /sync`
+- **說明**: 依 cursor 復原目前使用者可見的持久化 Message Change。
+- **查詢參數**: `cursor`（非負整數，預設 `0`）與 `limit`（1–500，預設 `100`）。
+- **回應**: `{ "changes": [...], "nextCursor": 42, "hasMore": false }`；每筆變更含 `changeSequence`、`messageSequence`、`revision`、`changeType` 與 `message`。
+- **可見性**: 每次請求都重新檢查成員資格；隱藏歷史的聊天室會排除 Join Boundary 以前的變更。
+
 #### `POST /attachments`
 - **說明**: 上傳檔案附件。
 - **驗證與權限**: 需驗證。
@@ -1389,38 +1428,162 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 
 ---
 
+### H. 管理員
+
+`/api/v1/admin/*` 下的所有路由都由 `makeAdminRoutes` 內綁定的兩層 middleware 守門：
+先是一般身分驗證，接著是每次請求都從資料庫讀取 `users.is_admin` 的管理員檢查。
+此旗標不放進 JWT，因此撤銷權限會在該呼叫端的下一個請求立即生效。
+沒有任何 endpoint 可以設定此旗標，初始化流程請見 `docs/DEVELOPMENT.md`。
+
+#### `GET /admin/health`
+- **說明**: 管理員命名空間的存活探測，也是本節唯一不依賴任何緩衝區有內容的 endpoint。
+- **驗證與授權**: 需驗證，且呼叫者的 `users.is_admin` 必須為 `true`。
+- **回應**:
+  - `200 OK`: 呼叫者為管理員。
+  - `401 Unauthorized`: 缺少 token、token 無效，或帳號已刪除。
+  - `403 Forbidden`: 已驗證但非管理員（`code: "FORBIDDEN"`）。
+- **回應範例**:
+  ```json
+  {
+    "status": "ok"
+  }
+  ```
+
+---
+
+#### `GET /admin/metrics`
+- **說明**: 請求吞吐量、延遲百分位數，以及本程序自身的資源使用量。所有數據都是單一程序範圍且重啟後歸零，因此多實例部署下回報的是實際處理該請求的那個實例。
+- **驗證與授權**: 需驗證，且呼叫者的 `users.is_admin` 必須為 `true`。
+- **回應**:
+  - `200 OK`: 於讀取當下取樣。附帶 `Cache-Control: no-store`。
+  - `401 Unauthorized` / `403 Forbidden`: 與本命名空間所有路由相同。
+- **回應欄位**:
+  | 欄位 | 型別 | 說明 |
+  |---|---|---|
+  | `process.uptimeSeconds` | Number | 本程序啟動至今的秒數 |
+  | `process.cpu.userMs` / `systemMs` | Number | 累計 CPU 毫秒數 |
+  | `process.cpu.percent` | Number \| null | 自**上一次**呼叫本 endpoint 以來的 CPU 使用率，以單一核心的百分比表示。首次呼叫為 `null`，因為沒有可供比較的前一個取樣點。多核心主機上可能超過 100 |
+  | `process.memory.*` | Number | `rssBytes`、`heapUsedBytes`、`heapTotalBytes`、`externalBytes` |
+  | `requests.totalRequests` | Number | 累計請求數 |
+  | `requests.statusClasses` | Object | 以 `1xx`–`5xx` 與 `other` 為鍵的累計計數 |
+  | `requests.latency` | Object | `count`、`avgMs`、`p50Ms`、`p95Ms`、`p99Ms`、`maxMs`，統計範圍為**保留視窗內**而非全部歷史 |
+  | `requests.sampleSize` / `sampleCapacity` | Number | 目前保留的耗時樣本數，以及環形緩衝區容量 |
+  | `at` | Number | 取樣當下的 epoch 毫秒 |
+- **回應範例**:
+  ```json
+  {
+    "process": {
+      "uptimeSeconds": 812.44,
+      "cpu": { "userMs": 5230.1, "systemMs": 980.4, "percent": 3.2 },
+      "memory": { "rssBytes": 128974848, "heapUsedBytes": 41287680, "heapTotalBytes": 62914560, "externalBytes": 2097152 }
+    },
+    "requests": {
+      "totalRequests": 1842,
+      "statusClasses": { "1xx": 0, "2xx": 1790, "3xx": 0, "4xx": 51, "5xx": 1, "other": 0 },
+      "latency": { "count": 1000, "avgMs": 12.44, "p50Ms": 8.1, "p95Ms": 41.2, "p99Ms": 96.7, "maxMs": 310.5 },
+      "sampleSize": 1000,
+      "sampleCapacity": 1000
+    },
+    "at": 1756108800000
+  }
+  ```
+
+---
+
+#### `GET /admin/logs`
+- **說明**: 來自程序內環形緩衝區的最近結構化日誌記錄，由舊到新排列。僅支援輪詢，沒有串流 endpoint。憑證在記錄進入此緩衝區之前就已由 logger 遮蔽。
+- **驗證與授權**: 需驗證，且呼叫者的 `users.is_admin` 必須為 `true`。
+- **查詢參數**:
+  | 參數 | 型別 | 必填 | 說明 |
+  |---|---|---|---|
+  | `limit` | Integer | 否 | 回傳最新的幾筆記錄。預設為緩衝區容量，且必須介於 `1` 與 `capacity` 之間 |
+- **回應**:
+  - `200 OK`: 附帶 `Cache-Control: no-store`。
+  - `400 Bad Request`: `limit` 不是範圍內的整數（`code: "VALIDATION_ERROR"`）。
+  - `401 Unauthorized` / `403 Forbidden`: 與本命名空間所有路由相同。
+- **回應欄位**:
+  | 欄位 | 型別 | 說明 |
+  |---|---|---|
+  | `entries` | Array | 日誌記錄，由舊到新。`level` 為 pino 的數值嚴重度（30 = info、50 = error），`time` 為 epoch 毫秒，`msg` 為訊息；呼叫端額外合併的欄位都會保留 |
+  | `retained` | Number | 目前保留的記錄數，最多為 `capacity` |
+  | `capacity` | Number | 環形緩衝區大小 |
+- **回應範例**:
+  ```json
+  {
+    "entries": [
+      { "level": 30, "time": 1756108795123, "msg": "request completed", "method": "GET", "path": "/api/v1/rooms", "status": 200, "durationMs": 7.4 },
+      { "level": 40, "time": 1756108799001, "msg": "admin access denied", "userId": "0b2f...", "path": "/api/v1/admin/logs" }
+    ],
+    "retained": 2,
+    "capacity": 200
+  }
+  ```
+
+---
+
+#### `GET /admin/slow-queries`
+- **說明**: 來自程序內環形緩衝區、執行時間超過慢查詢門檻的資料庫查詢，由舊到新排列。僅保留查詢骨架——所有插值都會被替換為 `?`，因此依 email 查詢變慢時，不會把該地址留在這個對外提供的緩衝區裡。
+- **驗證與授權**: 需驗證，且呼叫者的 `users.is_admin` 必須為 `true`。
+- **查詢參數**:
+  | 參數 | 型別 | 必填 | 說明 |
+  |---|---|---|---|
+  | `limit` | Integer | 否 | 回傳最新的幾筆記錄。預設為緩衝區容量，且必須介於 `1` 與 `capacity` 之間 |
+- **回應**:
+  - `200 OK`: 附帶 `Cache-Control: no-store`。
+  - `400 Bad Request`: `limit` 不是範圍內的整數（`code: "VALIDATION_ERROR"`）。
+  - `401 Unauthorized` / `403 Forbidden`: 與本命名空間所有路由相同。
+- **回應欄位**:
+  | 欄位 | 型別 | 說明 |
+  |---|---|---|
+  | `queries` | Array | `{ query, durationMs, at }`，由舊到新。`at` 為 epoch 毫秒 |
+  | `retained` | Number | 目前保留的記錄數，最多為 `capacity` |
+  | `capacity` | Number | 環形緩衝區大小 |
+  | `thresholdMs` | Number | 決定哪些查詢會進入此列表的門檻值 |
+- **回應範例**:
+  ```json
+  {
+    "queries": [
+      { "query": "SELECT * FROM messages WHERE room_id = ? ORDER BY created_at DESC LIMIT ?", "durationMs": 184.2, "at": 1756108780000 }
+    ],
+    "retained": 1,
+    "capacity": 100,
+    "thresholdMs": 100
+  }
+  ```
+
+---
+
 ## 3. Socket.io 即時通訊
 
 ### 連線
 
 - **URL**: 與 REST API 相同主機（預設埠為 `4000`）
 - **Namespace**: `/`
-- **驗證**: 連線時需帶上 `auth_token` Cookie 或 `Authorization: Bearer <token>` Header
-- **個人頻道**: 連線後，伺服器會自動將 socket 加入 `user_<userId>` 頻道。針對個人的事件（例如好友請求通知、入群批准）會透過此頻道推送，客戶端無需額外操作。
+- **驗證**: 連線時需在 Socket.IO `auth.token` handshake 欄位帶上 access token。
+- **訂閱**: 連線後伺服器會加入 `user_<userId>`，並加入 `room_members` 中所有非 pending 聊天室；撤銷成員資格時會移除該使用者的所有 session。
+- **部署範圍**: 事件是透過程序本地的 Socket.IO 伺服器發布，因此後端目前僅支援**單一實例**。部署兩個以上實例時，連到其他實例的客戶端會靜默漏收事件——那些 socket 不會斷線，也就不會觸發任何復原。要水平擴充必須先接上跨程序的 Socket.IO adapter（Redis 或 PostgreSQL）。
+- **復原**: 客戶端必須先等待伺服器發出 `realtime_ready`，再於每次連線與 token refresh 後呼叫 `GET /sync`。不使用 `connectionStateRecovery`，Sync Cursor 是唯一復原路徑。若訂閱恢復失敗，伺服器會在發送 `realtime_ready` 前中斷 socket，讓客戶端重新握手。此外，當伺服器還原自己先前撤銷的訂閱時（條件式刪除失敗的踢除），也會在連線期間再次送出 `realtime_ready`：還原訂閱不會補送撤銷期間已發布的內容。
 
 ### 客戶端發送事件
 
 | 事件名稱 | Payload | 說明 |
 | :--- | :--- | :--- |
-| `join_room` | `{ roomId: string }` | 訂閱特定聊天室的訊息推播（需為成員） |
-| `leave_room` | `{ roomId: string }` | 取消訂閱 |
-| `send_message` | `{ roomId: string, content: string, replyTo?: string, attachmentIds?: string[] }` | 發送訊息；`replyTo` 為引用的訊息 ID；`attachmentIds` 為待綁定附件 ID 陣列。備註：`content` 僅在至少提供一個附件 ID 時可為空字串；否則 `content` 不可為空。 |
-| `recall_message` | `{ messageId: string }` | 收回訊息（僅限原發送者） |
 | `typing` | `{ roomId: string, isTyping: boolean }` | 廣播輸入中狀態 |
-| `read_receipt` | `{ roomId: string, messageId: string }` | 更新已讀游標至指定訊息 |
 
 ### 伺服器發送事件
 
 | 事件名稱 | Payload 型別 | 說明 |
 | :--- | :--- | :--- |
 | `new_message` | `MessageWithSender` | 收到新訊息（提及機制亦透過此事件通知） |
-| `message_recalled` | `{ messageId: string }` | 訊息被收回 |
+| `message_updated` | `MessageWithSender` | 收到編輯後的 canonical 訊息 |
+| `message_recalled` | `{ roomId: string, messageId: string, messageSequence: number, changeSequence: number, revision: number }` | 訊息被收回；`roomId` 讓客戶端可以更新尚未載入聊天室的最新訊息摘要 |
 | `user_typing` | `{ roomId: string, userId: string, isTyping: boolean }` | 其他成員的輸入狀態 |
-| `read_update` | `{ roomId: string, userId: string, messageId: string }` | 其他成員的已讀游標更新 |
+| `read_update` | `{ roomId: string, userId: string, messageId: string, readPosition?: number }` | 其他成員的已讀游標更新 |
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | 房間或成員狀態變更。`type` 欄位決定子類型，詳見 [`room_update` 子類型](#room_update-子類型)。 |
-| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected', createdAt: string }` | 好友請求狀態變更通知。**收件方**（新邀請）與**發送方**（被接受／拒絕）都會收到此事件。客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
-| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。 |
+| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected' \| 'deleted' \| 'blocked' \| 'unblocked', createdAt: string }` | 好友生命週期通知。傳送給相關使用者；客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
+| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。是否在線的判定會跨 backend instance 共享，但這則推播不會：它只會送到好友所連上那個 instance 自己持有的 socket，因此連在別的 instance 上的用戶端要等下一次 `GET /api/v1/friends` 才看得到變化。 |
 | `emergency_alert` | `{ userId: string, message: string }` | 收到緊急聯絡人的警報通知 |
+| `realtime_ready` | `void` | 有效聊天室訂閱已恢復；客戶端可以開始 `/sync`。每次連線送出一次，伺服器還原先前撤銷的訂閱時也會再送 |
 | `error` | `ApiError` | 事件處理失敗的錯誤回報 |
 
 ---
@@ -1458,4 +1621,4 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 | :--- | :--- | :--- | :--- |
 | `ROOM_JOINED` | `{}` | 使用者以邀請碼加入**或**待審成員被核准 | 僅限加入 / 被核准的使用者 |
 
-> **客戶端處理建議**：收到 `ROOM_JOINED` 後，客戶端應呼叫 `GET /rooms` 重新整理房間列表，並對新出現的房間呼叫 `join_room` 以開始接收其推播事件。
+> **客戶端處理建議**：收到 `ROOM_JOINED` 後，客戶端應呼叫 `GET /rooms` 重新整理房間列表；下一次 socket 連線會依持久化成員資格自動建立訂閱，不需呼叫 `join_room`。

@@ -25,7 +25,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: ["pnpm", "run", "migrate:up"]
+    command: ["bun", "run", "migrate:up"]
 
   backend:
     image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
@@ -36,6 +36,13 @@ services:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      # Optional, and empty by default because this bundle ships no Redis of its
+      # own — bundling one with a pinned digest is #527. Point it at a managed
+      # endpoint (`rediss://`, or the Valkey schemes) to get cross-node realtime;
+      # left unset the backend serves every REST route and runs realtime
+      # single-node, which is a supported deployment rather than a
+      # misconfiguration. Passed through rather than required for that reason.
+      REDIS_URL: ${REDIS_URL:-}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
       RATE_LIMIT_DISABLED: ${RATE_LIMIT_DISABLED:-false}
@@ -51,12 +58,32 @@ services:
       ATTACHMENT_ALLOWED_MIME_TYPES: ${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
       ATTACHMENT_ALLOWED_EXTENSIONS: ${ATTACHMENT_ALLOWED_EXTENSIONS:-.jpg,.jpeg,.png,.gif,.pdf,.zip,.txt}
       ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:-10485760}
+      MAX_SESSIONS_PER_USER: ${MAX_SESSIONS_PER_USER:-5}
+      PRESENCE_GRACE_MS: ${PRESENCE_GRACE_MS:-3000}
+      # How long a presence lease survives in Redis unrefreshed; it bounds how
+      # long a crashed instance keeps its users showing as online. Inert while
+      # REDIS_URL is blank, which is this bundle's default.
+      PRESENCE_TTL_MS: ${PRESENCE_TTL_MS:-30000}
+      TYPING_TTL_MS: ${TYPING_TTL_MS:-3000}
+      # Blank means the backend generates one per process. Set it where the
+      # orchestrator already has a stable per-replica name, so a restarted
+      # process reclaims its own presence lease instead of adding a second one.
+      INSTANCE_ID: ${INSTANCE_ID:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
     volumes:
       - ${UPLOADS_MOUNT_SOURCE:-app_uploads}:/app/uploads
-    command: ["node", "dist/backend/src/index.js"]
+    command: ["bun", "src/index.ts"]
+    # Docker's default is 10s, which is under this backend's own worst-case
+    # drain: src/index.ts forces the HTTP drain after 10s, then spends up to 2s
+    # handing presence leases back and up to 2s closing Redis. At the default a
+    # slow drain is SIGKILLed exactly while releasing those leases, leaving users
+    # showing online until PRESENCE_TTL_MS expires — the outcome presence.stop()
+    # exists to avoid. 30s clears that ~14s worst case and stays above the 20s
+    # shutdown deadline src/index.ts arms, so the process always exits itself
+    # first (issue #586).
+    stop_grace_period: 30s
 
   frontend:
     image: ${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}

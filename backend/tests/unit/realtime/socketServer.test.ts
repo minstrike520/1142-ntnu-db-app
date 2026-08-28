@@ -1,27 +1,13 @@
-import { describe, it, expect, beforeEach, afterAll, mock, type Mock } from 'bun:test';
-import { ForbiddenError, NotFoundError } from '../../../src/utils/AppError';
+import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { attachSockets } from '../../../src/realtime/socketServer';
 import type { ChatServer } from '../../../src/realtime/authSocket';
-import type { MessageWithSender } from '../../../../shared/types';
-import { trackUserConnection, trackUserDisconnection } from '../../../src/realtime/presence';
 
-mock.module('../../../src/realtime/presence', () => ({
+// Injected rather than `mock.module`'d: a module mock is process-global within
+// a tier and cannot be undone, so stubbing presence here would also stub it for
+// every later file in this tier. See backend/tests/CLAUDE.md and issue #467.
+const presence = {
   trackUserConnection: mock().mockResolvedValue(undefined),
   trackUserDisconnection: mock().mockResolvedValue(undefined),
-}));
-
-afterAll(() => {
-  mock.module('../../../src/realtime/presence', () => require('../../../src/realtime/presence?original'));
-});
-
-const message: MessageWithSender = {
-  messageId: 'msg-1',
-  roomId: 'room-1',
-  senderId: 'user-1',
-  content: 'hello',
-  isRecalled: false,
-  sentAt: new Date('2026-01-01T00:00:00.000Z'),
-  sender: { userId: 'user-1', name: 'Alice' },
 };
 
 describe('attachSockets', () => {
@@ -29,17 +15,16 @@ describe('attachSockets', () => {
   let handlers: Record<string, any>;
   let socket: any;
   let roomEmit: Mock<any>;
-  let service: {
-    sendMessage: Mock<any>;
-    recallMessage: Mock<any>;
+  let roomMemberRepo: {
+    findByUser: Mock<any>;
+    findMember: Mock<any>;
   };
-  let repo: { findById: Mock<any> };
-  let roomMemberRepo: { update: Mock<any>; findMember: Mock<any> };
 
   beforeEach(() => {
     handlers = {};
     roomEmit = mock();
     socket = {
+      id: 'socket-1',
       data: { user: { userId: 'user-1', name: 'Alice' } },
       join: mock(),
       leave: mock(),
@@ -49,12 +34,13 @@ describe('attachSockets', () => {
         handlers[event] = handler;
       }),
     };
-    service = {
-      sendMessage: mock(),
-      recallMessage: mock(),
+    roomMemberRepo = {
+      findByUser: mock().mockResolvedValue([
+        { roomId: 'room-active', role: 'member' },
+        { roomId: 'room-pending', role: 'pending' },
+      ]),
+      findMember: mock().mockResolvedValue({ roomId: 'room-active', role: 'member' }),
     };
-    repo = { findById: mock() };
-    roomMemberRepo = { update: mock(), findMember: mock() };
 
     const io = {
       on: mock((event, handler) => {
@@ -63,25 +49,45 @@ describe('attachSockets', () => {
       to: mock(() => ({ emit: roomEmit })),
     } as unknown as ChatServer;
 
-    attachSockets(io, { messageService: service as any, messageRepository: repo, roomMemberRepository: roomMemberRepo });
+    attachSockets(io, { roomMemberRepository: roomMemberRepo });
     connectionHandler(socket);
   });
 
-  it('handles join_room for members and leave_room', async () => {
-    roomMemberRepo.findMember.mockResolvedValue({ role: 'member' } as any);
-    await handlers.join_room({ roomId: 'room-1' });
-    handlers.leave_room({ roomId: 'room-1' });
+  it('derives room subscriptions from active durable membership', async () => {
+    await Promise.resolve();
 
-    expect(roomMemberRepo.findMember).toHaveBeenCalledWith('room-1', 'user-1');
-    expect(socket.join).toHaveBeenCalledWith('room_room-1');
-    expect(socket.leave).toHaveBeenCalledWith('room_room-1');
+    expect(roomMemberRepo.findByUser).toHaveBeenCalledWith('user-1');
+    expect(socket.join).toHaveBeenCalledWith('room_room-active');
+    expect(socket.join).not.toHaveBeenCalledWith('room_room-pending');
   });
 
-  it('rejects join_room for non-members', async () => {
-    roomMemberRepo.findMember.mockResolvedValue(null);
-    await handlers.join_room({ roomId: 'room-2' });
+  it('does not register durable commands or client-controlled room subscriptions', () => {
+    expect(handlers.join_room).toBeUndefined();
+    expect(handlers.leave_room).toBeUndefined();
+    expect(handlers.send_message).toBeUndefined();
+    expect(handlers.update_message).toBeUndefined();
+    expect(handlers.recall_message).toBeUndefined();
+    expect(handlers.read_receipt).toBeUndefined();
+    expect(handlers.typing).toBeDefined();
+  });
 
-    expect(socket.join).not.toHaveBeenCalledWith('room_room-2');
+  it('broadcasts typing only after validating current membership', async () => {
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+
+    expect(roomMemberRepo.findMember).toHaveBeenCalledWith('room-active', 'user-1');
+    expect(roomEmit).toHaveBeenCalledWith('user_typing', {
+      roomId: 'room-active',
+      userId: 'user-1',
+      isTyping: true,
+    });
+  });
+
+  it('rejects typing from a non-member', async () => {
+    roomMemberRepo.findMember.mockResolvedValue(null);
+
+    await handlers.typing({ roomId: 'room-hidden', isTyping: true });
+
+    expect(roomEmit).not.toHaveBeenCalled();
     expect(socket.emit).toHaveBeenCalledWith('error', {
       statusCode: 403,
       message: 'Not a member of this room',
@@ -89,152 +95,208 @@ describe('attachSockets', () => {
     });
   });
 
-  it('sends messages through messageService and emits new_message to the room', async () => {
-    service.sendMessage.mockResolvedValue(message);
+  it('expires typing automatically at the server TTL', async () => {
+    const previous = process.env.TYPING_TTL_MS;
+    process.env.TYPING_TTL_MS = '10';
+    try {
+      await handlers.typing({ roomId: 'room-active', isTyping: true });
+      await new Promise((resolve) => setTimeout(resolve, 25));
 
-    await handlers.send_message({
-      roomId: 'room-1',
-      content: 'hello',
-      replyTo: 'msg-0',
-      attachmentIds: ['550e8400-e29b-41d4-a716-446655440000'],
-    });
-
-    expect(service.sendMessage).toHaveBeenCalledWith('user-1', 'room-1', 'hello', {
-      replyToId: 'msg-0',
-      attachmentIds: ['550e8400-e29b-41d4-a716-446655440000'],
-    });
-    expect(roomEmit).toHaveBeenCalledWith('new_message', message);
-  });
-
-  it('emits ApiError payloads when send_message fails', async () => {
-    service.sendMessage.mockRejectedValue(new NotFoundError('room', 'missing'));
-
-    await handlers.send_message({ roomId: 'missing', content: 'hello' });
-
-    expect(socket.emit).toHaveBeenCalledWith('error', {
-      statusCode: 404,
-      message: 'room with id missing not found',
-      code: 'NOT_FOUND',
-    });
-  });
-
-  it('recalls messages only for the original sender', async () => {
-    repo.findById.mockResolvedValue(message);
-    service.recallMessage.mockResolvedValue({ ...message, isRecalled: true });
-
-    await handlers.recall_message({ messageId: 'msg-1' });
-
-    expect(service.recallMessage).toHaveBeenCalledWith('user-1', 'room-1', 'msg-1');
-    expect(roomEmit).toHaveBeenCalledWith('message_recalled', { messageId: 'msg-1' });
-  });
-
-  it('emits ForbiddenError when recallMessage fails with ForbiddenError', async () => {
-    repo.findById.mockResolvedValue({ ...message, senderId: 'user-2' });
-    service.recallMessage.mockRejectedValue(new ForbiddenError('Only the original sender or an admin can recall this message'));
-
-    await handlers.recall_message({ messageId: 'msg-1' });
-
-    expect(service.recallMessage).toHaveBeenCalledWith('user-1', 'room-1', 'msg-1');
-    expect(socket.emit).toHaveBeenCalledWith('error', {
-      statusCode: 403,
-      message: 'Only the original sender or an admin can recall this message',
-      code: 'FORBIDDEN',
-    });
-  });
-
-  it('broadcasts typing and read receipts', async () => {
-    const socketRoomEmit = mock();
-    socket.to.mockReturnValue({ emit: socketRoomEmit });
-    repo.findById.mockResolvedValue(message); // msg-1 in room-1
-
-    handlers.typing({ roomId: 'room-1', isTyping: true });
-    await handlers.read_receipt({ roomId: 'room-1', messageId: 'msg-1' });
-
-    expect(socketRoomEmit).toHaveBeenCalledWith('user_typing', {
-      roomId: 'room-1',
-      userId: 'user-1',
-      isTyping: true,
-    });
-    expect(roomMemberRepo.update).toHaveBeenCalledWith('room-1', 'user-1', { lastReadId: 'msg-1' });
-    expect(socketRoomEmit).toHaveBeenCalledWith('read_update', {
-      roomId: 'room-1',
-      userId: 'user-1',
-      messageId: 'msg-1',
-    });
-  });
-
-  it('rejects read_receipt for cross-room message', async () => {
-    repo.findById.mockResolvedValue({ ...message, roomId: 'room-2' });
-
-    await handlers.read_receipt({ roomId: 'room-1', messageId: 'msg-1' });
-
-    expect(roomMemberRepo.update).not.toHaveBeenCalled();
-    expect(socket.emit).toHaveBeenCalledWith('error', {
-      statusCode: 400,
-      message: 'Invalid messageId for this room',
-      code: 'VALIDATION_ERROR',
-    });
-  });
-
-  it('emits NotFoundError when recall_message target does not exist', async () => {
-    repo.findById.mockResolvedValue(null);
-
-    await handlers.recall_message({ messageId: 'missing-msg' });
-
-    expect(service.recallMessage).not.toHaveBeenCalled();
-    expect(socket.emit).toHaveBeenCalledWith('error', {
-      statusCode: 404,
-      message: 'message with id missing-msg not found',
-      code: 'NOT_FOUND',
-    });
+      expect(roomEmit).toHaveBeenLastCalledWith('user_typing', {
+        roomId: 'room-active',
+        userId: 'user-1',
+        isTyping: false,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.TYPING_TTL_MS;
+      else process.env.TYPING_TTL_MS = previous;
+    }
   });
 
   describe('with friendRepository', () => {
-    let frHandlers: Record<string, any>;
-    let frSocket: any;
     const friendRepo = { getFriends: mock() };
 
     beforeEach(() => {
-      ((trackUserConnection as any) as Mock<any>).mockClear();
-      ((trackUserDisconnection as any) as Mock<any>).mockClear();
+      presence.trackUserConnection.mockClear();
+      presence.trackUserDisconnection.mockClear();
 
-      frHandlers = {};
-      frSocket = {
+      let frConnectionHandler: any;
+      const frHandlers: Record<string, any> = {};
+      const frSocket = {
         id: 'socket-fr-1',
         data: { user: { userId: 'user-1', name: 'Alice' } },
         join: mock(),
         leave: mock(),
         emit: mock(),
         to: mock(() => ({ emit: mock() })),
-        on: mock((event, handler) => { frHandlers[event] = handler; }),
+        on: mock((event, handler) => {
+          frHandlers[event] = handler;
+        }),
       };
-
-      let frConnectionHandler: any;
       const frIo = {
-        on: mock((event, handler) => { if (event === 'connection') frConnectionHandler = handler; }),
+        on: mock((event, handler) => {
+          if (event === 'connection') frConnectionHandler = handler;
+        }),
         to: mock(() => ({ emit: mock() })),
       } as unknown as ChatServer;
 
       attachSockets(frIo, {
-        messageService: service as any,
-        messageRepository: repo,
         roomMemberRepository: roomMemberRepo,
         friendRepository: friendRepo,
+        presence,
       });
       frConnectionHandler(frSocket);
-    });
-
-    it('calls trackUserConnection on connect when friendRepository is provided', () => {
-      expect(trackUserConnection).toHaveBeenCalledWith(
-        expect.anything(), 'user-1', 'socket-fr-1', friendRepo,
-      );
-    });
-
-    it('calls trackUserDisconnection on disconnect when friendRepository is provided', () => {
       frHandlers.disconnect();
-      expect(trackUserDisconnection).toHaveBeenCalledWith(
+    });
+
+    it('tracks a session on connect and disconnect', () => {
+      expect(presence.trackUserConnection).toHaveBeenCalledWith(
         expect.anything(), 'user-1', 'socket-fr-1', friendRepo,
       );
+      expect(presence.trackUserDisconnection).toHaveBeenCalledWith(
+        expect.anything(), 'user-1', 'socket-fr-1', friendRepo,
+      );
+    });
+  });
+  describe('session limit', () => {
+    const makeSocket = (id: string) => ({
+      id,
+      data: { user: { userId: 'user-1', name: 'Alice' } },
+      join: mock(),
+      leave: mock(),
+      emit: mock(),
+      to: mock(() => ({ emit: mock() })),
+      on: mock(),
+    });
+
+    const attachLimited = (limit: string, reservationTtl?: string) => {
+      const previous = process.env.MAX_SESSIONS_PER_USER;
+      const previousTtl = process.env.SESSION_RESERVATION_TTL_MS;
+      process.env.MAX_SESSIONS_PER_USER = limit;
+      if (reservationTtl !== undefined) process.env.SESSION_RESERVATION_TTL_MS = reservationTtl;
+      let middleware: any;
+      let connect: any;
+      const io = {
+        use: mock((fn: any) => { middleware = fn; }),
+        on: mock((event: string, handler: any) => {
+          if (event === 'connection') connect = handler;
+        }),
+        to: mock(() => ({ emit: mock() })),
+      } as unknown as ChatServer;
+      attachSockets(io, { roomMemberRepository: roomMemberRepo });
+      process.env.MAX_SESSIONS_PER_USER = previous;
+      process.env.SESSION_RESERVATION_TTL_MS = previousTtl;
+      return { middleware: middleware!, connect: connect! };
+    };
+
+    it('reserves a slot during the handshake so concurrent handshakes cannot overshoot', () => {
+      const { middleware } = attachLimited('2');
+      const results: Array<Error | undefined> = [];
+
+      // Three handshakes complete their middleware before any of them reaches
+      // the connection handler — the case that made the limit unenforceable.
+      for (const id of ['s1', 's2', 's3']) {
+        middleware(makeSocket(id), (err?: Error) => results.push(err));
+      }
+
+      expect(results[0]).toBeUndefined();
+      expect(results[1]).toBeUndefined();
+      expect(results[2]?.message).toBe('Session limit reached');
+    });
+
+    it('reclaims a reserved slot when the handshake never reaches connection', async () => {
+      const { middleware } = attachLimited('1', '5');
+
+      // The transport dies after the middleware runs, so the connection
+      // handler — and with it the disconnect listener — never runs.
+      middleware(makeSocket('aborted'), () => {});
+      const whileReserved: Array<Error | undefined> = [];
+      middleware(makeSocket('s2'), (err?: Error) => whileReserved.push(err));
+      expect(whileReserved[0]?.message).toBe('Session limit reached');
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const afterExpiry: Array<Error | undefined> = [];
+      middleware(makeSocket('s3'), (err?: Error) => afterExpiry.push(err));
+      expect(afterExpiry[0]).toBeUndefined();
+    });
+
+    it('keeps the slot of a connection that arrived before its reservation expired', async () => {
+      const { middleware, connect } = attachLimited('1', '5');
+      const first = makeSocket('s1');
+      const firstHandlers: Record<string, any> = {};
+      first.on = mock((event: string, handler: any) => { firstHandlers[event] = handler; }) as any;
+
+      middleware(first, () => {});
+      connect(first);
+
+      // The reservation timer must not hand this live session's slot back.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const blocked: Array<Error | undefined> = [];
+      middleware(makeSocket('s2'), (err?: Error) => blocked.push(err));
+      expect(blocked[0]?.message).toBe('Session limit reached');
+
+      firstHandlers.disconnect();
+      const afterDisconnect: Array<Error | undefined> = [];
+      middleware(makeSocket('s3'), (err?: Error) => afterDisconnect.push(err));
+      expect(afterDisconnect[0]).toBeUndefined();
+    });
+
+    it('rejects a connection whose reservation expired once the limit refilled', async () => {
+      const { middleware, connect } = attachLimited('1', '5');
+      const late: any = { ...makeSocket('late'), disconnect: mock() };
+      late.on = mock() as any;
+
+      // The handshake reserves the only slot, then stalls past the TTL, so the
+      // timer hands the slot back.
+      middleware(late, () => {});
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      // Someone else takes the freed slot and stays connected.
+      const holder = makeSocket('holder');
+      const holderHandlers: Record<string, any> = {};
+      holder.on = mock((event: string, handler: any) => { holderHandlers[event] = handler; }) as any;
+      const holderResult: Array<Error | undefined> = [];
+      middleware(holder, (err?: Error) => holderResult.push(err));
+      expect(holderResult[0]).toBeUndefined();
+      connect(holder);
+
+      // Now the stalled handshake finally reaches the connection handler. It no
+      // longer holds a reservation, so taking a slot unconditionally would put
+      // the user at two sessions against a limit of one.
+      connect(late);
+
+      expect(late.disconnect).toHaveBeenCalled();
+      expect(late.join).not.toHaveBeenCalled();
+
+      // The count must still be exactly the holder's one session.
+      const after: Array<Error | undefined> = [];
+      middleware(makeSocket('s3'), (err?: Error) => after.push(err));
+      expect(after[0]?.message).toBe('Session limit reached');
+
+      holderHandlers.disconnect();
+      const afterRelease: Array<Error | undefined> = [];
+      middleware(makeSocket('s4'), (err?: Error) => afterRelease.push(err));
+      expect(afterRelease[0]).toBeUndefined();
+    });
+
+    it('frees the reserved slot when the session disconnects', () => {
+      const { middleware, connect } = attachLimited('1');
+      const first = makeSocket('s1');
+      const firstHandlers: Record<string, any> = {};
+      first.on = mock((event: string, handler: any) => { firstHandlers[event] = handler; }) as any;
+
+      middleware(first, () => {});
+      connect(first);
+      const blocked: Array<Error | undefined> = [];
+      middleware(makeSocket('s2'), (err?: Error) => blocked.push(err));
+      expect(blocked[0]?.message).toBe('Session limit reached');
+
+      firstHandlers.disconnect();
+      const afterDisconnect: Array<Error | undefined> = [];
+      middleware(makeSocket('s3'), (err?: Error) => afterDisconnect.push(err));
+      expect(afterDisconnect[0]).toBeUndefined();
     });
   });
 });

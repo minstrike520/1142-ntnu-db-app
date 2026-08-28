@@ -39,6 +39,11 @@ This document defines the RESTful API and Socket.IO real-time communication inte
 | | `PATCH` | [`/rooms/:id/members/:userId`](#patch-roomsidmembersuserid) | Yes | Approve member join or update member role/nickname |
 | | `DELETE` | [`/rooms/:id/members/:userId`](#delete-roomsidmembersuserid) | Yes | Kick member (Owner or Admin only) |
 | **Messages & Attachments** | `GET` | [`/rooms/:roomId/messages`](#get-roomsroomidmessages) | Yes | Get room message history (paginated) |
+| | `POST` | [`/rooms/:roomId/messages`](#post-roomsroomidmessages) | Yes | Create a durable message command |
+| | `PATCH` | [`/rooms/:roomId/messages/:messageId`](#patch-roomsroomidmessagesmessageid) | Yes | Edit a message with optimistic concurrency |
+| | `POST` | [`/rooms/:roomId/messages/:messageId/recall`](#post-roomsroomidmessagesmessageidrecall) | Yes | Recall a message with optimistic concurrency |
+| | `PUT` | [`/rooms/:roomId/read-position`](#put-roomsroomidread-position) | Yes | Advance the member read position |
+| **Recovery** | `GET` | [`/sync`](#get-sync) | Yes | Recover durable message changes after a cursor |
 | | `POST` | [`/attachments`](#post-attachments) | Yes | Upload attachment file |
 | | `GET` | [`/attachments/:id`](#get-attachmentsid) | Yes | Download attachment file |
 | **Folders** | `GET` | [`/folders`](#get-folders) | Yes | Get folders list |
@@ -49,17 +54,21 @@ This document defines the RESTful API and Socket.IO real-time communication inte
 | | `POST` | [`/users/me/emergency-contacts`](#post-usersmeemergency-contacts) | Yes | Add or update emergency contact |
 | | `DELETE` | [`/users/me/emergency-contacts/:contactId`](#delete-usersmeemergency-contactscontactid) | Yes | Delete emergency contact |
 | | `POST` | [`/users/me/emergency-alert/check-inactivity`](#post-usersmeemergency-alertcheck-inactivity) | Yes | Check inactivity to trigger alert automatically |
+| **Admin** | `GET` | [`/admin/health`](#get-adminhealth) | Yes (admin) | Liveness probe behind the admin gate |
+| | `GET` | [`/admin/metrics`](#get-adminmetrics) | Yes (admin) | Request throughput, latency percentiles and process resource usage |
+| | `GET` | [`/admin/logs`](#get-adminlogs) | Yes (admin) | Recent structured log records (polling) |
+| | `GET` | [`/admin/slow-queries`](#get-adminslow-queries) | Yes (admin) | Queries that ran past the slow threshold |
 
 ### Socket.IO Real-Time Communication
 
+Socket.IO is a server-to-client event transport. Durable commands are REST
+requests so authentication, `Idempotency-Key`, `If-Match`, transactions and
+retries share one contract. The server derives room subscriptions from active
+membership when a socket connects.
+
 | Type | Event Name | Auth Required | Description |
 | :--- | :--- | :--- | :--- |
-| **Client-to-Server** | `join_room` | Yes (On connection) | Subscribe to message broadcasts of a chat room |
-| | `leave_room` | Yes (On connection) | Unsubscribe from message broadcasts of a chat room |
-| | `send_message` | Yes (On connection) | Send chat message (with attachments or replies) |
-| | `recall_message` | Yes (On connection) | Recall message (Sender only) |
 | | `typing` | Yes (On connection) | Broadcast typing state to other room members |
-| | `read_receipt` | Yes (On connection) | Update read receipt cursor to specified message |
 | **Server-to-Client** | `new_message` | Yes (On connection) | Receive new message notification (including mentions) |
 | | `message_recalled` | Yes (On connection) | Message has been recalled by the sender |
 | | `user_typing` | Yes (On connection) | Typing state changes of other members |
@@ -1191,6 +1200,37 @@ All errors return the following JSON structure:
 
 ---
 
+#### `POST /rooms/:roomId/messages`
+- **Description**: Create one durable message and its `created` Message Change.
+- **Headers**: `Idempotency-Key` is required and must be stable across retries.
+- **Request body**: `{ "content": "Hello", "replyToId": null, "attachmentIds": [] }`.
+- **Response**: `201 Created` with `MessageWithSender`, including `messageSequence`, `changeSequence`, and `revision`.
+- **Retry rule**: Repeating the same key for the same sender returns the original message without allocating another sequence.
+
+#### `PATCH /rooms/:roomId/messages/:messageId`
+- **Description**: Edit a message.
+- **Headers**: `Idempotency-Key` and `If-Match` are required. `If-Match` contains the expected integer `revision`.
+- **Response**: `200 OK` with the updated message and incremented `revision`.
+- **Conflict**: `409 CONFLICT` when the revision is stale.
+
+#### `POST /rooms/:roomId/messages/:messageId/recall`
+- **Description**: Recall a message.
+- **Headers**: `Idempotency-Key` and `If-Match` are required.
+- **Response**: `200 OK` with the recalled message projection.
+- **Retry rule**: Recalling an already-recalled message succeeds without allocating another change or publishing another event. The key is still consumed: create, edit and recall share one idempotency namespace, and reusing it for a different operation returns `409 CONFLICT`.
+
+#### `PUT /rooms/:roomId/read-position`
+- **Description**: Advance the caller's durable read position to a message.
+- **Headers**: `Idempotency-Key` is required.
+- **Request body**: `{ "messageId": "..." }`.
+- **Response**: `200 OK` with the updated room membership projection. Read positions only move forward.
+
+#### `GET /sync`
+- **Description**: Recover durable Message Changes visible to the authenticated user.
+- **Query parameters**: `cursor` (non-negative integer, default `0`) and `limit` (1–500, default `100`).
+- **Response**: `{ "changes": [...], "nextCursor": 42, "hasMore": false }` where each change contains `changeSequence`, `messageSequence`, `revision`, `changeType`, and `message`.
+- **Visibility**: Membership is checked on every request. For rooms with hidden history, changes at or before the member's Join Boundary are excluded.
+
 #### `POST /attachments`
 - **Description**: Upload a file attachment.
 - **Authentication & Authorization**: Authentication required.
@@ -1389,38 +1429,164 @@ All errors return the following JSON structure:
 
 ---
 
+### H. Admin
+
+Every route under `/api/v1/admin/*` sits behind two middlewares bound inside
+`makeAdminRoutes`: standard authentication, then an admin check that reads
+`users.is_admin` from the database on each request. The flag is not carried in
+the JWT, so revoking it takes effect on the caller's very next request. No
+endpoint sets the flag; see `docs/DEVELOPMENT.md` for the bootstrap procedure.
+
+#### `GET /admin/health`
+- **Description**: Liveness probe for the admin namespace, and the one endpoint here that does not depend on any buffer holding content.
+- **Authentication & Authorization**: Authentication required, and the caller's `users.is_admin` must be `true`.
+- **Response**:
+  - `200 OK`: Caller is an admin.
+  - `401 Unauthorized`: Missing, invalid, or deleted-account token.
+  - `403 Forbidden`: Authenticated, but not an admin (`code: "FORBIDDEN"`).
+- **Response Example**:
+  ```json
+  {
+    "status": "ok"
+  }
+  ```
+
+---
+
+#### `GET /admin/metrics`
+- **Description**: Request throughput, latency percentiles and this process's own resource usage. Everything is per-process and resets on restart, so a multi-instance deployment reports whichever instance served the request.
+- **Authentication & Authorization**: Authentication required, and the caller's `users.is_admin` must be `true`.
+- **Response**:
+  - `200 OK`: Snapshot taken at read time. `Cache-Control: no-store`.
+  - `401 Unauthorized` / `403 Forbidden`: As for every route in this namespace.
+- **Response Fields**:
+  | Field | Type | Description |
+  |---|---|---|
+  | `process.uptimeSeconds` | Number | Seconds since this process started |
+  | `process.cpu.userMs` / `systemMs` | Number | Cumulative CPU milliseconds |
+  | `process.cpu.percent` | Number \| null | CPU used since the *previous* call to this endpoint, as a percentage of one core. `null` on the first call, which has no earlier point to difference against. May exceed 100 on a multi-core host |
+  | `process.memory.*` | Number | `rssBytes`, `heapUsedBytes`, `heapTotalBytes`, `externalBytes` |
+  | `requests.totalRequests` | Number | Lifetime request count |
+  | `requests.statusClasses` | Object | Lifetime counts keyed by `1xx`–`5xx` and `other` |
+  | `requests.latency` | Object | `count`, `avgMs`, `p50Ms`, `p95Ms`, `p99Ms`, `maxMs` over the retained window, **not** over all time |
+  | `requests.sampleSize` / `sampleCapacity` | Number | Retained durations, and the ring's capacity |
+  | `at` | Number | Epoch milliseconds the snapshot was taken |
+- **Response Example**:
+  ```json
+  {
+    "process": {
+      "uptimeSeconds": 812.44,
+      "cpu": { "userMs": 5230.1, "systemMs": 980.4, "percent": 3.2 },
+      "memory": { "rssBytes": 128974848, "heapUsedBytes": 41287680, "heapTotalBytes": 62914560, "externalBytes": 2097152 }
+    },
+    "requests": {
+      "totalRequests": 1842,
+      "statusClasses": { "1xx": 0, "2xx": 1790, "3xx": 0, "4xx": 51, "5xx": 1, "other": 0 },
+      "latency": { "count": 1000, "avgMs": 12.44, "p50Ms": 8.1, "p95Ms": 41.2, "p99Ms": 96.7, "maxMs": 310.5 },
+      "sampleSize": 1000,
+      "sampleCapacity": 1000
+    },
+    "at": 1756108800000
+  }
+  ```
+
+---
+
+#### `GET /admin/logs`
+- **Description**: The most recent structured log records, oldest first, from an in-process ring buffer. Polling only — there is no streaming endpoint. Credentials are redacted by the logger before a record ever reaches this buffer.
+- **Authentication & Authorization**: Authentication required, and the caller's `users.is_admin` must be `true`.
+- **Query Parameters**:
+  | Parameter | Type | Required | Description |
+  |---|---|---|---|
+  | `limit` | Integer | No | How many of the newest records to return. Defaults to the buffer capacity; must be between `1` and `capacity` |
+- **Response**:
+  - `200 OK`: `Cache-Control: no-store`.
+  - `400 Bad Request`: `limit` is not an integer in range (`code: "VALIDATION_ERROR"`).
+  - `401 Unauthorized` / `403 Forbidden`: As for every route in this namespace.
+- **Response Fields**:
+  | Field | Type | Description |
+  |---|---|---|
+  | `entries` | Array | Log records, oldest first. `level` is pino's numeric severity (30 = info, 50 = error), `time` is epoch milliseconds, `msg` the message; any other fields the call site merged in are preserved |
+  | `retained` | Number | Records currently held, at most `capacity` |
+  | `capacity` | Number | Ring buffer size |
+- **Response Example**:
+  ```json
+  {
+    "entries": [
+      { "level": 30, "time": 1756108795123, "msg": "request completed", "method": "GET", "path": "/api/v1/rooms", "status": 200, "durationMs": 7.4 },
+      { "level": 40, "time": 1756108799001, "msg": "admin access denied", "userId": "0b2f...", "path": "/api/v1/admin/logs" }
+    ],
+    "retained": 2,
+    "capacity": 200
+  }
+  ```
+
+---
+
+#### `GET /admin/slow-queries`
+- **Description**: Database queries that ran past the slow threshold, oldest first, from an in-process ring buffer. Only the query skeleton is retained — every interpolated value is replaced with `?`, so a slow lookup by email never parks the address in a buffer this endpoint hands out.
+- **Authentication & Authorization**: Authentication required, and the caller's `users.is_admin` must be `true`.
+- **Query Parameters**:
+  | Parameter | Type | Required | Description |
+  |---|---|---|---|
+  | `limit` | Integer | No | How many of the newest records to return. Defaults to the buffer capacity; must be between `1` and `capacity` |
+- **Response**:
+  - `200 OK`: `Cache-Control: no-store`.
+  - `400 Bad Request`: `limit` is not an integer in range (`code: "VALIDATION_ERROR"`).
+  - `401 Unauthorized` / `403 Forbidden`: As for every route in this namespace.
+- **Response Fields**:
+  | Field | Type | Description |
+  |---|---|---|
+  | `queries` | Array | `{ query, durationMs, at }`, oldest first. `at` is epoch milliseconds |
+  | `retained` | Number | Records currently held, at most `capacity` |
+  | `capacity` | Number | Ring buffer size |
+  | `thresholdMs` | Number | The threshold that decides what lands here |
+- **Response Example**:
+  ```json
+  {
+    "queries": [
+      { "query": "SELECT * FROM messages WHERE room_id = ? ORDER BY created_at DESC LIMIT ?", "durationMs": 184.2, "at": 1756108780000 }
+    ],
+    "retained": 1,
+    "capacity": 100,
+    "thresholdMs": 100
+  }
+  ```
+
+---
+
 ## 3. Socket.IO Real-Time Communication
 
 ### Connection
 
 - **URL**: Same host as REST API (default port `4000`)
 - **Namespace**: `/`
-- **Authentication**: Connection requires `auth_token` Cookie or `Authorization: Bearer <token>` Header
-- **Personal channel**: Upon connection, the server automatically adds the socket to `user_<userId>`. Targeted events (e.g., friend request notifications, room approval) are delivered via this personal channel. No client-side action is needed.
+- **Authentication**: Connection requires the access token in the Socket.IO `auth.token` handshake field.
+- **Subscriptions**: Upon connection, the server adds the socket to `user_<userId>` and to every non-pending room in `room_members`. Membership revocation removes every session from that room.
+- **Deployment scope**: Events are published through the process-local Socket.IO server, so the backend runs as a **single instance**. Two or more instances would silently drop events for clients connected to a different one — those sockets stay connected, so no recovery is triggered. Horizontal scaling requires a cross-process Socket.IO adapter (Redis or PostgreSQL) first.
+- **Deployment scope**: Events are published through the process-local Socket.IO server, so the backend runs as a **single instance**. Two or more instances would silently drop events for clients connected to a different one — those sockets stay connected, so no recovery is triggered. Horizontal scaling requires a cross-process Socket.IO adapter (Redis or PostgreSQL) first.
+- **Recovery**: Clients wait for the server's `realtime_ready` event, then call `GET /sync` after every connection and token refresh. `connectionStateRecovery` is disabled; Sync Cursor is the single recovery path. If subscription restoration fails, the server disconnects the socket without sending `realtime_ready`, so the client retries the handshake. The server may also send `realtime_ready` again mid-session after it restores a subscription it had revoked (a kick that lost its conditional delete), because a restored subscription replays nothing that was published while it was gone.
 
 ### Client-to-Server Events
 
 | Event Name | Payload | Description |
 | :--- | :--- | :--- |
-| `join_room` | `{ roomId: string }` | Subscribe to message broadcasts of a chat room (must be a member) |
-| `leave_room` | `{ roomId: string }` | Unsubscribe |
-| `send_message` | `{ roomId: string, content: string, replyTo?: string, attachmentIds?: string[] }` | Send message; `replyTo` is the referenced message ID; `attachmentIds` is the array of attachment IDs. Note: `content` can be empty only if at least one attachment ID is provided; otherwise `content` must not be empty. |
-| `recall_message` | `{ messageId: string }` | Recall message (Sender only) |
 | `typing` | `{ roomId: string, isTyping: boolean }` | Broadcast typing state |
-| `read_receipt` | `{ roomId: string, messageId: string }` | Update read receipt cursor to specified message |
 
 ### Server-to-Client Events
 
 | Event Name | Payload Type | Description |
 | :--- | :--- | :--- |
 | `new_message` | `MessageWithSender` | Receive new message (mentions also trigger this event) |
-| `message_recalled` | `{ messageId: string }` | Message has been recalled |
+| `message_updated` | `MessageWithSender` | Receive the canonical edited message |
+| `message_recalled` | `{ roomId: string, messageId: string, messageSequence: number, changeSequence: number, revision: number }` | Message has been recalled; `roomId` lets clients update an unloaded room's latest-message projection |
 | `user_typing` | `{ roomId: string, userId: string, isTyping: boolean }` | Typing status of other members |
-| `read_update` | `{ roomId: string, userId: string, messageId: string }` | Read receipt updates of other members |
+| `read_update` | `{ roomId: string, userId: string, messageId: string, readPosition?: number }` | Read receipt updates of other members |
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | Room or membership state change. `type` determines the subtype. See [`room_update` Subtypes](#room_update-subtypes). |
-| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected', createdAt: string }` | Friend request status change notification. Delivered to **both** the addressee (new request) and the requester (accepted / rejected). The client should refresh friend and pending-request lists upon receiving this event regardless of `status`. |
-| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | Presence update for a friend. Delivered when a friend connects or disconnects. |
+| `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected' \| 'deleted' \| 'blocked' \| 'unblocked', createdAt: string }` | Friend lifecycle notification. Delivered to the relevant user; the client should refresh friend and pending-request lists upon receiving this event regardless of `status`. |
+| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | Presence update for a friend. Delivered when a friend connects or disconnects. Whether someone is online is shared across backend instances, but this push is not: it reaches only sockets held by the instance the friend connected to, so a client on a different instance sees the change on its next `GET /api/v1/friends` instead. |
 | `emergency_alert` | `{ userId: string, message: string }` | Receive emergency alert from contact |
+| `realtime_ready` | `void` | Durable room subscriptions have been restored; the client may begin `/sync`. Sent once per connection, and again whenever the server restores a subscription it had revoked |
 | `error` | `ApiError` | Error report for failed event processing |
 
 ---
@@ -1458,4 +1624,4 @@ Sent **only** to the target user's personal socket channel (`user_<userId>`), no
 | :--- | :--- | :--- | :--- |
 | `ROOM_JOINED` | `{}` | User joins via invite code **or** pending member is approved | Only the joining / approved user |
 
-> **Client handling**: When `ROOM_JOINED` is received, the client should call `GET /rooms` to refresh the full room list. The client must then call `join_room` for the newly appeared room to begin receiving its broadcasts.
+> **Client handling**: When `ROOM_JOINED` is received, the client should call `GET /rooms` to refresh the full room list. The next socket connection derives the room subscription from durable membership; no client-side `join_room` call is required.

@@ -11,12 +11,17 @@ on:
     # act on that exact commit. The detect job below still skips expensive
     # lanes when only documentation or metadata changed.
   pull_request:
-    branches: [main]
-    # Deliberately no paths-ignore. `required-checks` is the single required
-    # status check, and a workflow skipped by a path filter never reports at
-    # all — the check would sit Pending forever and docs-only PRs could never
-    # merge. Jobs skipped by an `if` inside a workflow do report, so letting
-    # detect skip every lane is the only safe way to make docs-only cheap.
+    # Deliberately no `branches` filter and no paths-ignore. `required-checks`
+    # is the single required status check, and a workflow skipped by a branch
+    # or path filter never reports at all — the check would sit Pending
+    # forever and the PR could never merge. This includes PRs based on a
+    # non-main branch (e.g. a fix stacked on another open PR's branch): the
+    # `detect` job's `BASE_REF == "main"` check below already anticipated
+    # this and degrades run-build/security to false for those, it was just
+    # unreachable while this filter blocked the event entirely. Jobs skipped
+    # by an `if` inside a workflow do report, so letting detect skip every
+    # lane is the only safe way to make docs-only (or non-main-based) PRs
+    # cheap without leaving required-checks Pending.
   workflow_dispatch:
 
 concurrency:
@@ -43,6 +48,7 @@ jobs:
       frontend-required: ${{ steps.plan.outputs.frontend-required }}
       backend-required: ${{ steps.plan.outputs.backend-required }}
       database-required: ${{ steps.plan.outputs.database-required }}
+      browser-required: ${{ steps.plan.outputs.browser-required }}
       security-required: ${{ steps.plan.outputs.security-required }}
       run-build: ${{ steps.plan.outputs.run-build }}
     steps:
@@ -62,6 +68,15 @@ jobs:
       - uses: dorny/paths-filter@v4
         id: filter
         with:
+          # Default 'some' quantifier silently ignores '!'-prefixed patterns
+          # (a file matches if it matches ANY listed pattern, negated ones
+          # included as just another alternative) -- it does NOT subtract
+          # them. That turned the CLAUDE.md exclusions below into a false
+          # match: any file outside 'frontend/**/CLAUDE.md' satisfies the
+          # negated pattern taken alone, so unrelated changes (e.g. under
+          # .claude/) were matching both frontend and backend. This makes a
+          # match require a positive pattern AND no negated pattern.
+          predicate-quantifier: some-with-excludes
           # The root workspace files are load-bearing for BOTH packages now that
           # every job installs from the single root lockfile. Without them here,
           # a PR touching only pnpm-lock.yaml, the `overrides` block, or the root
@@ -73,20 +88,27 @@ jobs:
           # There is deliberately no separate `database` filter: the database
           # lane is backend's integration verification and reuses the backend
           # filter. Two near-identical path lists would only drift apart.
+          # CLAUDE.md files are AI-agent orientation docs, not source: they carry
+          # no runtime behavior, so touching only them shouldn't require a full
+          # lint/typecheck/test/build lane. Negated after the broad glob so
+          # code changes anywhere else under frontend/backend are unaffected.
           filters: |
             frontend:
               - 'frontend/**'
+              - '!frontend/**/CLAUDE.md'
               - 'shared/**'
               - 'tsconfig.base.json'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
+              - 'scripts/**'
               - '.dockerignore'
               - 'docker-compose*.yml'
               - '.github/workflows/**'
               - '.github/actions/**'
             backend:
               - 'backend/**'
+              - '!backend/**/CLAUDE.md'
               - 'shared/**'
               - 'tsconfig.base.json'
               - 'package.json'
@@ -123,11 +145,31 @@ jobs:
           frontend_required=false
           backend_required=false
           database_required=false
+          browser_required=false
           security_required=false
           run_build=false
 
+          # The browser lane exercises the same frontend the frontend lane
+          # lints, typechecks and unit-tests, so it follows that decision rather
+          # than carrying a fifth near-identical path list that would drift.
+          # This mirrors how the database lane follows backend.
+          #
+          # It follows the BACKEND decision too, which the frontend-only version
+          # of this rule did not. ci-browser.yml gained a full-stack job (issue
+          # #544) that drives a real Bun backend and a real PostgreSQL, so a
+          # backend-only or migration-only change can now break the browser lane
+          # while touching nothing under frontend/. Without this second
+          # condition that change would skip the lane, and `required-checks`
+          # accepts a skip for a lane marked not-required — the regression would
+          # reach main with the gate green.
           if [[ "$EVENT_NAME" == "workflow_dispatch" || "$FRONTEND_CHANGED" == "true" ]]; then
             frontend_required=true
+          fi
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || \
+                "$FRONTEND_CHANGED" == "true" || \
+                "$BACKEND_CHANGED" == "true" ]]; then
+            browser_required=true
           fi
 
           # The database lane verifies the same code the backend lane builds, so
@@ -160,6 +202,7 @@ jobs:
             echo "frontend-required=$frontend_required"
             echo "backend-required=$backend_required"
             echo "database-required=$database_required"
+            echo "browser-required=$browser_required"
             echo "security-required=$security_required"
             echo "run-build=$run_build"
           } >> "$GITHUB_OUTPUT"
@@ -185,6 +228,11 @@ jobs:
     if: needs.detect.outputs.database-required == 'true'
     uses: ./.github/workflows/ci-database.yml
 
+  browser:
+    needs: detect
+    if: needs.detect.outputs.browser-required == 'true'
+    uses: ./.github/workflows/ci-browser.yml
+
   security:
     needs: detect
     if: needs.detect.outputs.security-required == 'true'
@@ -202,7 +250,7 @@ jobs:
   required-checks:
     name: required-checks
     if: always()
-    needs: [detect, frontend, backend, database, security]
+    needs: [detect, frontend, backend, database, browser, security]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every lane reached an acceptable state
@@ -211,10 +259,12 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           DATABASE_RESULT: ${{ needs.database.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
           FRONTEND_REQUIRED: ${{ needs.detect.outputs.frontend-required }}
           BACKEND_REQUIRED: ${{ needs.detect.outputs.backend-required }}
           DATABASE_REQUIRED: ${{ needs.detect.outputs.database-required }}
+          BROWSER_REQUIRED: ${{ needs.detect.outputs.browser-required }}
           SECURITY_REQUIRED: ${{ needs.detect.outputs.security-required }}
         run: |
           set -uo pipefail
@@ -230,6 +280,17 @@ jobs:
           # silently drop a whole lane and still go green. `cancelled` and
           # `failure` are never acceptable for either kind of lane.
           check_lane() { # name, result, required
+            # The required flag has to be literally true or false. If a lane's
+            # `detect` output is missing from the `outputs:` block or misspelled
+            # there, the expression yields an empty string: the lane's `if`
+            # evaluates false and it is skipped, and an empty flag would then
+            # take the not-required branch and accept that skip. `set -u` cannot
+            # catch it because the variable is defined in `env:`, just empty.
+            if [[ "$3" != "true" && "$3" != "false" ]]; then
+              fail "$1 required-flag is '$3'; expected true or false (missing or misspelled detect output)"
+              return
+            fi
+
             if [[ "$3" == "true" ]]; then
               [[ "$2" == "success" ]] || fail "$1 was required but finished as $2"
             else
@@ -242,6 +303,7 @@ jobs:
           check_lane frontend "$FRONTEND_RESULT" "$FRONTEND_REQUIRED"
           check_lane backend "$BACKEND_RESULT" "$BACKEND_REQUIRED"
           check_lane database "$DATABASE_RESULT" "$DATABASE_REQUIRED"
+          check_lane browser "$BROWSER_RESULT" "$BROWSER_REQUIRED"
           check_lane security "$SECURITY_RESULT" "$SECURITY_REQUIRED"
 
           # Written before exiting, not after: a gate that fails is exactly when
@@ -253,6 +315,7 @@ jobs:
             echo "| frontend | \`$FRONTEND_REQUIRED\` | \`$FRONTEND_RESULT\` |"
             echo "| backend | \`$BACKEND_REQUIRED\` | \`$BACKEND_RESULT\` |"
             echo "| database | \`$DATABASE_REQUIRED\` | \`$DATABASE_RESULT\` |"
+            echo "| browser | \`$BROWSER_REQUIRED\` | \`$BROWSER_RESULT\` |"
             echo "| security | \`$SECURITY_REQUIRED\` | \`$SECURITY_RESULT\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 

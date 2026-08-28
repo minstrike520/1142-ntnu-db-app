@@ -37,7 +37,11 @@ jobs:
       # job deliberately does not use the setup-workspace composite action.
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          # Hardcoded because this job deliberately skips the composite action
+          # (see above), so it cannot inherit that action's default. Keep this
+          # in step with `node-version` in .github/actions/setup-workspace: two
+          # majors drifting apart is the exact defect issue #579 set out to fix.
+          node-version: '22'
       # `--ratchet` with no baseline present exits 0 and writes one, even with
       # findings at or above --fail-on. A runner always starts from a clean
       # checkout, so if .cve-lite/baseline.json ever stops being tracked, every
@@ -89,7 +93,7 @@ jobs:
           SARIF
           fi
       - name: Upload workspace scan to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v4.37.6
+        uses: github/codeql-action/upload-sarif@v4.37.7
         if: always()
         with:
           sarif_file: workspace.sarif

@@ -6,7 +6,7 @@
 # directory alone produces dangling links and the build fails. Keeping install
 # and build in one stage avoids copying a symlinked tree across stages at all;
 # the BuildKit store cache mount below preserves the layer-caching benefit.
-FROM node:24-slim AS builder
+FROM node:22-slim AS builder
 ENV CI=true
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -43,7 +43,7 @@ RUN pnpm build
 # standalone output is nested under the package name: server.js lands at
 # .next/standalone/frontend/server.js, with the traced store beside it at
 # .next/standalone/node_modules.
-FROM node:24-slim AS runner
+FROM node:22-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

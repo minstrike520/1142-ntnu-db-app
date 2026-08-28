@@ -15,7 +15,7 @@ import type {
   FriendResponse,
 } from '../../../shared/types';
 
-import { ConflictError, NotFoundError, ValidationError } from '../utils/AppError';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../utils/AppError';
 import { defaultAvatarStore, type AvatarStore } from '../utils/avatarUpload';
 import {
   updateMeSchema,
@@ -24,7 +24,7 @@ import {
   type UpdateMeInput,
   type UpdateSettingsInput,
 } from '../routes/userSchemas';
-import { getRefreshTokenTtlMs } from '../utils/refreshTokenTtl';
+import { env } from '../config/env';
 
 import type { IRefreshTokenRepository } from '../models/IRefreshTokenRepository';
 
@@ -37,6 +37,8 @@ interface JwtHelper {
 interface EmergencyAlertResult {
   alerted: boolean;
   recipients: string[];
+  /** Contacts whose durable delivery threw. Non-empty means a retry is owed. */
+  failed?: string[];
   reason?: string;
 }
 
@@ -78,12 +80,13 @@ export const makeUserService = (
   emergencyContactRepo: IEmergencyContactRepository,
   refreshTokenRepo: IRefreshTokenRepository,
   jwt: JwtHelper,
-  notifyEmergencyContact?: (contactId: string, payload: { userId: string; message: string }) => void | Promise<void>,
-  friendRepo?: { getFriends(userId: string): Promise<FriendResponse[]> },
+  notifyEmergencyContact?: (contactId: string, payload: { userId: string; message: string; incidentId: string }) => void | Promise<void>,
+  friendRepo?: { getFriends(userId: string): Promise<FriendResponse[]>; isBlocked?(userA: string, userB: string): Promise<boolean> },
   onUserUpdated?: (userId: string, data: { name?: string; avatarUrl?: string }) => void | Promise<void>,
   avatarStore: AvatarStore = defaultAvatarStore,
+  disconnectUser?: (userId: string, reason: string) => void,
 ) => {
-  const notifyContacts = async (userId: string, fallbackMessage: string): Promise<EmergencyAlertResult> => {
+  const notifyContacts = async (userId: string, fallbackMessage: string, incidentId: string): Promise<EmergencyAlertResult> => {
     const user = await repo.findById(userId);
     if (!user) throw new NotFoundError('user', userId);
 
@@ -93,17 +96,46 @@ export const makeUserService = (
     }
 
     const recipients: string[] = [];
+    const failed: string[] = [];
     for (const contact of contacts) {
       const msg = contact.message || fallbackMessage;
-      if (notifyEmergencyContact) {
-        await notifyEmergencyContact(contact.contactId, {
-          userId,
-          message: msg,
-        });
+      const deliver = async (): Promise<boolean> => {
+        const currentContacts = await emergencyContactRepo.findByUserId(userId);
+        if (!currentContacts.some((current) => current.contactId === contact.contactId)) return false;
+        if (notifyEmergencyContact) {
+          await notifyEmergencyContact(contact.contactId, {
+            userId,
+            message: msg,
+            incidentId,
+          });
+        }
+        return true;
+      };
+      // One unreachable contact must not silence the alert for everyone else,
+      // so each delivery is isolated. Retrying the whole incident later is
+      // safe because delivery is keyed by `incidentId` and is idempotent.
+      try {
+        const delivered = emergencyContactRepo.withContactLock
+          ? await emergencyContactRepo.withContactLock(userId, contact.contactId, deliver)
+          : await deliver();
+        if (delivered) recipients.push(contact.contactId);
+      } catch (error) {
+        failed.push(contact.contactId);
+        console.error(
+          `Failed to deliver emergency alert to contact ${contact.contactId} for user ${userId}:`,
+          error,
+        );
       }
-      recipients.push(contact.contactId);
     }
 
+    if (failed.length > 0) {
+      return {
+        alerted: recipients.length > 0,
+        recipients,
+        failed,
+        reason: 'PARTIAL_DELIVERY',
+      };
+    }
     return { alerted: true, recipients };
   };
 
@@ -112,12 +144,28 @@ export const makeUserService = (
     await refreshTokenRepo.create({
       userId,
       tokenHash: jwt.hashToken(refreshToken),
-      expiresAt: new Date(Date.now() + getRefreshTokenTtlMs()),
+      expiresAt: new Date(Date.now() + env().refreshTokenTtlMs),
     });
     return refreshToken;
   };
 
   return {
+    /**
+     * Whether the user may reach `/api/v1/admin/*`.
+     *
+     * The authorization rule lives here rather than in `adminMiddleware` so the
+     * gate goes through the same service layer as every other permission check
+     * (see backend/AGENTS.md). The middleware stays a pure HTTP adapter: it
+     * turns `false` into a 403 and knows nothing about how the answer is found.
+     *
+     * Answered from the database on every call, deliberately — not from the JWT,
+     * so revoking an admin takes effect on their next request. A missing or
+     * soft-deleted account is `false`, never a throw: the gate fails closed.
+     */
+    async isAdmin(userId: string): Promise<boolean> {
+      return repo.isAdmin(userId);
+    },
+
     async register(data: RegisterRequest): Promise<AuthResponse & { refreshToken: string }> {
       const existingUser = await repo.findByEmail(data.email);
       if (existingUser) {
@@ -293,6 +341,8 @@ export const makeUserService = (
 
     async deleteMe(userId: string): Promise<void> {
       await repo.update(userId, { deletedAt: new Date() });
+      await refreshTokenRepo.revokeAllForUser(userId);
+      disconnectUser?.(userId, 'account_deleted');
     },
 
     
@@ -304,9 +354,20 @@ export const makeUserService = (
       if (userId === contactId) {
         throw new ValidationError('Cannot add yourself as an emergency contact');
       }
+      if (await friendRepo?.isBlocked?.(userId, contactId)) {
+        throw new ForbiddenError('Cannot add a blocked user as an emergency contact');
+      }
       const contact = await repo.findById(contactId);
       if (!contact) throw new NotFoundError('user', contactId);
-      return await emergencyContactRepo.upsert(userId, contactId, message);
+      const result = await emergencyContactRepo.upsert(userId, contactId, message);
+      // The block operation removes both directions under the same pair lock.
+      // Recheck after the write so a block that committed during the initial
+      // authorization check cannot leave a newly-created contact behind.
+      if (await friendRepo?.isBlocked?.(userId, contactId)) {
+        await emergencyContactRepo.delete(userId, contactId);
+        throw new ForbiddenError('Cannot add a blocked user as an emergency contact');
+      }
+      return result;
     },
 
     async deleteEmergencyContact(userId: string, contactId: string): Promise<void> {
@@ -336,7 +397,29 @@ export const makeUserService = (
         return { alerted: false, recipients: [], reason: 'ALREADY_ALERTED' };
       }
 
-      return notifyContacts(userId, 'User has exceeded their inactivity warning threshold');
+      try {
+        const alert = await notifyContacts(
+          userId,
+          'User has exceeded their inactivity warning threshold',
+          user.lastActivity.toISOString(),
+        );
+        if (!alert.alerted || (alert.failed?.length ?? 0) > 0) {
+          // A partially delivered incident still owes the remaining contacts a
+          // notification, so the reservation is released and the next run
+          // retries. Contacts that already received the message are protected
+          // by the per-incident idempotency key.
+          await emergencyContactRepo.releaseAlertIfNew?.(userId, user.lastActivity);
+        } else {
+          await emergencyContactRepo.completeAlert?.(userId, user.lastActivity);
+        }
+        return alert;
+      } catch (error) {
+        // The row is a reservation, not the delivery itself. Release it when
+        // the durable notification cannot be completed so a later check can
+        // retry instead of permanently suppressing the incident.
+        await emergencyContactRepo.releaseAlertIfNew?.(userId, user.lastActivity);
+        throw error;
+      }
     },
 
 
@@ -433,7 +516,7 @@ export const makeUserService = (
       await refreshTokenRepo.rotate(tokenRecord.tokenId, {
         userId: user.userId,
         tokenHash: jwt.hashToken(newRefreshToken),
-        expiresAt: new Date(Date.now() + getRefreshTokenTtlMs()),
+        expiresAt: new Date(Date.now() + env().refreshTokenTtlMs),
       });
 
       return {

@@ -45,6 +45,7 @@ export class MockSocket {
   connect(): this {
     this.connected = true;
     this.serverEmit("connect");
+    this.serverEmit("realtime_ready");
     return this;
   }
 

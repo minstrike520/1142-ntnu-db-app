@@ -13,7 +13,7 @@ import FriendInfoPanel from "@/components/chat/FriendInfoPanel";
 // loaded on demand to keep it out of the chat route's initial client chunk.
 // RoomMembersPanel renders in the default group-chat view and FriendInfoPanel
 // is statically imported by the persistent Sidebar, so lazy-loading them here
-// would not reduce the initial bundle (see docs/frontend-bundle-analysis.md).
+// would not reduce the initial bundle.
 const GroupSettings = dynamic(() => import("@/components/settings/GroupSettings"), {
   ssr: false,
   loading: () => <GroupSettingsLoading />,

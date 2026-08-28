@@ -76,11 +76,80 @@ Docker Compose 會將容器內部連接埠映射至主機的外部連接埠，�
 | **前端** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js 前端網頁應用程式 |
 | **後端 API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API 與 Socket.IO 伺服器 |
 | **資料庫** | `localhost:5435` | 5432 | PostgreSQL 18 實例 |
+| **Redis** | `localhost:6385` | 6379 | 供即時狀態使用的 Redis 8 實例。因為沒有設定密碼，只綁定在 `127.0.0.1`。後端啟動時會連線，但不依賴它：Redis 連不上只會讓即時通訊降級，不會讓 API 停擺 |
 
 對於瀏覽器端的前端請求，請將 API 環境變數設定為：
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:4005
 ```
+
+### 即時通訊 runtime 與 smoke check
+
+後端 production listener 是單一 `Bun.serve`。Hono 處理 REST，
+`@socket.io/bun-engine` 處理 `/socket.io/`。Socket.IO ping interval 為 25 秒、
+ping timeout 為 20 秒，因此 Bun `idleTimeout` 必須大於此視窗。
+
+持久化訊息命令走 REST 並必須帶 `Idempotency-Key`；編輯與收回另需
+`If-Match`。連線後客戶端以最後 cursor 呼叫 `/api/v1/sync`。
+
+`backend/scripts/smoke.ts`（`pnpm --filter near-chat-backend run smoke`，或在
+`backend/` 下執行 `bun run smoke`）是對執行中 stack 的自動化即時通訊 smoke
+測試。它會註冊一個用完即丟的使用者，依序驗證健康檢查、socket 連線並收到
+`realtime_ready`、可靠發送（重送同一個 `Idempotency-Key` 只會產生一則訊息）、
+斷線後靠 sync cursor 補齊變更，以及超限的驗證請求會回傳
+`429`／`TOO_MANY_REQUESTS`。目標位址讀取自 `SMOKE_API_URL`（預設
+`http://localhost:4005`），任何一項失敗都會印出可行動的診斷訊息並以非零結束。
+
+最後一項檢查需要限流器實際運作，而 `.env.example` 為了日常開發預設帶
+`RATE_LIMIT_DISABLED=true`，因此請覆寫該值再啟動 smoke 用的 stack，而不是直接
+跑預設的：
+
+```bash
+RATE_LIMIT_DISABLED=false docker compose up -d --wait --force-recreate backend
+SMOKE_API_URL=http://localhost:4005 pnpm --filter near-chat-backend run smoke
+```
+
+`--force-recreate backend` 是讓覆寫生效的關鍵：Compose 不會只因為插值後的環境
+變數改變，就重啟一個已在執行中的容器。
+
+另外可將 `SMOKE_STATE_FILE` 設為某個路徑，用以驗證持久狀態能否跨 restart 存活。
+第一次執行會把 token、room 與 message ID 寫入該檔；之後以同一個檔案再執行時，
+會改用存下來的 token 重新 sync，並斷言 restart 前的那則訊息仍然回傳 —— 因此
+restart 若真的遺失資料就會失敗，而不是靠新建立的狀態矇混通過。
+
+CI 的 `ci-backend.yml` 會對 development image（`docker-compose.yml`）與
+production image（`docker-compose.release.yml`）各執行一次同一份腳本，且各自
+在 graceful restart backend 容器前後都跑一次、共用同一個 `SMOKE_STATE_FILE`，
+因此映像本身的問題或 restart 造成的已提交狀態遺失都會讓建置失敗。
+
+`MAX_SESSIONS_PER_USER`、`PRESENCE_GRACE_MS`、`TYPING_TTL_MS`、
+`SESSION_RESERVATION_TTL_MS` 分別控制單機 session、presence 重連寬限、
+typing indication TTL 與握手名額保留時間；與其他後端變數一樣，宣告位置都在
+`backend/src/config/env.ts`。
+
+`PRESENCE_TTL_MS` 與 `INSTANCE_ID` 屬於後端存在 Redis 裡的 presence lease。設定
+`REDIS_URL` 後，每個 instance 會為自己有連線的每位使用者持有一份 lease ——
+`presence:user:{userId}` 是一個 hash，一個 instance 一個欄位，每個欄位各自過期
+—— 因此 `GET /rooms` 與 `GET /friends` 回答的是整個部署而不是單一行程的狀態，
+而 `online` 只在全域第一條連線建立時發送、`offline` 只在最後一條消失時發送。
+`PRESENCE_TTL_MS` 界定「某個 instance 當掉後，它的使用者最多被誤顯示成在線多
+久」：行程已死就沒有人能把 lease 還回去，只剩過期能清掉它。後端每個 TTL 內會
+續約三次，而正常關機會主動把 lease 全數交還，不需要等 TTL 到期。但這件事成立的
+前提是 SIGTERM 真的送達行程：container 必須讓應用程式位於 PID 1（因此
+`backend/Dockerfile.prod` 的 CMD 使用 `exec`），也必須留足夠時間讓 drain 完成
+（因此 backend service 設定 `stop_grace_period: 30s`）。兩者只要有一項不對，
+container 就會在 lease 尚未交還時被 SIGKILL，外觀上與「instance 當掉」完全相同
+——完整的關機約定見 docs/ZH-TW/RELEASE.md。`INSTANCE_ID`
+是本行程在該 hash 中的名稱；留空時每次啟動自行產生一個，除非編排器本來就有穩
+定的 per-replica 名稱可以沿用，否則不需要設定。欄位層級的 TTL 需要
+**Redis 7.4 以上** —— 對更舊的伺服器寫入會失敗，後端會記錄一次版本需求，
+presence 則退回只看本機。
+
+目前**尚未**共享的是 `user_status` 推播：`io.to()` 只會送到發出端行程自己持有
+的 socket，因此連在另一個 instance 上的好友要等到下一次 `GET /friends` 才會看
+到狀態變化。補上這段是 #475／#476 的 Redis event bus。每位使用者的 session 上
+限、全域限流與跨節點 change fan-out 同樣仍是 per-instance，所以把 replica 數量
+調到大於 1 目前還不是受支援的部署方式。
 
 ### 正式環境入口拓撲與代理信任
 
@@ -135,6 +204,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<tunnel-host>/api/v1/au
 1. **前端前綴**：任何需要在 Next.js 瀏覽器端讀取的環境變數，都必須加上 `NEXT_PUBLIC_` 前綴。
 2. **生產環境注入**：生產環境不應該依賴已提交的 `.env` 檔案，請改為透過雲端託管平台（例如 Vercel、AWS Secrets Manager）的設定來注入環境變數。
 3. **範本維護**：新增環境變數時，請同步更新 `.env.example`，將欄位值留空或使用佔位符，以便他人參考。
+4. **後端變數集中於單一模組**：[`backend/src/config/env.ts`](../../backend/src/config/env.ts) 宣告了 API server 讀取的所有環境變數，連同各自的解析方式與預設值，是唯一的權威清單 —— 請直接閱讀該檔，不要用 grep 搜尋 `process.env`。新增後端變數時，請加在該模組，而不是加在使用端。
+5. **啟動時驗證**：伺服器在啟動時會驗證環境一次。無法使用的值會被記錄（`Ignoring unusable environment values: …`）並改用預設值；缺少 `DATABASE_URL`，或在 `NODE_ENV=production` 下缺少 `JWT_SECRET`，則會以非零狀態結束而不啟動。空字串等同未設定，因為 Compose 會將 `.env` 中不存在的變數以空字串傳入。
 
 ---
 
@@ -158,10 +229,73 @@ docker compose exec backend bun run db:seed
 - **回滾資料庫遷移**：`docker compose exec backend bun run migrate:down`（預設只回滾最近一筆遷移；可加上數量回滾更多筆，例如 `migrate:down 3`）
 - **寫入種子資料**：`docker compose exec backend bun run db:seed`
 
-遷移檔是 `backend/migrations/` 底下的純 SQL 檔案，每個檔案以 `-- Up migration`
-與 `-- Down migration` 兩個區段區隔。執行遷移的是 `backend/src/models/migrate.ts`
-這個 Bun.SQL runner：它會在單一交易中套用所有待執行的遷移，以 PostgreSQL advisory
-lock 避免並行執行，並將已套用的遷移記錄在 `pgmigrations` 資料表。
+#### 指定要遷移的資料庫
+
+`migrate:up` / `migrate:down` 接受 `--database-url=<connection string>`，優先於 `DATABASE_URL`：
+
+```bash
+bun src/models/migrate.ts up --database-url=postgresql://postgres:postgres@localhost:5436/ntnu_test
+```
+
+未帶此參數時會退回 `DATABASE_URL`，因此上面的既有指令行為不變。但把目標寫進指令裡是比較安全的習慣：
+bun 會自動載入根目錄的 `.env`，所以在專案目錄直接執行 `bun run migrate:up`，動到的是該檔案當下所指向的資料庫。
+
+若目標 host 不是 `localhost`、`127.0.0.1`、`::1`、`db` 或 `db-test`，則必須先確認才會繼續 ——
+在提示字元輸入資料庫名稱，或在非互動環境改帶 `--yes`；確認發生在建立連線與加鎖之前。
+兩種情況下 runner 都會先輸出 `MIGRATE: target=<host>/<database>`；連線字串本身帶有帳密，任何情況下都不會寫進 log。
+
+### 授予管理員權限
+
+`/api/v1/admin/*` 由 `users.is_admin` 欄位控管。所有帳號（含種子資料）建立時
+都是 `is_admin = false`，且刻意**不提供任何可設定此欄位的 HTTP endpoint** ——
+`is_admin` 不在 repository `update` 的允許清單內，因此無法透過
+`PATCH /api/v1/users/me` 變更。
+
+請直接以資料庫寫入提升權限：
+
+```bash
+docker compose exec db psql -U chatuser -d chatdb \
+  -c "UPDATE users SET is_admin = true WHERE email = 'alice@test.com';"
+```
+
+驗證守門機制（非管理員回 403，管理員回 200）：
+
+```bash
+curl -i -s http://localhost:4005/api/v1/admin/health -H "Authorization: Bearer <token>" | head -1
+```
+
+要撤銷權限，將欄位改回 `false` 即可；由於此旗標是每次請求都從資料庫讀取，
+而非存放於 JWT 中，因此下一個請求就會立即生效。
+
+此處刻意不提供 `SYSTEM_ADMIN_EMAILS` 這類環境變數允許清單。
+`PATCH /api/v1/users/me` 只做唯一性檢查就允許任何已登入使用者修改自己的
+email —— 不像修改密碼需要 `currentPassword` 確認 —— 且 `users.email` 是
+區分大小寫的一般 `UNIQUE` 欄位，`Ops@company.com` 可以與 `ops@company.com`
+並存。因此以 email 比對管理員等同於開放使用者自助提權。
+
+### 關於 Migration Runner
+遷移由 `backend/src/models/migrate.ts` 執行，這是一個以 `Bun.SQL` 實作的最小 runner。
+它在 #421 取代了 `node-pg-migrate`，讓後端只依賴 Bun — 不再需要 Node 執行環境，也不再需要 `pg` driver。
+
+它的行為：
+
+- 套用 `backend/migrations/` 底下所有 `.sql` 檔，依檔名的數字前綴排序，並將每個檔案以名稱記錄在
+  `pgmigrations` 表中。已記錄的檔案不會重複套用。
+- 依 `-- Up Migration` 與 `-- Down Migration` 標頭切分每個檔案。
+- 單次執行是**一個交易**。任何一個遷移失敗時，該次執行不會提交任何內容，
+  且錯誤訊息會指出失敗的檔案名稱。
+- 執行前先取得 PostgreSQL advisory lock，因此兩個同時啟動的容器不會並行遷移；
+  後者會以 `Another migration is already running.` 結束。
+- 若 `backend/migrations/` 中出現非 `.sql` 檔案，會直接失敗，而不是靜默略過。
+- 當分支合併導致新的遷移排在已套用的遷移之前時，會以
+  `Not run migration … is preceding already run migration …` 中止。
+  請將該檔案改名為更大的前綴，使其排在最後。
+
+`pgmigrations` 表、記錄的名稱、排序規則與 advisory lock id 都與 `node-pg-migrate` 相同，
+因此由舊工具遷移過的資料庫可以無縫接續。
+
+遷移檔一律為 SQL。`migrate:create <name>` 會在 `backend/migrations/` 底下產生新檔案，
+內含兩個區段標頭，並自動選擇一定會排在既有遷移之後的數字前綴。
 
 ### 修復損壞的開發資料庫
 如果遷移過程中遇到 `relation ... already exists` 錯誤，或者遷移狀態發生混亂：
@@ -215,7 +349,19 @@ docker compose exec backend bun run migrate:up
 ### 測試架構
 開發環境完全運行於 Docker 中，主機上沒有 `node_modules`。所有 Bun 測試套件都必須在後端容器內部使用 `docker compose exec` 執行。
 
-測試資料庫設定：整合測試會在一台臨時的 Postgres 測試資料庫實例（`db-test`）上運行，該實例定義於 `docker-compose.test.yml` 中，以將開發數據與測試數據隔離開來。
+Backend route E2E tests 透過共用的 `tests/helpers/http.ts`，直接呼叫 export
+的 Hono application。這個 helper 使用 `app.request()` 建立標準 `Request`，並
+解析標準 `Response`，包含 JSON、cookie 與 multipart upload；route tests 不會
+啟動 HTTP server 或 network socket。Socket.IO E2E suite 仍然走 network-level，
+因為它明確驗證 Bun listener 與 websocket transport。
+
+測試資料庫設定：整合測試會在一台臨時的 Postgres 測試資料庫實例（`db-test`）上運行，以將開發數據與測試數據隔離開來。`db-test` 與一般 dev services 一同定義在 `docker-compose.yml`，但被歸在 `test` 這個 Compose profile 之下，因此單純執行 `docker compose up -d` 不會啟動它。需要時請明確指定：
+
+```bash
+docker compose up -d --wait db-test
+```
+
+明確指定 service 名稱會自動啟用其 profile，所以不需要額外加上 `--profile test`。在 `backend/` 目錄下，`pnpm run test:db:up` 會做同樣的事並接著套用 migration；`pnpm run test:db:down` 則**只會**停止並移除 `db-test`，不影響正在運行的 dev stack。請注意 `docker compose down --remove-orphans` 仍會涵蓋 `db-test`，會一併把執行中的測試資料庫移除。
 
 ### 安裝相依套件
 本專案是**單一 lockfile 的 pnpm workspace**：整個 repo 只有根目錄一份 `pnpm-lock.yaml`，
@@ -270,6 +416,93 @@ pnpm --filter near-chat-frontend lint
 # 或於前端 Docker 容器內執行
 docker compose exec frontend pnpm run lint
 ```
+
+### 執行前端瀏覽器測試（Playwright）
+這組測試在主機上執行，不在 Docker 內，並且與 `frontend/tests/` 的 Vitest 測試完全分開。它以真實 Chromium 對前端 production build 進行驗證；所有 `/api/v1` 請求都在瀏覽器內被攔截並回覆假資料，因此不需要後端，也不需要資料庫。
+
+npm 套件不含瀏覽器執行檔，每台機器需先安裝一次：
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+```
+
+接著執行測試。`playwright.config.ts` 會自行建置並啟動 Next.js，因此不需要事先啟動伺服器：
+
+```bash
+pnpm --filter near-chat-frontend test:browser
+```
+
+測試失敗時，HTML report、trace 與 screenshot 會產生在 `frontend/playwright-report/` 與 `frontend/test-results/`：
+
+```bash
+pnpm --filter near-chat-frontend exec playwright show-report
+```
+
+測試檔案位於 `frontend/tests-browser/`，共用的 REST mock 為
+`frontend/tests-browser/support/api-mock.ts`。下方的真實環境測試使用獨立的
+test directory 與 config，但會以 `fullstack-browser-tests` job 擴增既有的
+`.github/workflows/ci-browser.yml` workflow。
+
+### 執行 Full-Stack 瀏覽器測試
+
+Full-stack 測試不會 mock application API。Chromium 會操作 production Next.js
+build，fixture 透過真實 REST API 建立前置資料，而 assertion 會完整經過 Bun
+backend、PostgreSQL 與 Socket.IO。`playwright.fullstack.config.ts` 刻意不設定
+`webServer`，因此執行測試前必須先啟動資料庫與兩個 application process。
+
+以下命令都從 repository root 執行。每台機器只需安裝一次 Chromium，接著啟動
+臨時的 `db-test` service 並套用 migrations：
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+pnpm --filter near-chat-backend test:db:up
+```
+
+在 **terminal A** 啟動 port 4000 的 backend：
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5436/ntnu_test \
+NODE_ENV=development \
+PORT=4000 \
+JWT_SECRET=local-fullstack-browser-e2e-secret \
+CORS_ORIGINS=http://127.0.0.1:3000 \
+REDIS_URL='' \
+RATE_LIMIT_DISABLED=true \
+pnpm --filter near-chat-backend start
+```
+
+在 **terminal B** build 並啟動 port 3000 的 production frontend：
+
+```bash
+NEXT_PUBLIC_API_URL=http://127.0.0.1:4000 \
+pnpm --filter near-chat-frontend exec next build
+
+NEXT_PUBLIC_API_URL=http://127.0.0.1:4000 \
+pnpm --filter near-chat-frontend exec next start --hostname 127.0.0.1 --port 3000
+```
+
+兩個 server 都 ready 後，在 **terminal C** 執行測試：
+
+```bash
+E2E_FRONTEND_ORIGIN=http://127.0.0.1:3000 \
+E2E_API_ORIGIN=http://127.0.0.1:4000 \
+CI=1 \
+pnpm --filter near-chat-frontend test:browser:fullstack
+```
+
+三個 terminal 都必須一致使用 `127.0.0.1`：refresh cookie 設為
+`SameSite=Strict`，若與 `localhost` 混用會使 session bootstrap 失敗。
+`NODE_ENV=development` 讓 refresh cookie 可在本機 HTTP 使用，而空的
+`REDIS_URL` 是此單一 backend topology 的刻意設定。
+
+使用 `Ctrl+C` 停止 backend 與 frontend 後，移除臨時測試資料庫；開發資料庫不受影響：
+
+```bash
+pnpm --filter near-chat-backend test:db:down
+```
+
+測試失敗時，diagnostics 會產生在 `frontend/playwright-report-fullstack/` 與
+`frontend/test-results-fullstack/`。
 
 ### 執行單元測試
 單元測試不需要資料庫連線。
@@ -373,11 +606,27 @@ describe('userRepository', () => {
   ```bash
   cp backend/.env.test.example backend/.env.test
   ```
-* **`db-test` 連線掛起或逾時**：請確認 `db-test` 正在運行，指令為：`docker compose -f docker-compose.test.yml ps`。如果沒啟動請將它啟動。
+* **`db-test` 連線掛起或逾時**：請確認 `db-test` 正在運行，指令為：`docker compose ps db-test`。若沒啟動，請以 `docker compose up -d --wait db-test` 啟動它。
 * **`TRUNCATE` 失敗**：請確認已透過以下指令在測試資料庫中套用了遷移：
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
+* **`docker compose ps` 顯示 `redis` unhealthy 或已結束**：backend 仍會照常啟動並
+  提供服務——API 完全不受影響，只有即時通訊退回單節點——所以症狀是 presence 與
+  typing 更新消失，而不是啟動失敗。但 `docker compose up -d --wait` 仍會回報失敗，
+  因為它會等待每個服務的 healthcheck，與誰依賴誰無關。最常見的原因是主機連接埠被
+  占用：請在 `docker compose logs redis` 中查看是否有 `port is already allocated`，
+  並釋放 `127.0.0.1:6385`，或直接修改 `docker-compose.yml` 中的對應設定。
+* **確認 backend 真的連得到 Redis**：backend 映像檔內沒有 `redis-cli`，其 shell 也不是
+  bash，所以無法使用 `/dev/tcp`。但容器內有 Node，可用以下指令驗證 `REDIS_URL`
+  確實有傳進容器且能解析：
+  ```bash
+  docker compose exec backend node -e "const u=new URL(process.env.REDIS_URL);require('net').createConnection(u.port||6379,u.hostname).on('connect',()=>{console.log('ok');process.exit(0)}).on('error',e=>{console.error(e.message);process.exit(1)})"
+  ```
+* **Redis 啟動時出現 memory overcommit 或 transparent hugepage 警告**：屬預期行為，
+  可以忽略。這些警告針對的是背景存檔所需的 `fork()`，而本專案已停用持久化
+  （`--save "" --appendonly no`）；且 `vm.overcommit_memory` 並非 namespaced 設定，
+  本來就無法在單一容器內調整。
 
 ---
 

@@ -1,23 +1,30 @@
 import { sign, verify } from 'hono/jwt';
 import { createHash, randomBytes } from 'crypto';
 import type { JwtPayload } from '@shared/types';
-import { getAccessTokenTtlSeconds } from './accessTokenTtl';
+import { DEV_JWT_SECRET, env } from '../config/env';
 
+/**
+ * The signing key.
+ *
+ * `assertStartupEnv()` already refuses to boot a production process without
+ * `JWT_SECRET`, so this throw is the backstop for anything that reaches signing
+ * without having gone through the entrypoint.
+ */
 const getJwtSecret = (): string => {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    if (process.env.NODE_ENV === 'production') {
+  const { jwtSecret, isProduction } = env();
+  if (!jwtSecret) {
+    if (isProduction) {
       throw new Error('JWT_SECRET is not defined in production environment.');
     }
-    return 'default-dev-secret';
+    return DEV_JWT_SECRET;
   }
-  return secret;
+  return jwtSecret;
 };
 
 export const signToken = async (payload: JwtPayload): Promise<string> => {
   const secret = getJwtSecret();
   // ponytail: Hono JWT requires 'exp' inside the payload as a UNIX timestamp in seconds
-  const exp = Math.floor(Date.now() / 1000) + getAccessTokenTtlSeconds();
+  const exp = Math.floor(Date.now() / 1000) + env().accessTokenTtlSeconds;
   return await sign({ ...payload, exp }, secret, 'HS256');
 };
 

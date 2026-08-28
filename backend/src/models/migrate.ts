@@ -14,9 +14,15 @@
  * database migrated by the old CLI must see this runner as a no-op, and vice
  * versa — anything else would re-run or skip migrations on deployed stacks.
  *
+ * The database a migration alters is an explicit input, not something picked up
+ * from the ambient environment: `--database-url` names it in the command
+ * itself, and a target outside `LOCAL_DATABASE_HOSTS` has to be confirmed
+ * before anything is opened or locked. `DATABASE_URL` still works as a
+ * fallback, so the compose and CI flows are unchanged.
+ *
  * Usage:
- *   bun src/models/migrate.ts up
- *   bun src/models/migrate.ts down [count]
+ *   bun src/models/migrate.ts up [--database-url=<url>] [--yes]
+ *   bun src/models/migrate.ts down [count] [--database-url=<url>] [--yes]
  *   bun src/models/migrate.ts create <name>
  */
 
@@ -163,16 +169,137 @@ export async function loadMigrationFiles(dir = MIGRATIONS_DIR): Promise<Migratio
   }));
 }
 
-function requireDatabaseUrl(): string {
-  const databaseUrl = process.env.DATABASE_URL;
+export interface MigrateArgs {
+  action?: string;
+  argument?: string;
+  /** `--database-url`, when given. Takes precedence over `DATABASE_URL`. */
+  databaseUrl?: string;
+  assumeYes: boolean;
+}
+
+/**
+ * Split argv into the action, its positional argument, and the two options.
+ * Options may appear anywhere, so `down 3 --yes` and `down --yes 3` agree.
+ */
+export function parseMigrateArgs(argv: string[]): MigrateArgs {
+  const positionals: string[] = [];
+  let databaseUrl: string | undefined;
+  let assumeYes = false;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i]!;
+
+    if (token === "--yes" || token === "-y") {
+      assumeYes = true;
+      continue;
+    }
+
+    if (token === "--database-url" || token.startsWith("--database-url=")) {
+      // Both spellings: `--database-url=<url>` reads well inside a package.json
+      // script, the separated form inside an interactive shell.
+      const value = token.startsWith("--database-url=")
+        ? token.slice("--database-url=".length)
+        : argv[i += 1];
+
+      if (!value) {
+        throw new Error(`--database-url requires a connection string.\n${usage()}`);
+      }
+
+      databaseUrl = value;
+      continue;
+    }
+
+    if (token.startsWith("-")) {
+      throw new Error(`Unknown option "${token}".\n${usage()}`);
+    }
+
+    positionals.push(token);
+  }
+
+  return { action: positionals[0], argument: positionals[1], databaseUrl, assumeYes };
+}
+
+/**
+ * Hosts a migration may target without confirmation: the operator's own
+ * machine, and the two compose service names, which resolve only inside a
+ * compose network. Nothing here can name a deployed database.
+ */
+export const LOCAL_DATABASE_HOSTS: readonly string[] = [
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "db",
+  "db-test",
+];
+
+export function isLocalDatabaseTarget(connectionString: string): boolean {
+  try {
+    const { hostname } = new URL(connectionString);
+    if (!hostname) return false;
+
+    // `new URL` keeps an IPv6 literal bracketed; the list above holds bare hosts.
+    return LOCAL_DATABASE_HOSTS.includes(hostname.replace(/^\[|\]$/g, "").toLowerCase());
+  } catch {
+    // An unparsable target is not demonstrably local, so it needs confirming.
+    return false;
+  }
+}
+
+/**
+ * The target for this run: the flag first, `DATABASE_URL` only as a fallback so
+ * the existing Docker and CI invocations keep working untouched.
+ */
+export function resolveDatabaseUrl(
+  flagValue: string | undefined,
+  source: NodeJS.ProcessEnv = process.env,
+): string {
+  const databaseUrl = flagValue ?? source.DATABASE_URL;
 
   if (!databaseUrl) {
     throw new Error(
-      "DATABASE_URL is not set. Copy .env.example to .env or run via: docker compose exec backend bun run migrate:up",
+      "No migration target. Pass --database-url=<connection string>, or set DATABASE_URL — e.g. docker compose exec backend bun run migrate:up",
     );
   }
 
   return databaseUrl;
+}
+
+async function readConfirmation(): Promise<string> {
+  process.stdin.setEncoding("utf8");
+
+  for await (const chunk of process.stdin) {
+    return String(chunk).split("\n")[0]!.trim();
+  }
+
+  return "";
+}
+
+/**
+ * Stand between the operator and a database that is not theirs. Typing the
+ * database name rather than `y` is deliberate: a yes/no prompt can be answered
+ * without having read which target was printed.
+ */
+async function confirmTarget(databaseUrl: string, assumeYes: boolean): Promise<void> {
+  if (assumeYes || isLocalDatabaseTarget(databaseUrl)) {
+    return;
+  }
+
+  const target = describeDatabaseTarget(databaseUrl);
+  const expected = target.slice(target.lastIndexOf("/") + 1);
+
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      `Refusing to migrate ${target}: not a local target, and there is no terminal to confirm on. Pass --yes to proceed.`,
+    );
+  }
+
+  process.stdout.write(
+    `${target} is not a local database.\nType "${expected}" to migrate it, anything else to abort: `,
+  );
+
+  if ((await readConfirmation()) !== expected) {
+    throw new Error(`Aborted: ${target} was not confirmed.`);
+  }
 }
 
 /**
@@ -182,15 +309,9 @@ function requireDatabaseUrl(): string {
  * session than the one that took the lock.
  */
 async function withLockedConnection<T>(
+  databaseUrl: string,
   handler: (connection: SQL) => Promise<T>,
 ): Promise<T> {
-  const databaseUrl = requireDatabaseUrl();
-
-  // Say which database is about to be altered — never the URL itself, which
-  // carries credentials. Bun reads `.env` automatically where the old Node CLI
-  // did not, so the target is no longer obvious from the invocation alone.
-  console.log(`MIGRATE: target=${describeDatabaseTarget(databaseUrl)}`);
-
   const sql = new SQL(databaseUrl);
   const connection = await sql.reserve();
 
@@ -290,8 +411,8 @@ async function applyMigrations(
   }
 }
 
-async function migrateUp(): Promise<void> {
-  await withLockedConnection(async (connection) => {
+async function migrateUp(databaseUrl: string): Promise<void> {
+  await withLockedConnection(databaseUrl, async (connection) => {
     await ensureMigrationsTable(connection);
 
     const migrations = await loadMigrationFiles();
@@ -318,8 +439,8 @@ async function migrateUp(): Promise<void> {
   });
 }
 
-async function migrateDown(count: number): Promise<void> {
-  await withLockedConnection(async (connection) => {
+async function migrateDown(count: number, databaseUrl: string): Promise<void> {
+  await withLockedConnection(databaseUrl, async (connection) => {
     await ensureMigrationsTable(connection);
 
     const migrations = await loadMigrationFiles();
@@ -384,40 +505,47 @@ async function createMigration(name: string): Promise<void> {
 function usage(): string {
   return [
     "Usage:",
-    "  bun src/models/migrate.ts up",
-    "  bun src/models/migrate.ts down [count]",
+    "  bun src/models/migrate.ts up [--database-url=<url>] [--yes]",
+    "  bun src/models/migrate.ts down [count] [--database-url=<url>] [--yes]",
     "  bun src/models/migrate.ts create <name>",
+    "",
+    "Options:",
+    "  --database-url=<url>  Database to migrate. Falls back to DATABASE_URL.",
+    "  --yes, -y             Skip the confirmation a non-local target requires.",
   ].join("\n");
 }
 
 async function main(argv: string[]): Promise<void> {
-  const [action, argument] = argv;
+  const { action, argument, databaseUrl: databaseUrlFlag, assumeYes } = parseMigrateArgs(argv);
 
-  switch (action) {
-    case "up":
-      return migrateUp();
-
-    case "down": {
-      const count = argument === undefined ? 1 : Number(argument);
-
-      if (!Number.isInteger(count) || count < 1) {
-        throw new Error(`Invalid migration count "${argument}": expected a positive integer.`);
-      }
-
-      return migrateDown(count);
+  // `create` only writes a file, so it must not demand a database at all.
+  if (action === "create") {
+    if (!argument) {
+      throw new Error(`Missing migration name.\n${usage()}`);
     }
 
-    case "create": {
-      if (!argument) {
-        throw new Error(`Missing migration name.\n${usage()}`);
-      }
-
-      return createMigration(argument);
-    }
-
-    default:
-      throw new Error(`Unknown action "${action ?? ""}".\n${usage()}`);
+    return createMigration(argument);
   }
+
+  if (action !== "up" && action !== "down") {
+    throw new Error(`Unknown action "${action ?? ""}".\n${usage()}`);
+  }
+
+  const count = action === "down" && argument !== undefined ? Number(argument) : 1;
+
+  if (!Number.isInteger(count) || count < 1) {
+    throw new Error(`Invalid migration count "${argument}": expected a positive integer.`);
+  }
+
+  const databaseUrl = resolveDatabaseUrl(databaseUrlFlag);
+
+  // Named before anything is opened, locked or altered, so the operator sees
+  // the target while it can still be refused. Never the URL itself: it carries
+  // credentials.
+  console.log(`MIGRATE: target=${describeDatabaseTarget(databaseUrl)}`);
+  await confirmTarget(databaseUrl, assumeYes);
+
+  return action === "up" ? migrateUp(databaseUrl) : migrateDown(count, databaseUrl);
 }
 
 // Guarded so the exported helpers above can be imported by tests without the

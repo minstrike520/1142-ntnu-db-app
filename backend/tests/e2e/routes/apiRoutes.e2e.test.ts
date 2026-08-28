@@ -1,14 +1,16 @@
+import type { Hono } from 'hono';
 import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
-import request from 'supertest';
+import { request } from '../../helpers/http';
 import { resetDb } from '../../helpers/resetDb';
+import type { AuthResponse, RoomResponse, UserProfileResponse } from '../../helpers/responseTypes';
 import { testPool } from '../../helpers/testPool';
 
-let app: any;
+let app: Hono;
 
 const registerUser = async (name = 'E2E User') => {
   const email = `e2e-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`;
   const response = await request(app)
-    .post('/api/v1/auth/register')
+    .post<AuthResponse>('/api/v1/auth/register')
     .send({ email, name, password: 'password123' })
     .expect(201);
 
@@ -24,7 +26,7 @@ describe('API routes E2E', () => {
     process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
     process.env.CORS_ORIGINS = 'http://allowed.example,http://localhost:3005';
     const indexModule = await import('../../../src/index');
-    app = indexModule.app;
+    app = indexModule.honoApp;
   });
 
   beforeEach(async () => {
@@ -40,7 +42,7 @@ describe('API routes E2E', () => {
     const email = `auth-${Date.now()}@example.com`;
 
     const register = await request(app)
-      .post('/api/v1/auth/register')
+      .post<AuthResponse>('/api/v1/auth/register')
       .send({ email, name: 'Auth User', password: 'password123' })
       .expect(201);
     expect(register.headers['x-content-type-options']).toBe('nosniff');
@@ -88,7 +90,7 @@ describe('API routes E2E', () => {
     const user = await registerUser('Searchable User');
 
     await request(app)
-      .get('/api/v1/users/me')
+      .get<UserProfileResponse>('/api/v1/users/me')
       .set('Authorization', `Bearer ${user.token}`)
       .expect(200)
       .expect((response) => {
@@ -96,7 +98,7 @@ describe('API routes E2E', () => {
       });
 
     await request(app)
-      .patch('/api/v1/users/me')
+      .patch<UserProfileResponse>('/api/v1/users/me')
       .set('Authorization', `Bearer ${user.token}`)
       .send({ name: 'Updated User' })
       .expect(200)
@@ -105,7 +107,7 @@ describe('API routes E2E', () => {
       });
 
     await request(app)
-      .get('/api/v1/users?q=Updated')
+      .get<UserProfileResponse[]>('/api/v1/users?q=Updated')
       .set('Authorization', `Bearer ${user.token}`)
       .expect(200)
       .expect((response) => {
@@ -117,7 +119,7 @@ describe('API routes E2E', () => {
     const user = await registerUser();
 
     await request(app)
-      .get('/api/v1/rooms')
+      .get<RoomResponse[]>('/api/v1/rooms')
       .set('Authorization', `Bearer ${user.token}`)
       .expect(200)
       .expect((response) => {
@@ -125,14 +127,14 @@ describe('API routes E2E', () => {
       });
 
     const roomResponse = await request(app)
-      .post('/api/v1/rooms')
+      .post<RoomResponse>('/api/v1/rooms')
       .set('Authorization', `Bearer ${user.token}`)
       .send({ type: 'group', name: 'E2E Room' })
       .expect(201);
     const roomId = roomResponse.body.roomId as string;
 
     await request(app)
-      .get('/api/v1/rooms')
+      .get<RoomResponse[]>('/api/v1/rooms')
       .set('Authorization', `Bearer ${user.token}`)
       .expect(200)
       .expect((response) => {
@@ -140,7 +142,7 @@ describe('API routes E2E', () => {
       });
 
     await request(app)
-      .get(`/api/v1/rooms/${roomId}`)
+      .get<RoomResponse>(`/api/v1/rooms/${roomId}`)
       .set('Authorization', `Bearer ${user.token}`)
       .expect(200)
       .expect((response) => {
@@ -148,7 +150,7 @@ describe('API routes E2E', () => {
       });
 
     await request(app)
-      .patch(`/api/v1/rooms/${roomId}`)
+      .patch<RoomResponse>(`/api/v1/rooms/${roomId}`)
       .set('Authorization', `Bearer ${user.token}`)
       .send({ name: 'Renamed E2E Room' })
       .expect(200)
@@ -168,7 +170,7 @@ describe('API routes E2E', () => {
       .expect(403);
 
     await request(app)
-      .get(`/api/v1/rooms/${roomId}/messages`)
+      .get<unknown[]>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${user.token}`)
       .expect(200)
       .expect((response) => {
@@ -177,8 +179,8 @@ describe('API routes E2E', () => {
   });
 
   it('rejects unauthenticated protected routes', async () => {
-    await request(app).get('/api/v1/users/me').expect(401);
-    await request(app).get('/api/v1/rooms').expect(401);
+    await request(app).get<UserProfileResponse>('/api/v1/users/me').expect(401);
+    await request(app).get<RoomResponse[]>('/api/v1/rooms').expect(401);
     await request(app).get('/api/v1/rooms/room-1/messages').expect(401);
   });
 });

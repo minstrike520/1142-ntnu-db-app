@@ -11,8 +11,11 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 | File | Description |
 |------|-------------|
 | [src/index.ts](src/index.ts) | Composition Root: calls the `src/bootstrap/` factories in dependency order and launches the HTTP server. Holds wiring only — no construction logic of its own |
-| [src/bootstrap/](src/bootstrap/) | One factory per assembly stage: `config`, `repositories`, `services`, `httpApp`, `realtime`, `jobs`, `start` |
-| [src/models/db.ts](src/models/db.ts) | Exports the shared `Bun.SQL` client initialized from the `DATABASE_URL` environment variable |
+| [src/config/env.ts](src/config/env.ts) | Typed configuration: the one place `process.env` is read, parsed and defaulted. Also holds the startup validation that fails a misconfigured process fast |
+| [src/bootstrap/](src/bootstrap/) | One factory per assembly stage: `config`, `repositories`, `redis`, `services`, `httpApp`, `realtime`, `jobs`, `start` |
+| [src/models/db.ts](src/models/db.ts) | Exports the shared `Bun.SQL` instance, connected to the database resolved by `src/config/env.ts` |
+| [src/utils/redis.ts](src/utils/redis.ts) | Redis connection manager built on Bun's native client. Redis holds derived state only, so an outage degrades realtime rather than stopping the API |
+| [src/realtime/presenceStore.ts](src/realtime/presenceStore.ts) | Cross-instance presence as per-instance leases in Redis (hash-field TTLs, Redis 7.4+). Its Redis semantics are pinned in `tests/integration/realtime/` against a real server |
 | [migrations/](migrations/) | PostgreSQL migration files written in raw SQL, applied by the Bun.SQL runner in [src/models/migrate.ts](src/models/migrate.ts) |
 | [package.json](package.json) | NPM scripts (`pnpm run dev` for `bun --watch`, `pnpm run test`) and dependencies |
 
@@ -49,3 +52,9 @@ Do not bypass these layers (e.g., calling repositories directly from route handl
 
 ### 5. Running Tests
 - Execute `pnpm run test` or `docker compose exec backend bun run test` to run all unit, integration, and E2E tests.
+
+### 6. Frequently Used Commands
+- Run a single test file quietly: `bun test tests/unit/<file>.test.ts`
+- Fast feedback loop (skip integration/e2e): `pnpm run test:unit`
+- Type check without building: `pnpm exec tsc --noEmit`
+- Lint: `pnpm run lint`

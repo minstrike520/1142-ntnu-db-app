@@ -96,6 +96,32 @@ describe('messageService', () => {
     expect(result).toBe(messageWithSender);
   });
 
+  it('sendMessage still succeeds when the sender read cursor update fails', async () => {
+    const publish = mock();
+    const failingService = makeMessageService(messageRepo, roomRepo, roomMemberRepo, publish);
+    roomRepo.findById.mockResolvedValue(room);
+    roomMemberRepo.findMember.mockResolvedValue(member);
+    messageRepo.create.mockResolvedValue(messageWithSender);
+    roomMemberRepo.update.mockRejectedValue(new Error('read cursor write failed'));
+
+    const result = await failingService.sendMessage('user-1', 'room-1', 'hello');
+
+    expect(result).toBe(messageWithSender);
+    expect(publish).toHaveBeenCalledWith('room-1', 'new_message', messageWithSender);
+  });
+
+  it('sendMessage swallows markRead failures without failing the committed message', async () => {
+    roomMemberRepo.markRead = mock().mockRejectedValue(new Error('read cursor write failed'));
+    roomRepo.findById.mockResolvedValue(room);
+    roomMemberRepo.findMember.mockResolvedValue(member);
+    messageRepo.create.mockResolvedValue(messageWithSender);
+
+    await expect(messageService.sendMessage('user-1', 'room-1', 'hello')).resolves.toBe(
+      messageWithSender,
+    );
+    expect(roomMemberRepo.markRead).toHaveBeenCalledWith('room-1', 'user-1', 'message-1');
+  });
+
   it('sendMessage resolves unique @mentions and passes mentioned user ids to the repository', async () => {
     roomRepo.findById.mockResolvedValue(room);
     roomMemberRepo.findMember.mockResolvedValue(member);

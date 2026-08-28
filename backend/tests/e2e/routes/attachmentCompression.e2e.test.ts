@@ -1,14 +1,16 @@
+import type { Hono } from 'hono';
 import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
-import request from 'supertest';
+import { request, type HttpRequest } from '../../helpers/http';
 import sharp from 'sharp';
 import { resetDb } from '../../helpers/resetDb';
+import type { AttachmentResponse, AuthResponse } from '../../helpers/responseTypes';
 
-let app: any;
+let app: Hono;
 
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
   const indexModule = await import('../../../src/index');
-  app = indexModule.app;
+  app = indexModule.honoApp;
 });
 
 // attachment.e2e.test.ts only uploads plain text, so nothing there exercises
@@ -19,7 +21,7 @@ describe('Attachment compression E2E', () => {
 
   beforeEach(async () => {
     await resetDb();
-    const res = await request(app).post('/api/v1/auth/register').send({
+    const res = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'ImgUser',
       email: 'attachment-compression@test.com',
       password: 'Password123!',
@@ -27,8 +29,8 @@ describe('Attachment compression E2E', () => {
     token = res.body.accessToken ?? res.body.token;
   });
 
-  const readBody = (req: any) =>
-    req.buffer(true).parse((r: any, cb: any) => {
+  const readBody = (req: HttpRequest<Buffer>) =>
+    req.buffer(true).parse((r, cb) => {
       const chunks: Buffer[] = [];
       r.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
       r.on('end', () => cb(null, Buffer.concat(chunks)));
@@ -42,7 +44,7 @@ describe('Attachment compression E2E', () => {
       .toBuffer();
 
     const uploadRes = await request(app)
-      .post('/api/v1/attachments')
+      .post<AttachmentResponse>('/api/v1/attachments')
       .set('Authorization', `Bearer ${token}`)
       .attach('file', png, 'photo.png');
 
@@ -52,7 +54,7 @@ describe('Attachment compression E2E', () => {
 
     const downloadRes = await readBody(
       request(app)
-        .get(`/api/v1/attachments/${uploadRes.body.attachmentId}`)
+        .get<Buffer>(`/api/v1/attachments/${uploadRes.body.attachmentId}`)
         .set('Authorization', `Bearer ${token}`),
     );
 
@@ -66,7 +68,7 @@ describe('Attachment compression E2E', () => {
 
   it('leaves a non-image attachment untouched', async () => {
     const uploadRes = await request(app)
-      .post('/api/v1/attachments')
+      .post<AttachmentResponse>('/api/v1/attachments')
       .set('Authorization', `Bearer ${token}`)
       .attach('file', Buffer.from('plain text content'), 'notes.txt');
 

@@ -73,6 +73,7 @@ cp .env.example .env
 | 參數名稱 | 說明 | 預設值 |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | PostgreSQL 連線 URL | `postgresql://chatuser:chatpassword@db:5432/chatdb` |
+| `REDIS_URL` | Redis 連線 URL，於 backend 容器內解析。可省略——留空時即時通訊退回單節點，後端仍可正常啟動。在 compose 下請留空而非刪掉整行，刪掉會落回預設值 | `redis://redis:6379` |
 | `JWT_SECRET` | 用於簽署 JWT 的密鑰鍵值 | `dev_secret_key` |
 | `RATE_LIMIT_DISABLED` | 關閉 API 請求速率限制（供測試使用） | `true`（生產環境請設為 `false` 或移除） |
 | `TRUST_PROXY_HOPS` | 後端前方有幾層自行維運的反向代理。速率限制會取 `X-Forwarded-For` 由**右**數來第 n 段作為來源 IP，因此用戶端自行前綴的內容無法用來自選限流桶。開發堆疊為直連，留空即可；正式堆疊由 `docker-compose.prod.yml` 寫死為 `1`（cloudflared） | *(空，不信任任何代理)* |
@@ -107,6 +108,7 @@ docker compose exec backend pnpm run db:seed
 | **前端應用 (Frontend)** | [http://localhost:3005](http://localhost:3005) | 主 Next.js 網頁應用介面 |
 | **後端服務 (Backend API)** | [http://localhost:4005](http://localhost:4005) | Bun + Hono API 及 Socket.IO 伺服器 |
 | **PostgreSQL 資料庫** | `localhost:5435` | PostgreSQL 18 資料庫 (容器內部對應 `5432` 連接埠) |
+| **Redis** | `localhost:6385` | 供即時狀態使用的 Redis 8 (容器內部對應 `6379` 連接埠，僅綁定 `127.0.0.1`) |
 
 ---
 
@@ -128,7 +130,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 ### 3. 執行資料庫遷移
 於生產容器中套用最新的資料庫遷移：
 ```bash
-docker compose -f docker-compose.prod.yml exec backend pnpm run migrate:up
+docker compose -f docker-compose.prod.yml exec backend bun run migrate:up
 ```
 
 ### 4. 停止生產服務

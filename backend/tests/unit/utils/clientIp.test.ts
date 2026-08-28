@@ -5,13 +5,10 @@ import { getClientIp, trustedProxyHops } from '../../../src/utils/clientIp';
 const originalTrustProxy = process.env.TRUST_PROXY;
 const originalTrustProxyHops = process.env.TRUST_PROXY_HOPS;
 
-const makeContext = (
-  headers: Record<string, string> = {},
-  socket?: { remoteAddress?: string; remotePort?: number; remoteFamily?: string },
-): Context =>
+const makeContext = (headers: Record<string, string> = {}): Context =>
   ({
     req: { header: (name: string) => headers[name.toLowerCase()] },
-    env: socket ? { incoming: { socket } } : {},
+    env: {},
   }) as unknown as Context;
 
 const restore = (name: string, value: string | undefined) => {
@@ -71,20 +68,17 @@ describe('clientIp', () => {
   });
 
   describe('getClientIp', () => {
-    it('prefers the socket peer address by default', () => {
+    it('does not trust forwarded headers without a trusted proxy', () => {
       delete process.env.TRUST_PROXY;
       delete process.env.TRUST_PROXY_HOPS;
-      const c = makeContext({ 'x-forwarded-for': '10.0.0.1' }, { remoteAddress: '192.168.1.5' });
+      const c = makeContext({ 'x-forwarded-for': '10.0.0.1' });
 
-      expect(getClientIp(c)).toBe('192.168.1.5');
+      expect(getClientIp(c)).toBeUndefined();
     });
 
     it('reads one hop back from the right when one proxy is trusted', () => {
       process.env.TRUST_PROXY_HOPS = '1';
-      const c = makeContext(
-        { 'x-forwarded-for': ' 10.0.0.1 , 172.16.0.1 ' },
-        { remoteAddress: '192.168.1.5' },
-      );
+      const c = makeContext({ 'x-forwarded-for': ' 10.0.0.1 , 172.16.0.1 ' });
 
       // Our single proxy appended 172.16.0.1 as the address it heard the request
       // from, so that is the caller. 10.0.0.1 arrived with the request itself.
@@ -95,12 +89,8 @@ describe('clientIp', () => {
       process.env.TRUST_PROXY_HOPS = '1';
       const spoofed = makeContext(
         { 'x-forwarded-for': '203.0.113.7, 203.0.113.8, 198.51.100.4' },
-        { remoteAddress: '192.168.1.5' },
       );
-      const honest = makeContext(
-        { 'x-forwarded-for': '198.51.100.4' },
-        { remoteAddress: '192.168.1.5' },
-      );
+      const honest = makeContext({ 'x-forwarded-for': '198.51.100.4' });
 
       // Padding the chain must not let a caller pick a different bucket.
       expect(getClientIp(spoofed)).toBe('198.51.100.4');
@@ -109,35 +99,31 @@ describe('clientIp', () => {
 
     it('skips the declared number of hops', () => {
       process.env.TRUST_PROXY_HOPS = '2';
-      const c = makeContext(
-        { 'x-forwarded-for': '10.0.0.1, 198.51.100.4, 172.16.0.1' },
-        { remoteAddress: '192.168.1.5' },
-      );
+      const c = makeContext({ 'x-forwarded-for': '10.0.0.1, 198.51.100.4, 172.16.0.1' });
 
       expect(getClientIp(c)).toBe('198.51.100.4');
     });
 
-    it('falls back to the socket when the chain is shorter than the trusted hops', () => {
-      // A direct connection that bypassed the proxies cannot be attributed from
-      // the header, so it must not be read as the leftmost entry.
+    it('returns undefined when a synthetic chain is shorter than trusted hops', () => {
+      // A synthetic request has no peer address to use as a safe fallback.
       process.env.TRUST_PROXY_HOPS = '2';
-      const c = makeContext({ 'x-forwarded-for': '10.0.0.1' }, { remoteAddress: '192.168.1.5' });
+      const c = makeContext({ 'x-forwarded-for': '10.0.0.1' });
 
-      expect(getClientIp(c)).toBe('192.168.1.5');
+      expect(getClientIp(c)).toBeUndefined();
     });
 
-    it('falls back to the socket when a trusted proxy sends no header', () => {
+    it('returns undefined when a synthetic request has no forwarded header', () => {
       process.env.TRUST_PROXY_HOPS = '1';
-      const c = makeContext({}, { remoteAddress: '192.168.1.5' });
+      const c = makeContext();
 
-      expect(getClientIp(c)).toBe('192.168.1.5');
+      expect(getClientIp(c)).toBeUndefined();
     });
 
-    it('falls back to the socket when the forwarded header is blank', () => {
+    it('returns undefined when a synthetic forwarded header is blank', () => {
       process.env.TRUST_PROXY_HOPS = '1';
-      const c = makeContext({ 'x-forwarded-for': '  ' }, { remoteAddress: '192.168.1.5' });
+      const c = makeContext({ 'x-forwarded-for': '  ' });
 
-      expect(getClientIp(c)).toBe('192.168.1.5');
+      expect(getClientIp(c)).toBeUndefined();
     });
 
     it('returns undefined when no connection info is attached', () => {
@@ -148,11 +134,11 @@ describe('clientIp', () => {
       expect(getClientIp(makeContext({ 'x-forwarded-for': '10.0.0.1' }))).toBeUndefined();
     });
 
-    it('returns undefined when the socket has no remote address', () => {
+    it('returns undefined when a synthetic request has no remote address', () => {
       delete process.env.TRUST_PROXY;
       delete process.env.TRUST_PROXY_HOPS;
 
-      expect(getClientIp(makeContext({}, {}))).toBeUndefined();
+      expect(getClientIp(makeContext())).toBeUndefined();
     });
   });
 });

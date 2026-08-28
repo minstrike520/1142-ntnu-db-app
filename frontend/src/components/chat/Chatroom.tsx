@@ -48,7 +48,7 @@ const EVERYONE_MENTION = "everyone";
 
 // Kept outside the component (and free of React Compiler restrictions): the
 // conditional expression inside a component-level try/catch would make the
-// compiler skip the whole component (see docs/frontend-react-render-optimization.md).
+// compiler skip the whole component.
 const reportActionError = (error: unknown, fallback: string) => {
   console.error(error);
   alert(error instanceof Error ? error.message : fallback);

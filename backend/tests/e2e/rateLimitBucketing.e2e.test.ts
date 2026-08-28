@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'bun:test';
 import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
-import { serve, type ServerType } from '@hono/node-server';
 import { makeGlobalRateLimiter } from '../../src/middlewares/securityMiddleware';
 import { errorHandler } from '../../src/middlewares/errorHandler';
 
@@ -11,7 +10,7 @@ import { errorHandler } from '../../src/middlewares/errorHandler';
  * The unit tests drive `getClientIp` with synthetic contexts, which cannot show
  * whether the peer address is actually recoverable at runtime — and that address
  * is the whole fallback when no proxy is trusted. Here the requests genuinely
- * travel over TCP through `@hono/node-server`, the same adapter production uses,
+ * travel over TCP through Bun.serve, the same adapter production uses,
  * so the header path and the socket path are exercised as they really compose.
  *
  * Covers the guarantees issue #413 asks for: one caller cannot exhaust another's
@@ -23,7 +22,7 @@ const originalRateLimitDisabled = process.env.RATE_LIMIT_DISABLED;
 const originalTrustProxy = process.env.TRUST_PROXY;
 const originalTrustProxyHops = process.env.TRUST_PROXY_HOPS;
 
-let server: ServerType;
+let server: Bun.Server<unknown>;
 let baseUrl: string;
 
 // One limiter instance holds one in-memory store, so each test takes a fresh one
@@ -55,14 +54,12 @@ const restore = (name: string, value: string | undefined) => {
 };
 
 beforeAll(async () => {
-  server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });
-  const address = server.address();
-  const port = typeof address === 'string' ? 0 : address?.port;
-  baseUrl = `http://127.0.0.1:${port}`;
+  server = Bun.serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });
+  baseUrl = `http://127.0.0.1:${server.port}`;
 });
 
 afterAll(() => {
-  server?.close();
+  server?.stop(true);
 });
 
 afterEach(() => {

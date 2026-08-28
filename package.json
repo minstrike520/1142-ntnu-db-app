@@ -4,10 +4,16 @@
   "private": true,
   "scripts": {
     "dev": "docker compose up -d",
-    "build": "pnpm --filter near-chat-frontend build && pnpm --filter near-chat-backend build"
+    "build": "pnpm --filter near-chat-frontend build && pnpm --filter near-chat-backend build",
+    "check:node-engine": "node scripts/check-node-engine.mjs",
+    "test:node-engine": "node scripts/check-node-engine.test.mjs"
+  },
+  "devDependencies": {
+    "semver": "^7.8.5",
+    "yaml": "^2.8.1"
   },
   "packageManager": "pnpm@11.15.0",
   "engines": {
-    "node": ">=24"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   }
 }

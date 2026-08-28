@@ -95,9 +95,9 @@ describe("message list memo boundary", () => {
     expect(screen.getByText("Reply to Me User")).toBeTruthy();
 
     fireEvent.click(screen.getAllByText("Recall").at(-1)!);
-    const recalls = app.socket().emitted.filter((e) => e.event === "recall_message");
+    const recalls = __getApiCallLog("recallMessage");
     expect(recalls).toHaveLength(1);
-    expect(recalls[0].payload).toMatchObject({ messageId: messageId("room-1", 40) });
+    expect(recalls[0].args[1]).toBe(messageId("room-1", 40));
   });
 });
 

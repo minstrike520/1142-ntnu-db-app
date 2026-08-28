@@ -1,13 +1,15 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
-import request from 'supertest';
+import type { Hono } from 'hono';
+import { request } from '../../helpers/http';
 import { resetDb } from '../../helpers/resetDb';
+import type { AuthResponse, UserProfileResponse } from '../../helpers/responseTypes';
 
-let app: any;
+let app: Hono;
 
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
   const indexModule = await import('../../../src/index');
-  app = indexModule.app;
+  app = indexModule.honoApp;
 });
 
 describe('User E2E', () => {
@@ -16,7 +18,7 @@ describe('User E2E', () => {
 
   beforeEach(async () => {
     await resetDb();
-    const res = await request(app).post('/api/v1/auth/register').send({
+    const res = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'User',
       email: 'user@example.com',
       password: 'Password123!',
@@ -27,7 +29,7 @@ describe('User E2E', () => {
 
   it('should get current user profile', async () => {
     const res = await request(app)
-      .get('/api/v1/users/me')
+      .get<UserProfileResponse>('/api/v1/users/me')
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.userId).toBe(userId);

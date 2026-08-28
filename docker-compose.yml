@@ -15,6 +15,69 @@ services:
       timeout: 5s
       retries: 10
 
+  # Optional test dependency, not part of the dev stack: `profiles` keeps it out
+  # of a plain `docker compose up`, and naming it explicitly
+  # (`docker compose up -d --wait db-test`) auto-enables its profile, so no
+  # `--profile test` is needed. Lives here rather than in a separate compose
+  # file so it uses this project's default network instead of requiring one the
+  # dev stack must have created first.
+  db-test:
+    profiles: ["test"]
+    image: postgres:18-alpine
+    # Offset from dev `db` (5435) so both can run at once; `migrate:test` runs
+    # from the host and connects through this published port.
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ntnu_test
+    # tmpfs, not a volume: every run should start from an empty database.
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    # Offset like every other published port here (db 5435, backend 4005,
+    # frontend 3005) so a Redis already listening on the host's 6379 does not
+    # collide. That matters more than usual now that `backend` gates on this
+    # service being healthy: a failed port bind would also block `migrate:up`.
+    # Bound to loopback because this Redis has no password — the compose network
+    # is the only access control it has.
+    ports:
+      - "127.0.0.1:6385:6379"
+    # Everything kept here is derived, recoverable state (presence leases,
+    # typing TTLs, routing metadata, pub/sub); PostgreSQL stays canonical, so
+    # there is nothing to persist. Save points are switched *off* rather than
+    # left unused: with them on, one failed background save flips
+    # `stop-writes-on-bgsave-error` and Redis starts rejecting every write while
+    # still answering PING — the healthcheck below would stay green over a Redis
+    # that silently accepts nothing.
+    #
+    # Eviction is deliberately left at the `noeviction` default: presence leases
+    # and single-use ticket markers must fail loudly rather than disappear. A
+    # `maxmemory` cap (still with `noeviction`) belongs to the cross-node work in
+    # #283, once key cardinality is known.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    tmpfs:
+      # The image declares VOLUME /data, so without this every container
+      # recreate strands an anonymous volume — and the rebuild incantation this
+      # repo documents (`--renew-anon-volumes`) would make one each time, while
+      # docs/DEVELOPMENT.md tells developers never to run `down -v` to reap them.
+      - /data
+    healthcheck:
+      # `redis-cli ping` can exit 0 while printing an error reply, so assert the
+      # payload rather than just the exit status.
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       # Root context: this is a single-lockfile pnpm workspace, so the lockfile
@@ -32,9 +95,24 @@ services:
       # empty value still counts as set and would shadow backend/.env.test, which
       # is where the documented in-container test workflow gets this from.
       - DATABASE_URL_TEST
+      # Resolved inside this container, so the host is the compose service name
+      # `redis` — not `localhost:6385`, which is only the host-side mapping.
+      # Defaulted rather than required so a checkout whose .env predates this
+      # service still starts. Consumed by src/utils/redis.ts, which treats an
+      # unset or unreachable Redis as a degraded mode rather than a boot failure.
+      #
+      # `-` rather than `:-`: that degraded mode is a supported deployment, and
+      # an empty REDIS_URL is how .env.example says to ask for it. `:-` would
+      # substitute the default for an empty value too, leaving the opt-out
+      # unreachable for anyone running the documented compose flow.
+      - REDIS_URL=${REDIS_URL-redis://redis:6379}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED}
+      # Pass-through only, deliberately not `${LOG_LEVEL:-info}`: the logger
+      # already defaults to info, and a bare name keeps an unset host variable
+      # unset in the container instead of setting it to the empty string.
+      - LOG_LEVEL
       # The dev stack is reached directly on the published ports, with nothing in
       # front to write X-Forwarded-For, so no hop is trusted here. Both names are
       # pass-through only: set TRUST_PROXY_HOPS on the host if you put a proxy
@@ -47,6 +125,19 @@ services:
       - ATTACHMENT_ALLOWED_MIME_TYPES=${ATTACHMENT_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,application/pdf,application/zip,text/plain}
       - ATTACHMENT_ALLOWED_EXTENSIONS=${ATTACHMENT_ALLOWED_EXTENSIONS:-.jpg,.jpeg,.png,.gif,.pdf,.zip,.txt}
       - ATTACHMENT_MAX_BYTES=${ATTACHMENT_MAX_BYTES:-10485760}
+      - MAX_SESSIONS_PER_USER=${MAX_SESSIONS_PER_USER:-5}
+      - PRESENCE_GRACE_MS=${PRESENCE_GRACE_MS:-3000}
+      # How long a presence lease survives in Redis unrefreshed. It bounds how
+      # long a crashed instance keeps its users showing as online, because
+      # nothing runs on a dead process to hand the leases back.
+      - PRESENCE_TTL_MS=${PRESENCE_TTL_MS:-30000}
+      - TYPING_TTL_MS=${TYPING_TTL_MS:-3000}
+      # Pass-through only, like LOG_LEVEL: unset means the backend generates one
+      # per process. Worth setting where the orchestrator already has a stable
+      # per-replica name — a restarted process that reclaims its old name
+      # replaces its own presence lease instead of adding a second one that has
+      # to wait out the TTL.
+      - INSTANCE_ID
       - CI=true
     working_dir: /workspace/backend
     volumes:
@@ -64,7 +155,36 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Started, not healthy. src/utils/redis.ts treats Redis as a degraded mode
+      # rather than a boot dependency, and .env.example documents running without
+      # it as a supported deployment; gating startup on the healthcheck
+      # contradicts both, because a Redis that cannot bind its port would then
+      # stop the API from serving the routes that never touch Redis. Ordering is
+      # still worth keeping: starting redis first means the usual case connects
+      # on the first attempt instead of waiting out a watchdog tick.
+      redis:
+        condition: service_started
     command: sh -c "pnpm run migrate:up && pnpm run dev"
+    # Without this, `up --wait` returns as soon as the container is *running* —
+    # which here is while `migrate:up` is still going and nothing is listening
+    # yet. Anything that starts working immediately after `--wait` (the smoke
+    # suite in docs/DEVELOPMENT.md, a script, a person) would then hit a
+    # connection refused. `bun` is the app runtime, so it is always present;
+    # there is deliberately no curl/wget in this image to depend on.
+    #
+    # start_period covers the migration: failures during it do not count toward
+    # `retries`, so a slow first-run migration delays readiness rather than
+    # marking the service unhealthy.
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - "const r = await fetch('http://127.0.0.1:4000/api/v1/health'); process.exit(r.ok ? 0 : 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
 
   frontend:
     build:

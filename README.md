@@ -73,6 +73,7 @@ Here are the key environment parameters you can configure in `.env`:
 | Parameter | Description | Default Value |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | PostgreSQL connection URL | `postgresql://chatuser:chatpassword@db:5432/chatdb` |
+| `REDIS_URL` | Redis connection URL, resolved inside the backend container. Optional — an empty value runs realtime single-node instead of failing to start. Under Compose, blank it rather than deleting the line, which falls back to the default | `redis://redis:6379` |
 | `JWT_SECRET` | Secret key for signing JWT tokens | `dev_secret_key` |
 | `RATE_LIMIT_DISABLED` | Disables request rate limiting for testing | `true` (Set `false` or omit in production) |
 | `TRUST_PROXY_HOPS` | How many reverse proxies you operate sit in front of the backend. Rate limiting then reads the client IP that many entries from the **right** of `X-Forwarded-For`, so entries a caller prepends cannot select a bucket. Leave unset for the dev stack, which is reached directly; `docker-compose.prod.yml` pins `1` for cloudflared | *(Empty — trust nothing)* |
@@ -108,6 +109,7 @@ docker compose exec backend pnpm run db:seed
 | **Frontend App** | [http://localhost:3005](http://localhost:3005) | Main Next.js web application |
 | **Backend API** | [http://localhost:4005](http://localhost:4005) | Bun + Hono API & Socket.IO server |
 | **PostgreSQL Database** | `localhost:5435` | PostgreSQL 18 instance (Mapped from internal port `5432`) |
+| **Redis** | `localhost:6385` | Redis 8 instance for realtime state (Mapped from internal port `6379`, bound to `127.0.0.1`) |
 
 ---
 
@@ -129,7 +131,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 ### 3. Run Database Migrations
 Run the pending database migrations on the production container:
 ```bash
-docker compose -f docker-compose.prod.yml exec backend pnpm run migrate:up
+docker compose -f docker-compose.prod.yml exec backend bun run migrate:up
 ```
 
 ### 4. Stopping Services

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
-import request from 'supertest';
-import { app } from '../../../src/index';
+import { request } from '../../helpers/http';
+import { honoApp as app } from '../../../src/index';
 import { testPool } from '../../helpers/testPool';
 import { resetDb } from '../../helpers/resetDb';
+import type { AuthResponse, MessageResponse, RoomResponse } from '../../helpers/responseTypes';
 
 describe('Message E2E', () => {
   let token: string;
@@ -14,7 +15,7 @@ describe('Message E2E', () => {
 
     // Register User
     const regRes = await request(app)
-      .post('/api/v1/auth/register')
+      .post<AuthResponse>('/api/v1/auth/register')
       .send({
         name: 'Message User',
         email: 'msguser@test.com',
@@ -25,7 +26,7 @@ describe('Message E2E', () => {
 
     // Create Room
     const roomRes = await request(app)
-      .post('/api/v1/rooms')
+      .post<RoomResponse>('/api/v1/rooms')
       .set('Authorization', `Bearer ${token}`)
       .send({
         type: 'group',
@@ -41,7 +42,7 @@ describe('Message E2E', () => {
     `;
 
     const res = await request(app)
-      .get(`/api/v1/rooms/${roomId}/messages`)
+      .get<MessageResponse[]>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${token}`);
     
     expect(res.status).toBe(200);
@@ -51,7 +52,7 @@ describe('Message E2E', () => {
   });
 
   it('should reject pending members when listing messages', async () => {
-    const pendingRes = await request(app).post('/api/v1/auth/register').send({
+    const pendingRes = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'Pending User',
       email: 'pending@example.com',
       password: 'Password123!',
@@ -64,7 +65,7 @@ describe('Message E2E', () => {
     `;
 
     const res = await request(app)
-      .get(`/api/v1/rooms/${roomId}/messages`)
+      .get<MessageResponse[]>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${pendingRes.body.token}`);
 
     expect(res.status).toBe(403);
@@ -72,7 +73,7 @@ describe('Message E2E', () => {
 
   it('should hide pre-join messages when room viewHistory is false', async () => {
     const hiddenRoomRes = await request(app)
-      .post('/api/v1/rooms')
+      .post<RoomResponse>('/api/v1/rooms')
       .set('Authorization', `Bearer ${token}`)
       .send({
         type: 'group',
@@ -87,7 +88,7 @@ describe('Message E2E', () => {
       INSERT INTO messages (room_id, sender_id, content, sent_at) VALUES (${hiddenRoomId}, ${userId}, ${beforeContent}, ${beforeTime})
     `;
 
-    const newUserRes = await request(app).post('/api/v1/auth/register').send({
+    const newUserRes = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'New Member',
       email: 'new-member@example.com',
       password: 'Password123!',
@@ -107,7 +108,7 @@ describe('Message E2E', () => {
     `;
 
     const res = await request(app)
-      .get(`/api/v1/rooms/${hiddenRoomId}/messages`)
+      .get<MessageResponse[]>(`/api/v1/rooms/${hiddenRoomId}/messages`)
       .set('Authorization', `Bearer ${newUserRes.body.token}`);
 
     expect(res.status).toBe(200);

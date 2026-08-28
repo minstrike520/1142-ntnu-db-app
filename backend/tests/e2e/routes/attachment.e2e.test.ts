@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
-import request from 'supertest';
-import { app } from '../../../src/index';
+import { describe, it, expect, beforeEach } from 'bun:test';
+import { request } from '../../helpers/http';
+import { honoApp as app } from '../../../src/index';
 import { testPool } from '../../helpers/testPool';
 import { resetDb } from '../../helpers/resetDb';
+import type { AttachmentResponse, AuthResponse, RoomResponse } from '../../helpers/responseTypes';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -16,7 +17,7 @@ describe('Attachment E2E', () => {
     await resetDb();
 
     const regRes = await request(app)
-      .post('/api/v1/auth/register')
+      .post<AuthResponse>('/api/v1/auth/register')
       .send({
         name: 'Attachment User',
         email: 'attachment@test.com',
@@ -26,7 +27,7 @@ describe('Attachment E2E', () => {
     userId = regRes.body.user.userId;
 
     const roomRes = await request(app)
-      .post('/api/v1/rooms')
+      .post<RoomResponse>('/api/v1/rooms')
       .set('Authorization', `Bearer ${userToken}`)
       .send({
         type: 'group',
@@ -43,7 +44,7 @@ describe('Attachment E2E', () => {
 
   it('should upload an attachment successfully', async () => {
     const res = await request(app)
-      .post('/api/v1/attachments')
+      .post<AttachmentResponse>('/api/v1/attachments')
       .set('Authorization', `Bearer ${userToken}`)
       .attach('file', Buffer.from('test file content'), 'test.txt');
 
@@ -56,7 +57,7 @@ describe('Attachment E2E', () => {
 
   it('should return 400 if no file is provided', async () => {
     const res = await request(app)
-      .post('/api/v1/attachments')
+      .post<AttachmentResponse>('/api/v1/attachments')
       .set('Authorization', `Bearer ${userToken}`);
 
     expect(res.status).toBe(400);
@@ -64,14 +65,14 @@ describe('Attachment E2E', () => {
 
   it('should fetch metadata for an unassigned attachment uploaded by the user', async () => {
     const uploadRes = await request(app)
-      .post('/api/v1/attachments')
+      .post<AttachmentResponse>('/api/v1/attachments')
       .set('Authorization', `Bearer ${userToken}`)
       .attach('file', Buffer.from('test metadata file'), 'meta.txt');
 
     const attachmentId = uploadRes.body.attachmentId;
 
     const getRes = await request(app)
-      .get(`/api/v1/attachments/${attachmentId}`)
+      .get<AttachmentResponse>(`/api/v1/attachments/${attachmentId}`)
       .set('Authorization', `Bearer ${userToken}`)
       .set('Accept', 'application/json');
 
@@ -82,7 +83,7 @@ describe('Attachment E2E', () => {
 
   it('should fetch metadata for an attachment linked to a room message if user is in that room', async () => {
     const uploadRes = await request(app)
-      .post('/api/v1/attachments')
+      .post<AttachmentResponse>('/api/v1/attachments')
       .set('Authorization', `Bearer ${userToken}`)
       .attach('file', Buffer.from('room attachment content'), 'room_file.txt');
 
@@ -93,7 +94,7 @@ describe('Attachment E2E', () => {
     `;
 
     const getRes = await request(app)
-      .get(`/api/v1/attachments/${attachmentId}`)
+      .get<AttachmentResponse>(`/api/v1/attachments/${attachmentId}`)
       .set('Authorization', `Bearer ${userToken}`)
       .set('Accept', 'application/json');
 

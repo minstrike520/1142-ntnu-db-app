@@ -82,11 +82,91 @@ Docker Compose exposes different host ports from the container-internal ports:
 | **Frontend** | [http://localhost:3005](http://localhost:3005) | 3000 | Next.js frontend web app |
 | **Backend API** | [http://localhost:4005](http://localhost:4005) | 4000 | Bun + Hono API & Socket.IO server |
 | **Database** | `localhost:5435` | 5432 | PostgreSQL 18 instance |
+| **Redis** | `localhost:6385` | 6379 | Redis 8 instance for realtime state. Bound to `127.0.0.1` only — it runs without a password. The backend connects at boot but never depends on it: an unreachable Redis degrades realtime, it does not stop the API |
 
 For browser-facing frontend requests, set the API environment variable to:
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:4005
 ```
+
+### Realtime runtime and smoke checks
+
+The backend production listener is a single `Bun.serve` instance. Hono handles
+REST requests and `@socket.io/bun-engine` handles `/socket.io/`. Socket.IO uses
+a 25-second ping interval and a 20-second ping timeout, so Bun's `idleTimeout`
+must stay above that window.
+
+Durable message commands use REST and require an `Idempotency-Key`; edit and
+recall also require `If-Match`. After connecting, clients call `/api/v1/sync`
+with their last cursor.
+
+`backend/scripts/smoke.ts` (`pnpm --filter near-chat-backend run smoke`, or
+`bun run smoke` from `backend/`) is the automated realtime smoke test against
+a running stack. It registers a throwaway user and exercises health, socket
+connect (`realtime_ready`), a reliably-sent message (retried `Idempotency-Key`
+resolves to one message), sync-cursor repair after a disconnect, and
+over-limit auth requests (`429`/`TOO_MANY_REQUESTS`). It reads the target from
+`SMOKE_API_URL` (default `http://localhost:4005`) and exits non-zero with a
+per-check diagnostic on the first failure.
+
+The last check needs the rate limiter actually running, and `.env.example`
+ships `RATE_LIMIT_DISABLED=true` for everyday development — so override it for
+the smoke stack rather than running the default one:
+
+```bash
+RATE_LIMIT_DISABLED=false docker compose up -d --wait --force-recreate backend
+SMOKE_API_URL=http://localhost:4005 pnpm --filter near-chat-backend run smoke
+```
+
+`--force-recreate backend` is what makes the override take effect: Compose does
+not restart an already-running container just because an interpolated
+environment variable changed.
+
+Set `SMOKE_STATE_FILE` to a path to additionally verify that durable state
+survives a restart. The first run writes its token, room and message id there;
+a later run against the same file re-syncs with that saved token and asserts
+the pre-restart message is still returned, so a restart that dropped data fails
+rather than passing on freshly created state.
+
+CI runs this same script against both the development image
+(`docker-compose.yml`) and the production image (`docker-compose.release.yml`)
+in `ci-backend.yml`, once before and once after gracefully restarting the
+backend container, sharing one `SMOKE_STATE_FILE` across the pair — so a broken
+image, or a restart that loses committed state, fails the build.
+
+`MAX_SESSIONS_PER_USER`, `PRESENCE_GRACE_MS`, `TYPING_TTL_MS` and
+`SESSION_RESERVATION_TTL_MS` control local session, presence-reconnect,
+typing-indication and handshake-slot limits; like every other backend variable
+they are declared in `backend/src/config/env.ts`.
+
+`PRESENCE_TTL_MS` and `INSTANCE_ID` belong to the presence leases the backend
+keeps in Redis. With `REDIS_URL` set, each instance holds one lease per user it
+has a connection for — `presence:user:{userId}` is a hash with one field per
+instance, and each field expires on its own — so `GET /rooms` and `GET /friends`
+answer for the whole deployment rather than for one process, and a user is
+announced online only on the first connection anywhere and offline only when the
+last one goes. `PRESENCE_TTL_MS` bounds how long a crashed instance keeps its
+users showing as online: nothing runs on a dead process to hand the leases back,
+so only the expiry does it. Every lease is refreshed three times per TTL, and a
+graceful shutdown hands them all back rather than waiting the TTL out. That last
+part only holds if SIGTERM actually reaches the process: the container has to
+leave the application at PID 1 (hence the `exec` in `backend/Dockerfile.prod`'s
+CMD) and allow enough time for the drain to finish (hence
+`stop_grace_period: 30s` on the backend service). Get either wrong and the
+container is SIGKILLed with its leases still held, which looks exactly like a
+crashed instance — see docs/RELEASE.md for the full stop contract.
+`INSTANCE_ID` names this process in that hash; left unset one is generated per
+start, which is fine unless your orchestrator already has a stable per-replica
+name to reuse. Per-field TTLs need **Redis 7.4 or newer** — against an older
+server the write fails, the backend logs the requirement once, and presence
+falls back to this instance only.
+
+What is *not* shared yet is the `user_status` push: `io.to()` reaches only the
+sockets held by the emitting process, so a friend connected to a different
+instance sees the change on their next `GET /friends` rather than over the
+socket. Closing that is the Redis event bus in #475/#476. The per-user session
+limit, global rate limits and cross-node change fan-out also remain
+per-instance, so a replica count above one is not yet a supported deployment.
 
 ### Production Ingress & Proxy Trust
 
@@ -148,6 +228,8 @@ before testing.
 1. **Frontend prefix**: Any environment variable that must be readable on the browser-side of Next.js must be prefixed with `NEXT_PUBLIC_`.
 2. **Production injection**: Production should not depend on a checked-in `.env` file. Inject settings through your hosting platform configuration instead (e.g. Vercel, AWS Secrets Manager).
 3. **Template maintenance**: When adding new environment variables, update `.env.example` to document them, leaving values blank or using placeholders.
+4. **Backend variables live in one module**: [`backend/src/config/env.ts`](../backend/src/config/env.ts) declares every variable the API server reads, with its parser and default, and is the authoritative list — read it rather than grepping for `process.env`. A new backend variable is added there, not at the call site.
+5. **Startup validation**: the server validates its environment once, at boot. A value it cannot use is logged (`Ignoring unusable environment values: …`) and replaced by its default; a missing `DATABASE_URL`, or a missing `JWT_SECRET` under `NODE_ENV=production`, exits non-zero instead of starting. A blank value counts as unset, because Compose passes a variable absent from `.env` through as an empty string.
 
 ---
 
@@ -171,11 +253,86 @@ docker compose exec backend bun run db:seed
 - **Rollback migrations**: `docker compose exec backend bun run migrate:down` (rolls back the single most recent migration; pass a count to undo more, e.g. `migrate:down 3`)
 - **Seed database**: `docker compose exec backend bun run db:seed`
 
-Migrations are plain SQL files under `backend/migrations/`, each split into an
-`-- Up migration` and a `-- Down migration` section. They are applied by
-`backend/src/models/migrate.ts`, a Bun.SQL runner: it applies every pending
-migration in one transaction, guards concurrent runs with a PostgreSQL advisory
-lock, and records what it applied in the `pgmigrations` table.
+#### Choosing which database to migrate
+
+`migrate:up` / `migrate:down` accept `--database-url=<connection string>`, which
+takes precedence over `DATABASE_URL`:
+
+```bash
+bun src/models/migrate.ts up --database-url=postgresql://postgres:postgres@localhost:5436/ntnu_test
+```
+
+Without the flag the runner falls back to `DATABASE_URL`, so the commands above
+are unchanged. Naming the target in the command is the safer habit: bun loads
+the root `.env` automatically, so `bun run migrate:up` in the project directory
+migrates whatever that file happens to point at.
+
+A target whose host is not `localhost`, `127.0.0.1`, `::1`, `db` or `db-test`
+must be confirmed before anything is opened or locked — type the database name
+at the prompt, or pass `--yes` for a non-interactive run. Either way the runner
+prints `MIGRATE: target=<host>/<database>` first; the connection string itself,
+which carries credentials, is never logged.
+
+### Granting Admin Access
+
+`/api/v1/admin/*` is gated by the `users.is_admin` column. Every account starts
+with `is_admin = false`, including seeded ones, and there is deliberately **no
+HTTP endpoint that sets the flag** — `is_admin` is absent from the repository's
+`update` allow-list, so it cannot be reached through `PATCH /api/v1/users/me`.
+
+Promote an account with a direct database write:
+
+```bash
+docker compose exec db psql -U chatuser -d chatdb \
+  -c "UPDATE users SET is_admin = true WHERE email = 'alice@test.com';"
+```
+
+Verify the gate (a non-admin gets 403, an admin gets 200):
+
+```bash
+curl -i -s http://localhost:4005/api/v1/admin/health -H "Authorization: Bearer <token>" | head -1
+```
+
+Revoke by setting the column back to `false`; it takes effect on the caller's
+next request, because the flag is read from the database per request rather than
+carried in the JWT.
+
+There is intentionally no `SYSTEM_ADMIN_EMAILS`-style environment allow-list.
+`PATCH /api/v1/users/me` lets any authenticated user change their own email with
+only a uniqueness check — no current-password confirmation, unlike a password
+change — and `users.email` is a plain case-sensitive `UNIQUE` column, so
+`Ops@company.com` can be inserted alongside `ops@company.com`. Matching admins by
+email would therefore be self-service privilege escalation.
+
+### About the Migration Runner
+Migrations are applied by `backend/src/models/migrate.ts`, a small runner built on
+`Bun.SQL`. It replaced `node-pg-migrate` in #421 so the backend depends on Bun
+alone — no Node runtime, no `pg` driver.
+
+What it does:
+
+- Applies every `.sql` file in `backend/migrations/`, ordered by the numeric
+  prefix in the file name, and records each one by name in the `pgmigrations`
+  table. A file already recorded there is never re-applied.
+- Splits each file on its `-- Up Migration` and `-- Down Migration` headers.
+- Runs a whole invocation in **one transaction**. If any migration fails,
+  nothing from that run is committed and the error names the file that failed.
+- Takes a PostgreSQL advisory lock first, so two containers starting at once
+  cannot migrate concurrently — the second exits with
+  `Another migration is already running.`
+- Refuses to start if `backend/migrations/` contains a non-`.sql` file, rather
+  than skipping it silently.
+- Stops with `Not run migration … is preceding already run migration …` when a
+  branch merge leaves a new migration ordered before one already applied. Rename
+  the file with a higher prefix so it sorts last.
+
+The `pgmigrations` table, the recorded names, the ordering rules and the
+advisory lock id are all unchanged from `node-pg-migrate`, so databases migrated
+by the old tool continue from exactly where they left off.
+
+Migrations are SQL only. `migrate:create <name>` writes a new file under
+`backend/migrations/` containing both section headers, with a numeric prefix
+chosen so it always sorts after the existing migrations.
 
 ### Repairing a Broken Dev Database
 If you encounter `relation ... already exists` errors during migration, or migration state goes out of sync:
@@ -229,7 +386,20 @@ Running `db:seed` populates the development database with the following reproduc
 ### Testing Architecture
 The development environment runs entirely within Docker. There is no `node_modules` on the host machine. All Bun test suites must be executed inside the backend container using `docker compose exec`.
 
-Testing database setup: Integration tests run against an ephemeral Postgres test database instance (`db-test`) defined in `docker-compose.test.yml`, separating development data from tests.
+Backend route E2E tests call the exported Hono application through the shared
+`tests/helpers/http.ts` helper. The helper builds standard `Request` objects via
+`app.request()` and parses standard `Response` objects, including JSON, cookies,
+and multipart uploads; no HTTP server or network socket is started for route
+tests. The Socket.IO E2E suite remains network-level because it explicitly tests
+the Bun listener and websocket transport.
+
+Testing database setup: Integration tests run against an ephemeral Postgres test database instance (`db-test`), separating development data from tests. `db-test` is defined in `docker-compose.yml` alongside the regular dev services, but sits behind the `test` Compose profile, so a plain `docker compose up -d` never starts it. Start it explicitly when you need it:
+
+```bash
+docker compose up -d --wait db-test
+```
+
+Naming the service auto-enables its profile, so `--profile test` is not required. From `backend/`, `pnpm run test:db:up` does the same and then applies migrations, and `pnpm run test:db:down` stops and removes **only** `db-test`, leaving a running dev stack untouched. Note that `docker compose down --remove-orphans` does cover `db-test`, so it will take a running test DB with it.
 
 ### Installing Dependencies
 This repository is a **single-lockfile pnpm workspace**. There is exactly one
@@ -289,6 +459,95 @@ pnpm --filter near-chat-frontend lint
 # Or run it inside the frontend Docker container
 docker compose exec frontend pnpm run lint
 ```
+
+### Running Frontend Browser Tests (Playwright)
+These run on the host, not in Docker, and are separate from the Vitest suite in `frontend/tests/`. They exercise a real Chromium against a production build of the frontend; every `/api/v1` call is mocked in the browser, so no backend and no database are needed.
+
+Chromium is not bundled with the npm package. Install it once per machine:
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+```
+
+Then run the suite. `playwright.config.ts` builds and starts Next.js itself, so no server needs to be running first:
+
+```bash
+pnpm --filter near-chat-frontend test:browser
+```
+
+On failure, the HTML report, traces and screenshots land in `frontend/playwright-report/` and `frontend/test-results/`:
+
+```bash
+pnpm --filter near-chat-frontend exec playwright show-report
+```
+
+Specs live in `frontend/tests-browser/`, and the shared REST mock is
+`frontend/tests-browser/support/api-mock.ts`. The real-stack suite below has a
+separate test directory and config, but runs as the `fullstack-browser-tests` job
+in the existing `.github/workflows/ci-browser.yml` workflow.
+
+### Running Full-Stack Browser Tests
+
+The full-stack suite does not mock application APIs. Chromium drives a
+production Next.js build, fixtures create prerequisite data through the real
+REST API, and assertions cross the Bun backend, PostgreSQL and Socket.IO. Because
+`playwright.fullstack.config.ts` intentionally has no `webServer`, start the
+database and both application processes before running the suite.
+
+Run all commands from the repository root. Install Chromium once per machine,
+then start the ephemeral `db-test` service and apply migrations:
+
+```bash
+pnpm --filter near-chat-frontend exec playwright install chromium
+pnpm --filter near-chat-backend test:db:up
+```
+
+In **terminal A**, start the backend on port 4000:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5436/ntnu_test \
+NODE_ENV=development \
+PORT=4000 \
+JWT_SECRET=local-fullstack-browser-e2e-secret \
+CORS_ORIGINS=http://127.0.0.1:3000 \
+REDIS_URL='' \
+RATE_LIMIT_DISABLED=true \
+pnpm --filter near-chat-backend start
+```
+
+In **terminal B**, build and start the production frontend on port 3000:
+
+```bash
+NEXT_PUBLIC_API_URL=http://127.0.0.1:4000 \
+pnpm --filter near-chat-frontend exec next build
+
+NEXT_PUBLIC_API_URL=http://127.0.0.1:4000 \
+pnpm --filter near-chat-frontend exec next start --hostname 127.0.0.1 --port 3000
+```
+
+After both servers are ready, run the suite in **terminal C**:
+
+```bash
+E2E_FRONTEND_ORIGIN=http://127.0.0.1:3000 \
+E2E_API_ORIGIN=http://127.0.0.1:4000 \
+CI=1 \
+pnpm --filter near-chat-frontend test:browser:fullstack
+```
+
+Keep `127.0.0.1` consistent across all three terminals: the refresh cookie is
+`SameSite=Strict`, so mixing it with `localhost` breaks session bootstrap.
+`NODE_ENV=development` keeps the refresh cookie usable over local HTTP, and the
+empty `REDIS_URL` is intentional for this single-backend topology.
+
+Stop the backend and frontend with `Ctrl+C`, then remove only the ephemeral test
+database (the development database is unaffected):
+
+```bash
+pnpm --filter near-chat-backend test:db:down
+```
+
+On failure, diagnostics land in `frontend/playwright-report-fullstack/` and
+`frontend/test-results-fullstack/`.
 
 ### Running Unit Tests
 Unit tests do not require a database connection.
@@ -398,11 +657,31 @@ describe('userRepository', () => {
   ```bash
   cp backend/.env.test.example backend/.env.test
   ```
-* **`db-test` connection hangs/timeouts**: Ensure `db-test` is running using `docker compose -f docker-compose.test.yml ps`. Spin it up if down.
+* **`db-test` connection hangs/timeouts**: Ensure `db-test` is running using `docker compose ps db-test`. Spin it up with `docker compose up -d --wait db-test` if down.
 * **`TRUNCATE` failures**: Make sure migrations were applied to the test DB using:
   ```bash
   docker compose exec -e DATABASE_URL=postgresql://postgres:postgres@db-test:5432/ntnu_test backend bun run migrate:up
   ```
+* **`docker compose ps` shows `redis` unhealthy or exited**: the backend starts
+  and serves anyway — the API is unaffected and realtime falls back to
+  single-node — so this surfaces as missing presence and typing updates rather
+  than as a failed boot. `docker compose up -d --wait` still reports a failure,
+  because it waits on every service's healthcheck regardless of who depends on
+  it. The usual cause is the host port: check for `port is already allocated` in
+  `docker compose logs redis`, and free `127.0.0.1:6385` or change the mapping in
+  `docker-compose.yml`.
+* **Checking that the backend can actually reach Redis**: the backend image has
+  no `redis-cli`, and its shell is not bash, so `/dev/tcp` is unavailable. Node
+  is present, so use it to prove that `REDIS_URL` landed in the container and
+  resolves:
+  ```bash
+  docker compose exec backend node -e "const u=new URL(process.env.REDIS_URL);require('net').createConnection(u.port||6379,u.hostname).on('connect',()=>{console.log('ok');process.exit(0)}).on('error',e=>{console.error(e.message);process.exit(1)})"
+  ```
+* **Redis logs a memory-overcommit or transparent-hugepage warning at startup**:
+  expected, and safe to ignore here. Those warnings are about `fork()` for
+  background saves, which this deployment disables (`--save "" --appendonly no`).
+  `vm.overcommit_memory` is not namespaced, so it cannot be set per container
+  anyway.
 
 ---
 

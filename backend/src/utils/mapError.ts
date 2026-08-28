@@ -1,4 +1,5 @@
 import { AppError } from './AppError';
+import { env } from '../config/env';
 import type { ApiError } from '@shared/types';
 
 export const mapErrorToApiShape = (err: unknown): ApiError => {
@@ -23,7 +24,7 @@ export const mapErrorToApiShape = (err: unknown): ApiError => {
   }
 
   // Unknown / unexpected errors
-  if (process.env.NODE_ENV !== 'test') {
+  if (!env().isTest) {
     console.error("APP ERROR:", err);
   }
   return {
