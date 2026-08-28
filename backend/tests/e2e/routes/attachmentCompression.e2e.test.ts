@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
-import request from 'supertest';
+import { request } from '../../helpers/http';
 import sharp from 'sharp';
 import { resetDb } from '../../helpers/resetDb';
 
@@ -8,7 +8,7 @@ let app: any;
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
   const indexModule = await import('../../../src/index');
-  app = indexModule.app;
+  app = indexModule.honoApp;
 });
 
 // attachment.e2e.test.ts only uploads plain text, so nothing there exercises

@@ -86,9 +86,8 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 ### 即時通訊 runtime 與 smoke check
 
 後端 production listener 是單一 `Bun.serve`。Hono 處理 REST，
-`@socket.io/bun-engine` 處理 `/socket.io/`；舊 Node HTTP adapter 只供
-supertest 相容測試使用。Socket.IO ping interval 為 25 秒、ping timeout 為
-20 秒，因此 Bun `idleTimeout` 必須大於此視窗。
+`@socket.io/bun-engine` 處理 `/socket.io/`。Socket.IO ping interval 為 25 秒、
+ping timeout 為 20 秒，因此 Bun `idleTimeout` 必須大於此視窗。
 
 持久化訊息命令走 REST 並必須帶 `Idempotency-Key`；編輯與收回另需
 `If-Match`。連線後客戶端以最後 cursor 呼叫 `/api/v1/sync`。
@@ -349,6 +348,12 @@ docker compose exec backend bun run migrate:up
 
 ### 測試架構
 開發環境完全運行於 Docker 中，主機上沒有 `node_modules`。所有 Bun 測試套件都必須在後端容器內部使用 `docker compose exec` 執行。
+
+Backend route E2E tests 透過共用的 `tests/helpers/http.ts`，直接呼叫 export
+的 Hono application。這個 helper 使用 `app.request()` 建立標準 `Request`，並
+解析標準 `Response`，包含 JSON、cookie 與 multipart upload；route tests 不會
+啟動 HTTP server 或 network socket。Socket.IO E2E suite 仍然走 network-level，
+因為它明確驗證 Bun listener 與 websocket transport。
 
 測試資料庫設定：整合測試會在一台臨時的 Postgres 測試資料庫實例（`db-test`）上運行，以將開發數據與測試數據隔離開來。`db-test` 與一般 dev services 一同定義在 `docker-compose.yml`，但被歸在 `test` 這個 Compose profile 之下，因此單純執行 `docker compose up -d` 不會啟動它。需要時請明確指定：
 

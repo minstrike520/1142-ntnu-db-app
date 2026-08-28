@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
-import request from 'supertest';
+import { request } from '../../helpers/http';
 import { resetDb } from '../../helpers/resetDb';
 import { testPool } from '../../helpers/testPool';
 
@@ -24,7 +24,7 @@ describe('API routes E2E', () => {
     process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
     process.env.CORS_ORIGINS = 'http://allowed.example,http://localhost:3005';
     const indexModule = await import('../../../src/index');
-    app = indexModule.app;
+    app = indexModule.honoApp;
   });
 
   beforeEach(async () => {

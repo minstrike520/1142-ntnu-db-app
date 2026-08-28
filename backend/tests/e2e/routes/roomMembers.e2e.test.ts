@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'bun:test';
-import request from 'supertest';
+import { request } from '../../helpers/http';
 import { resetDb } from '../../helpers/resetDb';
 import { testPool } from '../../helpers/testPool';
 
@@ -8,7 +8,7 @@ let app: any;
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
   const indexModule = await import('../../../src/index');
-  app = indexModule.app;
+  app = indexModule.honoApp;
 });
 
 describe('Room Members E2E', () => {

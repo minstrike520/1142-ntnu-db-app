@@ -8,16 +8,15 @@ import { createRedis } from './bootstrap/redis';
 import { createPresence } from './bootstrap/presence';
 import { createBunRuntimeServer, createRealtime } from './bootstrap/realtime';
 import { createRealtimePublisher } from './realtime/publisher';
-import { createHttpCompatibilityServer } from './bootstrap/httpCompat';
 import { startJobs } from './bootstrap/jobs';
 import { startServer } from './bootstrap/start';
 
 /**
  * Composition root.
  *
- * Production has one Bun server for Hono and Socket.IO. `app` remains a small
- * Node-shaped compatibility server solely for the existing supertest suite;
- * it is never used by the production listener.
+ * Production has one Bun server for Hono and Socket.IO. The Hono application is
+ * exported for direct Web-standard request testing; the Bun facade is used only
+ * when the real entrypoint starts listening.
  */
 const config = createConfig();
 const repositories = createRepositories(db);
@@ -27,7 +26,6 @@ const services = createServices({ repositories, publisher });
 const honoApp = createHttpApp({ services, config });
 const realtime = createRealtime({ config, repositories, publisher });
 const server = createBunRuntimeServer({ app: honoApp, engine: realtime.engine });
-const app = createHttpCompatibilityServer(honoApp);
 const io = realtime.io;
 
 /**
@@ -123,4 +121,4 @@ if (require.main === module) {
   process.once('SIGINT', () => shutdown('SIGINT'));
 }
 
-export { app, honoApp, server, io, redis };
+export { honoApp, server, io, redis };

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
-import request from 'supertest';
+import { request } from '../../helpers/http';
 import sharp from 'sharp';
 import { resetDb } from '../../helpers/resetDb';
 
@@ -18,7 +18,7 @@ const makeRealPngBuffer = () =>
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
   const indexModule = await import('../../../src/index');
-  app = indexModule.app;
+  app = indexModule.honoApp;
 });
 
 describe('Room E2E', () => {

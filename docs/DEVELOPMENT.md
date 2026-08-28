@@ -92,10 +92,9 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 ### Realtime runtime and smoke checks
 
 The backend production listener is a single `Bun.serve` instance. Hono handles
-REST requests and `@socket.io/bun-engine` handles `/socket.io/`; the old Node
-HTTP adapter is used only by the supertest compatibility harness. Socket.IO
-uses a 25-second ping interval and a 20-second ping timeout, so Bun's
-`idleTimeout` must stay above that window.
+REST requests and `@socket.io/bun-engine` handles `/socket.io/`. Socket.IO uses
+a 25-second ping interval and a 20-second ping timeout, so Bun's `idleTimeout`
+must stay above that window.
 
 Durable message commands use REST and require an `Idempotency-Key`; edit and
 recall also require `If-Match`. After connecting, clients call `/api/v1/sync`
@@ -386,6 +385,13 @@ Running `db:seed` populates the development database with the following reproduc
 
 ### Testing Architecture
 The development environment runs entirely within Docker. There is no `node_modules` on the host machine. All Bun test suites must be executed inside the backend container using `docker compose exec`.
+
+Backend route E2E tests call the exported Hono application through the shared
+`tests/helpers/http.ts` helper. The helper builds standard `Request` objects via
+`app.request()` and parses standard `Response` objects, including JSON, cookies,
+and multipart uploads; no HTTP server or network socket is started for route
+tests. The Socket.IO E2E suite remains network-level because it explicitly tests
+the Bun listener and websocket transport.
 
 Testing database setup: Integration tests run against an ephemeral Postgres test database instance (`db-test`), separating development data from tests. `db-test` is defined in `docker-compose.yml` alongside the regular dev services, but sits behind the `test` Compose profile, so a plain `docker compose up -d` never starts it. Start it explicitly when you need it:
 

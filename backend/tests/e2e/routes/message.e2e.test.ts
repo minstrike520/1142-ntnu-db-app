@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
-import request from 'supertest';
-import { app } from '../../../src/index';
+import { request } from '../../helpers/http';
+import { honoApp as app } from '../../../src/index';
 import { testPool } from '../../helpers/testPool';
 import { resetDb } from '../../helpers/resetDb';
 
