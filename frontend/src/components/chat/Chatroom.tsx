@@ -355,6 +355,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [msgSearchQuery, setMsgSearchQuery] = useState("");
+  const currentRoomIdRef = useRef(roomId);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -370,6 +371,10 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
   useEffect(() => {
     rememberRoom(roomId);
   }, [roomId, rememberRoom]);
+
+  useLayoutEffect(() => {
+    currentRoomIdRef.current = roomId;
+  }, [roomId]);
 
   const activeRoom = rooms.find((r) => r.id === roomId);
   const currentMember = activeRoom?.members?.find((m) => m.userId === user.userId || m.name === user.username);
@@ -792,7 +797,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
           replyTarget: null,
         });
         setRoomUploadStatus(sendRoomId, false);
-        if (roomId !== sendRoomId) {
+        if (currentRoomIdRef.current !== sendRoomId) {
           handleTyping(sendRoomId, false);
           return;
         }
@@ -806,7 +811,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
       setReplyTarget(null);
     } catch (error) {
       setRoomUploadStatus(sendRoomId, false);
-      if (roomId !== sendRoomId) return;
+      if (currentRoomIdRef.current !== sendRoomId) return;
       reportActionError(error, "Failed to send message");
     }
   };

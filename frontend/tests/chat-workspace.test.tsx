@@ -184,6 +184,28 @@ describe("pending attachment preservation", () => {
     expect(__getApiCallLog("createMessage")).toHaveLength(1);
   });
 
+  test("does not clear the next room draft when an upload completes", async () => {
+    const app = await mountChatApp("/chat/room-1");
+    const releaseUpload = __holdNextAttachmentUpload();
+
+    attachFile(app.view.container, "quarterly.txt");
+    await app.settle();
+    fireEvent.click(screen.getByText("Send"));
+    await waitFor(() => expect(screen.getByText("Uploading...")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Beta Group"));
+    await app.settle();
+    fireEvent.change(composer(), { target: { value: "draft for beta" } });
+    await app.settle();
+
+    releaseUpload();
+    await app.settle();
+
+    expect(composer().value).toBe("draft for beta");
+    expect(__getApiCallLog("uploadAttachment")).toHaveLength(1);
+    expect(__getApiCallLog("createMessage")).toHaveLength(1);
+  });
+
   test("keeps unsent attachments across navigation", async () => {
     const app = await mountChatApp("/chat/room-1");
 
