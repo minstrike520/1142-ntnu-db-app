@@ -1,11 +1,13 @@
+import type { Hono } from 'hono';
 import { describe, it, expect, beforeAll, beforeEach } from 'bun:test';
 import { request } from '../../helpers/http';
 import { resetDb } from '../../helpers/resetDb';
+import type { AdminHealthResponse, AuthResponse, AdminLogsResponse, AdminMetricsResponse, AdminSlowQueriesResponse } from '../../helpers/responseTypes';
 import { testPool } from '../../helpers/testPool';
 import { createLogger, recentLogs } from '../../../src/utils/logger';
 import { slowQueries } from '../../../src/utils/slowQueryStore';
 
-let app: any;
+let app: Hono;
 
 beforeAll(async () => {
   process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
@@ -14,7 +16,7 @@ beforeAll(async () => {
 });
 
 const registerUser = async (email: string): Promise<{ token: string; userId: string }> => {
-  const res = await request(app).post('/api/v1/auth/register').send({
+  const res = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
     name: 'Admin Gate User',
     email,
     password: 'Password123!',
@@ -38,7 +40,7 @@ describe('Admin gate E2E', () => {
   });
 
   it('rejects an unauthenticated request with 401', async () => {
-    const res = await request(app).get('/api/v1/admin/health');
+    const res = await request(app).get<AdminHealthResponse>('/api/v1/admin/health');
     expect(res.status).toBe(401);
   });
 
@@ -46,7 +48,7 @@ describe('Admin gate E2E', () => {
     const { token } = await registerUser('plain@example.com');
 
     const res = await request(app)
-      .get('/api/v1/admin/health')
+      .get<AdminHealthResponse>('/api/v1/admin/health')
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(403);
@@ -58,7 +60,7 @@ describe('Admin gate E2E', () => {
     await promote(userId);
 
     const res = await request(app)
-      .get('/api/v1/admin/health')
+      .get<AdminHealthResponse>('/api/v1/admin/health')
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
@@ -78,14 +80,14 @@ describe('Admin gate E2E', () => {
     await promote(userId);
 
     const allowed = await request(app)
-      .get('/api/v1/admin/health')
+      .get<AdminHealthResponse>('/api/v1/admin/health')
       .set('Authorization', `Bearer ${token}`);
     expect(allowed.status).toBe(200);
 
     await testPool`UPDATE users SET is_admin = false WHERE user_id = ${userId}`;
 
     const denied = await request(app)
-      .get('/api/v1/admin/health')
+      .get<AdminHealthResponse>('/api/v1/admin/health')
       .set('Authorization', `Bearer ${token}`);
     expect(denied.status).toBe(403);
   });
@@ -96,7 +98,7 @@ describe('Admin gate E2E', () => {
     await testPool`UPDATE users SET deleted_at = NOW() WHERE user_id = ${userId}`;
 
     const res = await request(app)
-      .get('/api/v1/admin/health')
+      .get<AdminHealthResponse>('/api/v1/admin/health')
       .set('Authorization', `Bearer ${token}`);
 
     // authMiddleware rejects the deleted account first; the admin gate is a
@@ -148,8 +150,8 @@ describe('Admin monitoring endpoints E2E', () => {
     adminToken = token;
   });
 
-  const asAdmin = (path: string) =>
-    request(app).get(path).set('Authorization', `Bearer ${adminToken}`);
+  const asAdmin = <T>(path: string) =>
+    request(app).get<T>(path).set('Authorization', `Bearer ${adminToken}`);
 
   it('refuses every endpoint without authentication', async () => {
     for (const path of ENDPOINTS) {
@@ -161,7 +163,7 @@ describe('Admin monitoring endpoints E2E', () => {
     const { token } = await registerUser('monitor-plain@example.com');
 
     for (const path of ENDPOINTS) {
-      const res = await request(app).get(path).set('Authorization', `Bearer ${token}`);
+      const res = await request(app).get<{ code: string }>(path).set('Authorization', `Bearer ${token}`);
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('FORBIDDEN');
     }
@@ -176,7 +178,7 @@ describe('Admin monitoring endpoints E2E', () => {
   });
 
   it('reports request and process metrics', async () => {
-    const res = await asAdmin('/api/v1/admin/metrics');
+    const res = await asAdmin<AdminMetricsResponse>('/api/v1/admin/metrics');
 
     expect(res.status).toBe(200);
     expect(res.body.requests.totalRequests).toBeGreaterThan(0);
@@ -198,10 +200,10 @@ describe('Admin monitoring endpoints E2E', () => {
   });
 
   it('counts the failed admin attempts it just served', async () => {
-    const before = (await asAdmin('/api/v1/admin/metrics')).body.requests.statusClasses['4xx'];
+    const before = (await asAdmin<AdminMetricsResponse>('/api/v1/admin/metrics')).body.requests.statusClasses['4xx'];
     await request(app).get('/api/v1/admin/metrics');
 
-    const after = (await asAdmin('/api/v1/admin/metrics')).body.requests.statusClasses['4xx'];
+    const after = (await asAdmin<AdminMetricsResponse>('/api/v1/admin/metrics')).body.requests.statusClasses['4xx'];
 
     // Proves the endpoint reads the live buffer the timing middleware feeds,
     // rather than a snapshot taken at startup.
@@ -211,7 +213,7 @@ describe('Admin monitoring endpoints E2E', () => {
   it('returns the recent log buffer, oldest first', async () => {
     seedLogs(5);
 
-    const res = await asAdmin('/api/v1/admin/logs');
+    const res = await asAdmin<AdminLogsResponse>('/api/v1/admin/logs');
 
     expect(res.status).toBe(200);
     expect(res.body.retained).toBeGreaterThanOrEqual(5);
@@ -232,8 +234,8 @@ describe('Admin monitoring endpoints E2E', () => {
   it('honours ?limit= and rejects one the buffer cannot satisfy', async () => {
     seedLogs(5);
 
-    const full = await asAdmin('/api/v1/admin/logs');
-    const limited = await asAdmin('/api/v1/admin/logs?limit=2');
+    const full = await asAdmin<AdminLogsResponse>('/api/v1/admin/logs');
+    const limited = await asAdmin<AdminLogsResponse>('/api/v1/admin/logs?limit=2');
 
     expect(limited.status).toBe(200);
     expect(limited.body.entries).toHaveLength(2);
@@ -264,7 +266,7 @@ describe('Admin monitoring endpoints E2E', () => {
     });
     noisy.info({ password: 'hunter2', refreshToken: 'rt-secret' }, 'seeded credential record');
 
-    const res = await asAdmin('/api/v1/admin/logs');
+    const res = await asAdmin<AdminLogsResponse>('/api/v1/admin/logs');
 
     const body = JSON.stringify(res.body);
     expect(body).toInclude('seeded credential record');
@@ -276,7 +278,7 @@ describe('Admin monitoring endpoints E2E', () => {
   it('returns the slow-query buffer with the threshold that defines it', async () => {
     seedSlowQueries(3);
 
-    const res = await asAdmin('/api/v1/admin/slow-queries');
+    const res = await asAdmin<AdminSlowQueriesResponse>('/api/v1/admin/slow-queries');
 
     expect(res.status).toBe(200);
     expect(res.body.thresholdMs).toBeGreaterThan(0);
@@ -292,7 +294,7 @@ describe('Admin monitoring endpoints E2E', () => {
       expect(record.at).toBeGreaterThan(0);
     }
 
-    const limited = await asAdmin('/api/v1/admin/slow-queries?limit=1');
+    const limited = await asAdmin<AdminSlowQueriesResponse>('/api/v1/admin/slow-queries?limit=1');
     expect(limited.body.queries).toHaveLength(1);
     expect((await asAdmin('/api/v1/admin/slow-queries?limit=0')).status).toBe(400);
   });

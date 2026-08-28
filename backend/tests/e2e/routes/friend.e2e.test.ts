@@ -3,35 +3,36 @@ import { request } from '../../helpers/http';
 import { honoApp as app } from '../../../src/index';
 import { resetDb } from '../../helpers/resetDb';
 import { testPool } from '../../helpers/testPool';
+import type { AuthResponse, AuthUser, BlockedUser, FriendListEntry, FriendRequestResponse, PendingFriendRequestResponse, RoomResponse } from '../../helpers/responseTypes';
 
 describe('Friend & Block E2E Integration Tests', () => {
   let tokenA: string;
-  let userA: any;
+  let userA: AuthUser;
   let tokenB: string;
-  let userB: any;
+  let userB: AuthUser;
   let tokenC: string;
-  let userC: any;
+  let userC: AuthUser;
 
   beforeEach(async () => {
     await resetDb();
 
     // Register User A
     const resA = await request(app)
-      .post('/api/v1/auth/register')
+      .post<AuthResponse>('/api/v1/auth/register')
       .send({ name: 'User A', email: 'usera@test.com', password: 'password123' });
     tokenA = resA.body.token;
     userA = resA.body.user;
 
     // Register User B
     const resB = await request(app)
-      .post('/api/v1/auth/register')
+      .post<AuthResponse>('/api/v1/auth/register')
       .send({ name: 'User B', email: 'userb@test.com', password: 'password123' });
     tokenB = resB.body.token;
     userB = resB.body.user;
 
     // Register User C
     const resC = await request(app)
-      .post('/api/v1/auth/register')
+      .post<AuthResponse>('/api/v1/auth/register')
       .send({ name: 'User C', email: 'userc@test.com', password: 'password123' });
     tokenC = resC.body.token;
     userC = resC.body.user;
@@ -41,7 +42,7 @@ describe('Friend & Block E2E Integration Tests', () => {
     it('should send, list, accept, and get friends', async () => {
       // 1. A sends friend request to B
       const sendRes = await request(app)
-        .post('/api/v1/friend-requests')
+        .post<FriendRequestResponse>('/api/v1/friend-requests')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ target_user_id: userB.userId });
 
@@ -52,7 +53,7 @@ describe('Friend & Block E2E Integration Tests', () => {
 
       // 2. B views pending requests
       const pendingRes = await request(app)
-        .get('/api/v1/friend-requests/pending')
+        .get<PendingFriendRequestResponse[]>('/api/v1/friend-requests/pending')
         .set('Authorization', `Bearer ${tokenB}`);
 
       expect(pendingRes.status).toBe(200);
@@ -61,7 +62,7 @@ describe('Friend & Block E2E Integration Tests', () => {
 
       // 3. B accepts friend request from A
       const acceptRes = await request(app)
-        .patch(`/api/v1/friend-requests/${userA.userId}`)
+        .patch<FriendRequestResponse>(`/api/v1/friend-requests/${userA.userId}`)
         .set('Authorization', `Bearer ${tokenB}`)
         .send({ status: 'accepted' });
 
@@ -70,7 +71,7 @@ describe('Friend & Block E2E Integration Tests', () => {
 
       // 4. A gets friends list (should include B)
       const friendsARes = await request(app)
-        .get('/api/v1/friends')
+        .get<FriendListEntry[]>('/api/v1/friends')
         .set('Authorization', `Bearer ${tokenA}`);
 
       expect(friendsARes.status).toBe(200);
@@ -79,7 +80,7 @@ describe('Friend & Block E2E Integration Tests', () => {
 
       // 5. B gets friends list (should include A)
       const friendsBRes = await request(app)
-        .get('/api/v1/friends')
+        .get<FriendListEntry[]>('/api/v1/friends')
         .set('Authorization', `Bearer ${tokenB}`);
 
       expect(friendsBRes.status).toBe(200);
@@ -90,17 +91,17 @@ describe('Friend & Block E2E Integration Tests', () => {
     it('should delete a friend and mark existing private room read-only', async () => {
       // Setup accepted friendship
       await request(app)
-        .post('/api/v1/friend-requests')
+        .post<FriendRequestResponse>('/api/v1/friend-requests')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ target_user_id: userB.userId });
 
       await request(app)
-        .patch(`/api/v1/friend-requests/${userA.userId}`)
+        .patch<FriendRequestResponse>(`/api/v1/friend-requests/${userA.userId}`)
         .set('Authorization', `Bearer ${tokenB}`)
         .send({ status: 'accepted' });
 
       const privateRoom = await request(app)
-        .post('/api/v1/rooms')
+        .post<RoomResponse>('/api/v1/rooms')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ type: 'private', targetUserId: userB.userId });
       expect(privateRoom.status).toBe(201);
@@ -119,25 +120,25 @@ describe('Friend & Block E2E Integration Tests', () => {
     it('should reject a friend request and not affect accepted friendships', async () => {
       // C sends request to B
       await request(app)
-        .post('/api/v1/friend-requests')
+        .post<FriendRequestResponse>('/api/v1/friend-requests')
         .set('Authorization', `Bearer ${tokenC}`)
         .send({ target_user_id: userB.userId });
 
       // B accepts C
       await request(app)
-        .patch(`/api/v1/friend-requests/${userC.userId}`)
+        .patch<FriendRequestResponse>(`/api/v1/friend-requests/${userC.userId}`)
         .set('Authorization', `Bearer ${tokenB}`)
         .send({ status: 'accepted' });
 
       // A sends request to B
       await request(app)
-        .post('/api/v1/friend-requests')
+        .post<FriendRequestResponse>('/api/v1/friend-requests')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ target_user_id: userB.userId });
 
       // B rejects A
       const res = await request(app)
-        .patch(`/api/v1/friend-requests/${userA.userId}`)
+        .patch<FriendRequestResponse>(`/api/v1/friend-requests/${userA.userId}`)
         .set('Authorization', `Bearer ${tokenB}`)
         .send({ status: 'rejected' });
 
@@ -146,7 +147,7 @@ describe('Friend & Block E2E Integration Tests', () => {
 
       // Check friends list for B, C should still be there
       const listRes = await request(app)
-        .get('/api/v1/friends')
+        .get<FriendListEntry[]>('/api/v1/friends')
         .set('Authorization', `Bearer ${tokenB}`);
       
       expect(listRes.status).toBe(200);
@@ -174,7 +175,7 @@ describe('Friend & Block E2E Integration Tests', () => {
 
       // C tries to friend A
       const res = await request(app)
-        .post('/api/v1/friend-requests')
+        .post<FriendRequestResponse>('/api/v1/friend-requests')
         .set('Authorization', `Bearer ${tokenC}`)
         .send({ target_user_id: userA.userId });
 
@@ -183,16 +184,16 @@ describe('Friend & Block E2E Integration Tests', () => {
 
     it('should mark existing private room read-only when blocking a friend', async () => {
       await request(app)
-        .post('/api/v1/friend-requests')
+        .post<FriendRequestResponse>('/api/v1/friend-requests')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ target_user_id: userB.userId });
       await request(app)
-        .patch(`/api/v1/friend-requests/${userA.userId}`)
+        .patch<FriendRequestResponse>(`/api/v1/friend-requests/${userA.userId}`)
         .set('Authorization', `Bearer ${tokenB}`)
         .send({ status: 'accepted' });
 
       const privateRoom = await request(app)
-        .post('/api/v1/rooms')
+        .post<RoomResponse>('/api/v1/rooms')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ type: 'private', targetUserId: userB.userId });
       expect(privateRoom.status).toBe(201); // created for the first time
@@ -210,16 +211,16 @@ describe('Friend & Block E2E Integration Tests', () => {
 
     it('should restore the friendship after unblocking a blocked friend', async () => {
       await request(app)
-        .post('/api/v1/friend-requests')
+        .post<FriendRequestResponse>('/api/v1/friend-requests')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ target_user_id: userB.userId });
       await request(app)
-        .patch(`/api/v1/friend-requests/${userA.userId}`)
+        .patch<FriendRequestResponse>(`/api/v1/friend-requests/${userA.userId}`)
         .set('Authorization', `Bearer ${tokenB}`)
         .send({ status: 'accepted' });
 
       const privateRoom = await request(app)
-        .post('/api/v1/rooms')
+        .post<RoomResponse>('/api/v1/rooms')
         .set('Authorization', `Bearer ${tokenA}`)
         .send({ type: 'private', targetUserId: userB.userId });
       expect(privateRoom.status).toBe(201);
@@ -231,7 +232,7 @@ describe('Friend & Block E2E Integration Tests', () => {
       expect(blockRes.status).toBe(201);
 
       const blockedFriends = await request(app)
-        .get('/api/v1/friends')
+        .get<FriendListEntry[]>('/api/v1/friends')
         .set('Authorization', `Bearer ${tokenA}`);
       expect(blockedFriends.status).toBe(200);
       expect(blockedFriends.body).toEqual([]);
@@ -242,7 +243,7 @@ describe('Friend & Block E2E Integration Tests', () => {
       expect(unblockRes.status).toBe(204);
 
       const restoredFriends = await request(app)
-        .get('/api/v1/friends')
+        .get<FriendListEntry[]>('/api/v1/friends')
         .set('Authorization', `Bearer ${tokenA}`);
       expect(restoredFriends.status).toBe(200);
       expect(restoredFriends.body).toHaveLength(1);
@@ -260,7 +261,7 @@ describe('Friend & Block E2E Integration Tests', () => {
         .send({ target_user_id: userC.userId });
 
       const res = await request(app)
-        .get('/api/v1/blocks')
+        .get<BlockedUser[]>('/api/v1/blocks')
         .set('Authorization', `Bearer ${tokenA}`);
 
       expect(res.status).toBe(200);
@@ -284,7 +285,7 @@ describe('Friend & Block E2E Integration Tests', () => {
       expect(unblockRes.status).toBe(204);
 
       const listRes = await request(app)
-        .get('/api/v1/blocks')
+        .get<BlockedUser[]>('/api/v1/blocks')
         .set('Authorization', `Bearer ${tokenA}`);
 
       expect(listRes.body.length).toBe(0);

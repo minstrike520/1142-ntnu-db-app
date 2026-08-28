@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import { request } from '../../helpers/http';
 import { honoApp as app } from '../../../src/index';
 import { resetDb } from '../../helpers/resetDb';
+import type { AuthResponse, EmergencyContactResponse } from '../../helpers/responseTypes';
 import { testPool } from '../../helpers/testPool';
 
 describe('Emergency Contacts E2E', () => {
@@ -14,13 +15,13 @@ describe('Emergency Contacts E2E', () => {
     await resetDb();
 
     const u1 = await request(app)
-      .post('/api/v1/auth/register')
+      .post<AuthResponse>('/api/v1/auth/register')
       .send({ name: 'User One', email: 'user1@test.com', password: 'password123' });
     token1 = u1.body.token;
     user1Id = u1.body.user.userId;
 
     const u2 = await request(app)
-      .post('/api/v1/auth/register')
+      .post<AuthResponse>('/api/v1/auth/register')
       .send({ name: 'User Two', email: 'user2@test.com', password: 'password123' });
     token2 = u2.body.token;
     user2Id = u2.body.user.userId;
@@ -29,14 +30,14 @@ describe('Emergency Contacts E2E', () => {
   it('should manage emergency contacts lifecycle', async () => {
     // 1. Initially empty
     const listInitial = await request(app)
-      .get('/api/v1/users/me/emergency-contacts')
+      .get<EmergencyContactResponse[]>('/api/v1/users/me/emergency-contacts')
       .set('Authorization', `Bearer ${token1}`);
     expect(listInitial.status).toBe(200);
     expect(listInitial.body).toEqual([]);
 
     // 2. Add contact
     const addRes = await request(app)
-      .post('/api/v1/users/me/emergency-contacts')
+      .post<EmergencyContactResponse>('/api/v1/users/me/emergency-contacts')
       .set('Authorization', `Bearer ${token1}`)
       .send({
         contactId: user2Id,
@@ -49,7 +50,7 @@ describe('Emergency Contacts E2E', () => {
 
     // 3. List contains added contact
     const listAfterAdd = await request(app)
-      .get('/api/v1/users/me/emergency-contacts')
+      .get<EmergencyContactResponse[]>('/api/v1/users/me/emergency-contacts')
       .set('Authorization', `Bearer ${token1}`);
     expect(listAfterAdd.status).toBe(200);
     expect(listAfterAdd.body).toHaveLength(1);
@@ -57,7 +58,7 @@ describe('Emergency Contacts E2E', () => {
 
     // 4. Update message (upsert)
     const updateRes = await request(app)
-      .post('/api/v1/users/me/emergency-contacts')
+      .post<EmergencyContactResponse>('/api/v1/users/me/emergency-contacts')
       .set('Authorization', `Bearer ${token1}`)
       .send({
         contactId: user2Id,
@@ -74,7 +75,7 @@ describe('Emergency Contacts E2E', () => {
 
     // 6. List empty again
     const listAfterDel = await request(app)
-      .get('/api/v1/users/me/emergency-contacts')
+      .get<EmergencyContactResponse[]>('/api/v1/users/me/emergency-contacts')
       .set('Authorization', `Bearer ${token1}`);
     expect(listAfterDel.status).toBe(200);
     expect(listAfterDel.body).toEqual([]);
@@ -82,7 +83,7 @@ describe('Emergency Contacts E2E', () => {
 
   it('should reject self-contact creation', async () => {
     const res = await request(app)
-      .post('/api/v1/users/me/emergency-contacts')
+      .post<EmergencyContactResponse>('/api/v1/users/me/emergency-contacts')
       .set('Authorization', `Bearer ${token1}`)
       .send({
         contactId: user1Id,
@@ -93,7 +94,7 @@ describe('Emergency Contacts E2E', () => {
 
   it('should check inactivity threshold and suppress duplicate alerts', async () => {
     await request(app)
-      .post('/api/v1/users/me/emergency-contacts')
+      .post<EmergencyContactResponse>('/api/v1/users/me/emergency-contacts')
       .set('Authorization', `Bearer ${token1}`)
       .send({
         contactId: user2Id,

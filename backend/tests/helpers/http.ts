@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 
-export type TestResponseBody = any;
+export type TestResponseBody = unknown;
 
 export interface TestResponse<T = TestResponseBody> {
   status: number;
@@ -9,7 +9,15 @@ export interface TestResponse<T = TestResponseBody> {
   text: string;
 }
 
-type Parser = (stream: { on(event: string, listener: (chunk?: Buffer) => void): void }, callback: (error: Error | null, value?: unknown) => void) => void;
+type ResponseStream = {
+  on(event: 'data', listener: (chunk: Buffer) => void): void;
+  on(event: 'end', listener: () => void): void;
+};
+
+export type ResponseParser<T> = (
+  stream: ResponseStream,
+  callback: (error: Error | null, value?: T) => void,
+) => void;
 
 type RequestBody = BodyInit | undefined;
 
@@ -25,14 +33,14 @@ const responseHeaders = (headers: Headers): Record<string, string | string[] | u
   return result;
 };
 
-const parseResponse = async <T>(response: Response, parser?: Parser): Promise<T> => {
+const parseResponse = async <T>(response: Response, parser?: ResponseParser<T>): Promise<T> => {
   const bytes = Buffer.from(await response.arrayBuffer());
   if (parser) {
     return await new Promise<T>((resolve, reject) => {
       let onData: ((chunk: Buffer) => void) | undefined;
       let onEnd: (() => void) | undefined;
       const stream = {
-        on(event: string, listener: (chunk?: Buffer) => void) {
+        on(event: 'data' | 'end', listener: ((chunk: Buffer) => void) | (() => void)) {
           if (event === 'data') onData = listener as (chunk: Buffer) => void;
           if (event === 'end') onEnd = listener as () => void;
         },
@@ -50,12 +58,12 @@ const parseResponse = async <T>(response: Response, parser?: Parser): Promise<T>
   return bytes as T;
 };
 
-export class HttpRequest<T = TestResponse> implements PromiseLike<T> {
+export class HttpRequest<T = TestResponseBody> implements PromiseLike<TestResponse<T>> {
   private readonly headers = new Headers();
   private body: RequestBody;
-  private parser?: Parser;
+  private parser?: ResponseParser<T>;
   private expectedStatus?: number;
-  private assertion?: (response: T) => void;
+  private assertion?: (response: TestResponse<T>) => void;
 
   public constructor(
     private readonly app: Hono,
@@ -93,32 +101,32 @@ export class HttpRequest<T = TestResponse> implements PromiseLike<T> {
     return this;
   }
 
-  public parse(parser: Parser): this {
+  public parse(parser: ResponseParser<T>): this {
     this.parser = parser;
     return this;
   }
 
   public expect(expected: number): this;
-  public expect(assertion: (response: T) => void): this;
-  public expect(expectedOrAssertion: number | ((response: T) => void)): this {
+  public expect(assertion: (response: TestResponse<T>) => void): this;
+  public expect(expectedOrAssertion: number | ((response: TestResponse<T>) => void)): this {
     if (typeof expectedOrAssertion === 'number') this.expectedStatus = expectedOrAssertion;
     else this.assertion = expectedOrAssertion;
     return this;
   }
 
-  private async execute(): Promise<T> {
+  private async execute(): Promise<TestResponse<T>> {
     const response = await this.app.request(this.path, {
       method: this.method,
       headers: this.headers,
       body: this.body,
     });
     const body = await parseResponse<T>(response, this.parser);
-    const result = {
+    const result: TestResponse<T> = {
       status: response.status,
       headers: responseHeaders(response.headers),
       body,
       text: typeof body === 'string' ? body : Buffer.isBuffer(body) ? body.toString('utf8') : JSON.stringify(body),
-    } as T;
+    };
 
     if (this.expectedStatus !== undefined && response.status !== this.expectedStatus) {
       throw new Error(`Expected status ${this.expectedStatus}, received ${response.status}`);
@@ -127,8 +135,8 @@ export class HttpRequest<T = TestResponse> implements PromiseLike<T> {
     return result;
   }
 
-  public then<TResult1 = T, TResult2 = never>(
-    onFulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
+  public then<TResult1 = TestResponse<T>, TResult2 = never>(
+    onFulfilled?: ((value: TestResponse<T>) => TResult1 | PromiseLike<TResult1>) | null,
     onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ): Promise<TResult1 | TResult2> {
     return this.execute().then(onFulfilled, onRejected);
@@ -136,16 +144,17 @@ export class HttpRequest<T = TestResponse> implements PromiseLike<T> {
 }
 
 export interface HttpRequestFactory {
-  get(path: string): HttpRequest;
-  options(path: string): HttpRequest;
-  post(path: string): HttpRequest;
-  put(path: string): HttpRequest;
-  patch(path: string): HttpRequest;
-  delete(path: string): HttpRequest;
+  get<T = TestResponseBody>(path: string): HttpRequest<T>;
+  options<T = TestResponseBody>(path: string): HttpRequest<T>;
+  post<T = TestResponseBody>(path: string): HttpRequest<T>;
+  put<T = TestResponseBody>(path: string): HttpRequest<T>;
+  patch<T = TestResponseBody>(path: string): HttpRequest<T>;
+  delete<T = TestResponseBody>(path: string): HttpRequest<T>;
 }
 
 export const request = (app: Hono): HttpRequestFactory => {
-  const create = (method: string) => (path: string) => new HttpRequest(app, method, path);
+  const create = (method: string) => <T = TestResponseBody>(path: string) =>
+    new HttpRequest<T>(app, method, path);
   return {
     get: create('GET'),
     options: create('OPTIONS'),

@@ -5,12 +5,13 @@ import { io as createClient, type Socket as ClientSocket } from 'socket.io-clien
 import { honoApp as app, server } from '../../../src/index';
 import { resetDb } from '../../helpers/resetDb';
 import type { ClientToServerEvents, ServerToClientEvents, Message } from '../../../../shared/types';
+import type { AuthResponse, RoomResponse } from '../../helpers/responseTypes';
 
 type TestClient = ClientSocket<ServerToClientEvents, ClientToServerEvents>;
 
-const waitFor = <T>(socket: TestClient, event: keyof ServerToClientEvents): Promise<T> =>
+const waitForMessage = (socket: TestClient): Promise<Message> =>
   new Promise((resolve) => {
-    socket.once(event, (payload: any) => resolve(payload as T));
+    socket.once('new_message', resolve);
   });
 
 describe('Emergency alert Socket.IO E2E', () => {
@@ -57,12 +58,12 @@ describe('Emergency alert Socket.IO E2E', () => {
     });
 
   it('sends real chat message to configured emergency contacts (private room)', async () => {
-    const userRes = await request(app).post('/api/v1/auth/register').send({
+    const userRes = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'Alert User',
       email: 'alert-user@example.com',
       password: 'Password123!',
     });
-    const contactRes = await request(app).post('/api/v1/auth/register').send({
+    const contactRes = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'Contact User',
       email: 'contact-user@example.com',
       password: 'Password123!',
@@ -78,7 +79,7 @@ describe('Emergency alert Socket.IO E2E', () => {
 
     // explicitly create private room
     const roomRes = await request(app)
-      .post('/api/v1/rooms')
+      .post<RoomResponse>('/api/v1/rooms')
       .set('Authorization', `Bearer ${userRes.body.token}`)
       .send({ type: 'private', targetUserId: contactRes.body.user.userId });
     expect([200, 201]).toContain(roomRes.status);
@@ -105,10 +106,7 @@ describe('Emergency alert Socket.IO E2E', () => {
     
     // Room subscriptions are derived from the contact's durable membership.
 
-    const messagePayload = waitFor<Message>(
-      contactSocket,
-      'new_message',
-    );
+    const messagePayload = waitForMessage(contactSocket);
 
     const triggerRes = await request(app)
       .post('/api/v1/users/me/emergency-alert/check-inactivity')

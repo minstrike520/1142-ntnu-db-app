@@ -8,12 +8,12 @@ describe('Hono HTTP test helper', () => {
     app.post('/echo', async (c) => c.json(await c.req.json(), 201));
 
     const response = await request(app)
-      .post('/echo')
+      .post<{ hello: string }>('/echo')
       .set('X-Test', 'present')
       .send({ hello: 'world' });
 
     expect(response.status).toBe(201);
-    expect(response.body).toEqual({ hello: 'world' });
+    expect(response.body.hello).toBe('world');
   });
 
   it('sends multipart uploads with the field name and filename intact', async () => {

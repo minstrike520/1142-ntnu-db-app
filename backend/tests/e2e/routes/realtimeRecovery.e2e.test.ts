@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { HttpRequest, request } from '../../helpers/http';
+import { request, type HttpRequest } from '../../helpers/http';
 import { honoApp as app } from '../../../src/index';
 import { resetDb } from '../../helpers/resetDb';
+import type { AuthResponse, MessageResponse, ReadPositionResponse, RoomResponse, SyncResponse } from '../../helpers/responseTypes';
 
 describe('Realtime recovery REST contract', () => {
   let token: string;
@@ -9,14 +10,14 @@ describe('Realtime recovery REST contract', () => {
 
   beforeEach(async () => {
     await resetDb();
-    const user = await request(app).post('/api/v1/auth/register').send({
+    const user = await request(app).post<AuthResponse>('/api/v1/auth/register').send({
       name: 'Recovery User',
       email: 'recovery@example.com',
       password: 'Password123!',
     });
     token = user.body.token;
     const room = await request(app)
-      .post('/api/v1/rooms')
+      .post<RoomResponse>('/api/v1/rooms')
       .set('Authorization', `Bearer ${token}`)
       .send({ type: 'group', name: 'Recovery Room' });
     roomId = room.body.roomId;
@@ -24,12 +25,12 @@ describe('Realtime recovery REST contract', () => {
 
   it('applies one create command once and recovers its durable change', async () => {
     const first = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'create-command-1')
       .send({ content: 'durable' });
     const second = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'create-command-1')
       .send({ content: 'different retry body' });
@@ -43,7 +44,7 @@ describe('Realtime recovery REST contract', () => {
     expect(first.body.revision).toBe(1);
 
     const sync = await request(app)
-      .get('/api/v1/sync?cursor=0&limit=100')
+      .get<SyncResponse>('/api/v1/sync?cursor=0&limit=100')
       .set('Authorization', `Bearer ${token}`);
     expect(sync.status).toBe(200);
     expect(sync.body.changes).toHaveLength(1);
@@ -55,13 +56,13 @@ describe('Realtime recovery REST contract', () => {
     });
 
     await request(app)
-      .patch(`/api/v1/rooms/${roomId}/messages/${first.body.messageId}`)
+      .patch<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${first.body.messageId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', '1')
       .set('Idempotency-Key', 'create-followup-edit')
       .send({ content: 'changed later' });
     const createRetryAfterLaterEdit = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'create-command-1')
       .send({ content: 'still the original command' });
@@ -71,13 +72,13 @@ describe('Realtime recovery REST contract', () => {
 
   it('rejects stale revisions and exposes the conflict as 409', async () => {
     const created = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'create-command-2')
       .send({ content: 'before edit' });
 
     const edited = await request(app)
-      .patch(`/api/v1/rooms/${roomId}/messages/${created.body.messageId}`)
+      .patch<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${created.body.messageId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', '1')
       .set('Idempotency-Key', 'edit-command-1')
@@ -86,7 +87,7 @@ describe('Realtime recovery REST contract', () => {
     expect(edited.body.revision).toBe(2);
 
     const stale = await request(app)
-      .patch(`/api/v1/rooms/${roomId}/messages/${created.body.messageId}`)
+      .patch<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${created.body.messageId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', '1')
       .set('Idempotency-Key', 'edit-command-2')
@@ -97,20 +98,20 @@ describe('Realtime recovery REST contract', () => {
 
   it('keeps edit, recall, and read-position commands idempotent', async () => {
     const created = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'create-command-3')
       .send({ content: 'command target' });
     const messageId = created.body.messageId;
 
     const edited = await request(app)
-      .patch(`/api/v1/rooms/${roomId}/messages/${messageId}`)
+      .patch<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${messageId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', '1')
       .set('Idempotency-Key', 'edit-command-3')
       .send({ content: 'edited once' });
     const editRetry = await request(app)
-      .patch(`/api/v1/rooms/${roomId}/messages/${messageId}`)
+      .patch<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${messageId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', '1')
       .set('Idempotency-Key', 'edit-command-3')
@@ -122,13 +123,13 @@ describe('Realtime recovery REST contract', () => {
     expect(editRetry.body.revision).toBe(2);
 
     const laterEdit = await request(app)
-      .patch(`/api/v1/rooms/${roomId}/messages/${messageId}`)
+      .patch<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${messageId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', '2')
       .set('Idempotency-Key', 'edit-command-3-later')
       .send({ content: 'edited later' });
     const editRetryAfterLaterEdit = await request(app)
-      .patch(`/api/v1/rooms/${roomId}/messages/${messageId}`)
+      .patch<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${messageId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', '1')
       .set('Idempotency-Key', 'edit-command-3')
@@ -138,12 +139,12 @@ describe('Realtime recovery REST contract', () => {
     expect(editRetryAfterLaterEdit.body.revision).toBe(2);
 
     const recalled = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', '3')
       .set('Idempotency-Key', 'recall-command-3');
     const recallRetry = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', '3')
       .set('Idempotency-Key', 'recall-command-3');
@@ -153,12 +154,12 @@ describe('Realtime recovery REST contract', () => {
     expect(recallRetry.body.revision).toBe(4);
 
     const read = await request(app)
-      .put(`/api/v1/rooms/${roomId}/read-position`)
+      .put<ReadPositionResponse>(`/api/v1/rooms/${roomId}/read-position`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'read-command-3')
       .send({ messageId });
     const readRetry = await request(app)
-      .put(`/api/v1/rooms/${roomId}/read-position`)
+      .put<ReadPositionResponse>(`/api/v1/rooms/${roomId}/read-position`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'read-command-3')
       .send({ messageId });
@@ -171,20 +172,20 @@ describe('Realtime recovery REST contract', () => {
     // Every one of these used to reach a `uuid` comparison, raise 22P02 in
     // PostgreSQL, and surface as a 500 — a client mistake reported as an outage.
     const bad = 'not-a-uuid';
-    const auth = (req: HttpRequest) => req.set('Authorization', `Bearer ${token}`);
+    const auth = <T>(req: HttpRequest<T>) => req.set('Authorization', `Bearer ${token}`);
 
-    const list = await auth(request(app).get(`/api/v1/rooms/${bad}/messages`));
-    const create = await auth(request(app).post(`/api/v1/rooms/${bad}/messages`))
+    const list = await auth(request(app).get<MessageResponse[]>(`/api/v1/rooms/${bad}/messages`));
+    const create = await auth(request(app).post<MessageResponse>(`/api/v1/rooms/${bad}/messages`))
       .set('Idempotency-Key', 'bad-path-create')
       .send({ content: 'x' });
-    const edit = await auth(request(app).patch(`/api/v1/rooms/${bad}/messages/${bad}`))
+    const edit = await auth(request(app).patch<MessageResponse>(`/api/v1/rooms/${bad}/messages/${bad}`))
       .set('If-Match', '1')
       .set('Idempotency-Key', 'bad-path-edit')
       .send({ content: 'x' });
-    const recall = await auth(request(app).post(`/api/v1/rooms/${bad}/messages/${bad}/recall`))
+    const recall = await auth(request(app).post<MessageResponse>(`/api/v1/rooms/${bad}/messages/${bad}/recall`))
       .set('If-Match', '1')
       .set('Idempotency-Key', 'bad-path-recall');
-    const read = await auth(request(app).put(`/api/v1/rooms/${bad}/read-position`))
+    const read = await auth(request(app).put<ReadPositionResponse>(`/api/v1/rooms/${bad}/read-position`))
       .set('Idempotency-Key', 'bad-path-read')
       .send({ messageId: '00000000-0000-4000-8000-000000000000' });
 
@@ -196,7 +197,7 @@ describe('Realtime recovery REST contract', () => {
     // Without a schema this string reaches a `uuid` comparison, PostgreSQL
     // raises 22P02, and the generic handler reports a client mistake as a 500.
     const response = await request(app)
-      .put(`/api/v1/rooms/${roomId}/read-position`)
+      .put<ReadPositionResponse>(`/api/v1/rooms/${roomId}/read-position`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'read-command-malformed')
       .send({ messageId: 'not-a-uuid' });
@@ -206,14 +207,14 @@ describe('Realtime recovery REST contract', () => {
 
   it('keeps a no-op recall key out of the create and edit namespaces', async () => {
     const created = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'noop-target-create')
       .send({ content: 'recall me' });
     const messageId = created.body.messageId;
 
     const firstRecall = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', String(created.body.revision))
       .set('Idempotency-Key', 'noop-recall-first');
@@ -223,7 +224,7 @@ describe('Realtime recovery REST contract', () => {
     // so nothing is committed and no Message Change is published — but the key
     // is spent all the same.
     const secondRecall = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', String(firstRecall.body.revision))
       .set('Idempotency-Key', 'noop-recall-second');
@@ -233,7 +234,7 @@ describe('Realtime recovery REST contract', () => {
 
     // Replaying it stays a success and still reports the same message.
     const secondRecallRetry = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${messageId}/recall`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', String(firstRecall.body.revision))
       .set('Idempotency-Key', 'noop-recall-second');
@@ -244,19 +245,19 @@ describe('Realtime recovery REST contract', () => {
     // Create, edit and recall share one idempotency namespace, so the spent key
     // must not be usable for another operation.
     const reusedForCreate = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'noop-recall-second')
       .send({ content: 'should not be created' });
     expect(reusedForCreate.status).toBe(409);
 
     const other = await request(app)
-      .post(`/api/v1/rooms/${roomId}/messages`)
+      .post<MessageResponse>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', 'noop-other-create')
       .send({ content: 'edit me' });
     const reusedForEdit = await request(app)
-      .patch(`/api/v1/rooms/${roomId}/messages/${other.body.messageId}`)
+      .patch<MessageResponse>(`/api/v1/rooms/${roomId}/messages/${other.body.messageId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('If-Match', String(other.body.revision))
       .set('Idempotency-Key', 'noop-recall-second')
@@ -264,7 +265,7 @@ describe('Realtime recovery REST contract', () => {
     expect(reusedForEdit.status).toBe(409);
 
     const listed = await request(app)
-      .get(`/api/v1/rooms/${roomId}/messages`)
+      .get<MessageResponse[]>(`/api/v1/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${token}`);
     expect(listed.body.map((message: { messageId: string }) => message.messageId).sort())
       .toEqual([messageId, other.body.messageId].sort());
