@@ -50,7 +50,7 @@ const parseResponse = async <T>(response: Response, parser?: Parser): Promise<T>
   return bytes as T;
 };
 
-class HttpRequest<T = TestResponse> implements PromiseLike<T> {
+export class HttpRequest<T = TestResponse> implements PromiseLike<T> {
   private readonly headers = new Headers();
   private body: RequestBody;
   private parser?: Parser;
@@ -112,7 +112,7 @@ class HttpRequest<T = TestResponse> implements PromiseLike<T> {
       headers: this.headers,
       body: this.body,
     });
-    const body: any = await parseResponse(response, this.parser);
+    const body = await parseResponse<T>(response, this.parser);
     const result = {
       status: response.status,
       headers: responseHeaders(response.headers),
