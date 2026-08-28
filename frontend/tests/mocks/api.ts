@@ -364,7 +364,11 @@ export const updateFolderRooms = async (
   apiCallLog.push({ fn: "updateFolderRooms", args: [folderId, roomIds] });
 };
 
-export const uploadAttachment = async (): Promise<{ attachmentId: string }> => {
+export const uploadAttachment = async (
+  _token: string,
+  file: File,
+): Promise<{ attachmentId: string }> => {
+  apiCallLog.push({ fn: "uploadAttachment", args: [file.name] });
   if (attachmentUploadGate) await attachmentUploadGate;
   return { attachmentId: "att-1" };
 };

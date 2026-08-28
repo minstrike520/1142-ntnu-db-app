@@ -16,7 +16,7 @@
 import { describe, expect, test } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { mountChatApp } from "./harness";
-import { __holdNextAttachmentUpload } from "./mocks/api";
+import { __getApiCallLog, __holdNextAttachmentUpload } from "./mocks/api";
 
 const composer = () => screen.getByPlaceholderText<HTMLTextAreaElement>("Type a message...");
 
@@ -180,7 +180,8 @@ describe("pending attachment preservation", () => {
     releaseUpload();
     await app.settle();
 
-    expect(app.socket().countEmitted("send_message")).toBe(1);
+    expect(__getApiCallLog("uploadAttachment")).toHaveLength(1);
+    expect(__getApiCallLog("createMessage")).toHaveLength(1);
   });
 
   test("keeps unsent attachments across navigation", async () => {
