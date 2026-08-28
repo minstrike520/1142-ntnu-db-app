@@ -54,6 +54,7 @@ yarn-error.log*
 .agents/
 .gemini/
 .codex/
+/.worktrees/
 
 # MCP server (local tool, not for repo)
 mcp/
