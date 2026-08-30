@@ -374,6 +374,15 @@ interface RightPanelContextType {
 
 const RightPanelContext = createContext<RightPanelContextType | undefined>(undefined);
 
+// Realtime readiness (issue #620). A leaf context rather than a field on
+// ChatContextType for the same reason as the four above: it flips on every
+// connect, disconnect and reconnect, and putting it in the main value would
+// re-render every useChat() consumer on each of those. Keeping it separate
+// also leaves the readiness contract as one self-contained unit for the
+// ChatContext split in #622, which must preserve these semantics rather than
+// absorb them.
+const RealtimeReadyContext = createContext<boolean | undefined>(undefined);
+
 // Static key list for the stable handler proxies built in ChatProvider. Kept
 // at module level so building the proxies never reads a ref during render.
 // The `NoMissingHandlerKey` check below fails to compile if a handler is
@@ -776,6 +785,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isMounted, setIsMounted] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [roomsInitialized, setRoomsInitialized] = useState(false);
+  const [realtimeReady, setRealtimeReady] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | undefined>(undefined);
   const [user, setUser] = useState<User>({ username: "", email: "", avatar: "" });
@@ -897,6 +907,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setCurrentUserId(undefined);
     setIsAuthenticated(false);
     setRoomsInitialized(false);
+    // The socket effect returns early on a null token rather than reaching the
+    // successor of its own cleanup, so readiness has to be cleared here too.
+    setRealtimeReady(false);
     setRooms([]);
     setFolders([]);
     setMessages([]);
@@ -1616,6 +1629,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       console.error("Socket error", error);
     });
     const cleanupDisconnect = onSocketDisconnect(socket, (reason) => {
+      // Unconditional, and before the retry branch: a dropped socket is not
+      // ready by any definition, whatever reconnect path follows.
+      setRealtimeReady(false);
       if (!disposed && reason === 'io server disconnect') {
         retryTimer = setTimeout(() => {
           retryTimer = undefined;
@@ -1628,6 +1644,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
     const cleanupConnect = onSocketConnect(socket, () => {
       syncingRef.current = true;
+      // A fresh connection has not synced yet: readiness is re-earned by the
+      // `realtime_ready` handler below, never inherited from the last session.
+      setRealtimeReady(false);
     });
     const cleanupFriendRequest = onFriendRequest(socket, (payload) => {
       const activeTok = tokenRef.current;
@@ -1775,12 +1794,26 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
 
     const cleanupRealtimeReady = onRealtimeReady(socket, () => {
-      void synchronize();
+      // `synchronize` resolves only after the buffered realtime events have
+      // been flushed, so this is the first moment the client is both caught up
+      // on durable changes and applying live ones directly.
+      //
+      // The `socket.connected` gate is what keeps this a claim about *now*
+      // rather than about when the sync started. A sync awaits `/sync` paging,
+      // a rooms refresh, a debounced social refresh and a member load; if the
+      // socket drops anywhere in that window the disconnect handler clears the
+      // flag, and without this gate the resolving sync would set it back to
+      // true over a dead socket. The failure path needs no separate branch:
+      // it disconnects before resolving, so the same gate rejects it.
+      void synchronize().then(() => {
+        if (!disposed && socket.connected) setRealtimeReady(true);
+      });
     });
     socket.connect();
 
     return () => {
       disposed = true;
+      setRealtimeReady(false);
       if (retryTimer) clearTimeout(retryTimer);
       clearInterval(checkpointTimer);
       cleanupNewMessage();
@@ -2846,22 +2879,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         <TypingUsersContext.Provider value={typingUsers}>
           <ProfilePopoverContext.Provider value={profilePopoverValue}>
             <RightPanelContext.Provider value={rightPanelValue}>
-              {children}
-              {messageNoticeKey && (
-                <div
-                  role="status"
-                  className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg"
-                >
-                  <span>{translate(uiLanguage, messageNoticeKey)}</span>
-                  <button
-                    type="button"
-                    className="font-semibold underline"
-                    onClick={() => setMessageNoticeKey(null)}
+              <RealtimeReadyContext.Provider value={realtimeReady}>
+                {children}
+                {messageNoticeKey && (
+                  <div
+                    role="status"
+                    className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg"
                   >
-                    {translate(uiLanguage, "chatroom.dismissNotice")}
-                  </button>
-                </div>
-              )}
+                    <span>{translate(uiLanguage, messageNoticeKey)}</span>
+                    <button
+                      type="button"
+                      className="font-semibold underline"
+                      onClick={() => setMessageNoticeKey(null)}
+                    >
+                      {translate(uiLanguage, "chatroom.dismissNotice")}
+                    </button>
+                  </div>
+                )}
+              </RealtimeReadyContext.Provider>
             </RightPanelContext.Provider>
           </ProfilePopoverContext.Provider>
         </TypingUsersContext.Provider>
@@ -2901,6 +2936,34 @@ export function useProfilePopover() {
   const context = useContext(ProfilePopoverContext);
   if (context === undefined) {
     throw new Error("useProfilePopover must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/**
+ * Whether this browser's realtime session is live and caught up (issue #620).
+ *
+ * The contract, which the ChatContext split in #622 must preserve rather than
+ * redefine: `true` means the socket is connected, the server has finished
+ * restoring every room subscription for this user (it emits `realtime_ready`
+ * only after that, and only on the success path), the durable `/sync` that
+ * follows has completed, and the events buffered during it have been flushed.
+ * In other words, changes now arrive live rather than being replayed later.
+ *
+ * It returns to `false` on connect, on disconnect, on logout and on provider
+ * teardown, so it is a claim about the present moment and never a latch.
+ *
+ * Note what it deliberately does not cover: it is a *session*-level fact, not
+ * a per-room one. A room is additionally unready while the user's membership
+ * is `pending`, because the server excludes pending members when restoring
+ * subscriptions — see the `data-room-ready` attribute in Chatroom.tsx, which
+ * combines the two into the room-level signal the full-stack browser lane
+ * waits on.
+ */
+export function useRealtimeReady() {
+  const context = useContext(RealtimeReadyContext);
+  if (context === undefined) {
+    throw new Error("useRealtimeReady must be used within a ChatProvider");
   }
   return context;
 }

@@ -808,6 +808,11 @@ function RoomItem({
         draggable={draggable}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
+        // On the button rather than the row: this is the element that owns the
+        // in-app `router.push`, so a test clicking it exercises a real soft
+        // navigation instead of relying on where the row's centre happens to
+        // fall (issue #620).
+        data-room-id={room.id}
         className="flex min-w-0 flex-1 items-center gap-2.5 text-left select-none cursor-pointer"
       >
         <Avatar name={room.name} src={avatarSrc} size="sm" isOnline={room.isOnline} />
