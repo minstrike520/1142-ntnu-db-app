@@ -1172,6 +1172,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // again and report readiness for a connection whose subscriptions have not
     // been restored yet.
     let connectionGeneration = 0;
+    // Serial number of the most recent `realtime_ready`. Only the newest may
+    // publish readiness: older signals keep their own `.then` on the earlier
+    // sync they were served by, and that sync says nothing about the recovery
+    // a newer signal is still waiting on.
+    let readinessSignalSerial = 0;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const socket = createChatSocket(token);
     socketRef.current = socket;
@@ -1849,21 +1854,36 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // a waiter pass during exactly the window in which this client is known
       // to be missing durable changes.
       const generation = connectionGeneration;
+      const signal = ++readinessSignalSerial;
       setRealtimeReady(false);
 
       // `synchronize` resolves only after the buffered realtime events have
       // been flushed, so this is the first moment the client is both caught up
       // on durable changes and applying live ones directly.
       //
-      // Both gates keep that a claim about *now*. A sync awaits `/sync`
-      // paging, a rooms refresh, a debounced social refresh and a member load;
-      // if the socket drops in that window `socket.connected` rejects the
-      // resolving sync, and if it drops *and reconnects* in that window the
-      // generation check rejects it — the new connection has to earn readiness
-      // through its own `realtime_ready`. The failure path needs no separate
-      // branch: it disconnects before resolving, so the first gate catches it.
+      // The gates together keep that a claim about *now*. A sync awaits
+      // `/sync` paging, a rooms refresh, a debounced social refresh and a
+      // member load, and several things can happen inside that window:
+      //
+      // - the socket drops, so `socket.connected` rejects the resolving sync;
+      // - it drops *and reconnects*, so the connection generation rejects it —
+      //   the new connection must earn readiness through its own signal;
+      // - another `realtime_ready` arrives, so the signal serial rejects it.
+      //   That last one matters because an overlapping signal is served by a
+      //   queued follow-up while this handler still holds its own `.then` on
+      //   the earlier sync: without the serial, the earlier sync completing
+      //   would publish readiness while the follow-up the newer signal asked
+      //   for is still running.
+      //
+      // The failure path needs no separate branch: it disconnects before
+      // resolving, so `socket.connected` catches it.
       void resynchronize().then(() => {
-        if (!disposed && socket.connected && connectionGeneration === generation) {
+        if (
+          !disposed &&
+          socket.connected &&
+          connectionGeneration === generation &&
+          readinessSignalSerial === signal
+        ) {
           setRealtimeReady(true);
         }
       });

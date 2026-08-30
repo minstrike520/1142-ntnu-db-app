@@ -207,4 +207,43 @@ describe("room realtime readiness", () => {
     expect(__getApiCallLog("syncChanges").length).toBeGreaterThan(before);
     expect(roomReady(app.view.container, "room-1")).toBe(true);
   });
+
+  test("only the newest realtime_ready may publish readiness", async () => {
+    // The overlapping case again, but asserted *during* the follow-up rather
+    // than after it. The earlier signal keeps its own `.then` on the sync it
+    // was served by, and that sync finishing says nothing about the recovery
+    // the newer signal is still waiting on — so it must not publish readiness.
+    const app = await mountChatApp("/chat/room-1");
+
+    const first = __gateNextSync();
+    act(() => {
+      app.socket().serverEmit("realtime_ready");
+    });
+    await app.settle();
+
+    act(() => {
+      app.socket().serverEmit("realtime_ready");
+    });
+    await app.settle();
+
+    // Hold the queued follow-up open so the window between the two syncs is
+    // observable at all.
+    const followUp = __gateNextSync();
+    await act(async () => {
+      first.succeed();
+      await Promise.resolve();
+    });
+    await app.settle();
+
+    // The first sync is done and the follow-up is still running.
+    expect(roomReady(app.view.container, "room-1")).toBe(false);
+
+    await act(async () => {
+      followUp.succeed();
+      await Promise.resolve();
+    });
+    await app.settle();
+
+    expect(roomReady(app.view.container, "room-1")).toBe(true);
+  });
 });
