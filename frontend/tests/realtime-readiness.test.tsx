@@ -18,6 +18,7 @@ import { describe, expect, test } from "vitest";
 import { act } from "@testing-library/react";
 import { mountChatApp } from "./harness";
 import { __gateNextSync, __getApiCallLog } from "./mocks/api";
+import { ME_ID, membersByRoom } from "./fixtures";
 
 /** The attribute as a test would query it: named for one room, or absent. */
 const roomReady = (container: HTMLElement, roomId: string): boolean =>
@@ -245,5 +246,34 @@ describe("room realtime readiness", () => {
     await app.settle();
 
     expect(roomReady(app.view.container, "room-1")).toBe(true);
+  });
+
+  test("withdraws room readiness when a live role change demotes to pending", async () => {
+    // The server drops a demoted member's room subscription and reports the
+    // change as MEMBER_UPDATED, whose handler reloads `activeRoom.members`
+    // and leaves `myRole` untouched. Readiness therefore cannot be decided on
+    // `myRole` alone, or the room would keep claiming realtime while the
+    // socket is no longer in its channel.
+    const app = await mountChatApp("/chat/room-1");
+    expect(roomReady(app.view.container, "room-1")).toBe(true);
+
+    const members = membersByRoom["room-1"]!;
+    const previous = members[0]!;
+    members[0] = { ...previous, role: "pending" };
+    try {
+      act(() => {
+        app.socket().serverEmit("room_update", {
+          type: "MEMBER_UPDATED",
+          roomId: "room-1",
+          data: { userId: ME_ID, role: "pending" },
+        });
+      });
+      await app.settle();
+
+      expect(roomReady(app.view.container, "room-1")).toBe(false);
+    } finally {
+      // Shared module-level fixture: `__resetApiMock` does not restore it.
+      members[0] = previous;
+    }
   });
 });

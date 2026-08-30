@@ -742,13 +742,24 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
       // usable while its channel is not joined — ready for REST, not for
       // realtime.
       //
+      // Pending is read from both sources because each is stale in a
+      // different situation, and either one saying pending means this socket
+      // is not in the room's channel. `myRole` arrives with the room summary,
+      // so it is the only one available on first paint — but a live demotion
+      // reaches the client as MEMBER_UPDATED, whose member reload rewrites
+      // `activeRoom.members` and leaves `myRole` untouched. `currentMember`
+      // is the mirror image: current across a role change, absent until the
+      // members have loaded.
+      //
       // Carries the room id rather than a boolean, so a waiter names the room
       // it means and cannot be satisfied by a previous room still mounted.
       // `undefined` and not `false` is load-bearing: React renders
       // `data-room-ready="false"` for a boolean, which `[data-room-ready]`
       // would still match.
       data-room-ready={
-        realtimeReady && activeRoom.myRole !== "pending" ? activeRoom.id : undefined
+        realtimeReady && activeRoom.myRole !== "pending" && !isPending
+          ? activeRoom.id
+          : undefined
       }
     >
       {/* Chat Panel Header */}
