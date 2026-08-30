@@ -17,7 +17,7 @@
 import { describe, expect, test } from "vitest";
 import { act } from "@testing-library/react";
 import { mountChatApp } from "./harness";
-import { __gateNextSync } from "./mocks/api";
+import { __gateNextSync, __getApiCallLog } from "./mocks/api";
 
 /** The attribute as a test would query it: named for one room, or absent. */
 const roomReady = (container: HTMLElement, roomId: string): boolean =>
@@ -172,5 +172,39 @@ describe("room realtime readiness", () => {
     await app.settle();
 
     expect(roomReady(app.view.container, "room-1")).toBe(false);
+  });
+
+  test("runs a fresh sync for a realtime_ready that overlaps one in flight", async () => {
+    // The in-flight sync cannot answer a later signal: its `/sync` paging may
+    // already be finished, while the changes the signal exists to recover were
+    // committed during the revoked-subscription window just before it was
+    // sent. Reusing that request would leave them unfetched and still report
+    // readiness, so an overlapping signal must get its own pass.
+    const app = await mountChatApp("/chat/room-1");
+
+    const gate = __gateNextSync();
+    act(() => {
+      app.socket().serverEmit("realtime_ready");
+    });
+    await app.settle();
+
+    // A second signal, while the first sync is still held open.
+    act(() => {
+      app.socket().serverEmit("realtime_ready");
+    });
+    await app.settle();
+
+    const before = __getApiCallLog("syncChanges").length;
+
+    await act(async () => {
+      gate.succeed();
+      await Promise.resolve();
+    });
+    await app.settle();
+
+    // A `/sync` that started after the second signal, not just the one it
+    // arrived during.
+    expect(__getApiCallLog("syncChanges").length).toBeGreaterThan(before);
+    expect(roomReady(app.view.container, "room-1")).toBe(true);
   });
 });

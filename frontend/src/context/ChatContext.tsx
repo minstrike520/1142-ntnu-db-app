@@ -1366,6 +1366,42 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       return track(request);
     };
 
+    // What `realtime_ready` needs, which plain coalescing cannot give it.
+    //
+    // A signal that lands while a full sync is already running cannot be
+    // satisfied by that sync: `runSynchronization` pages `/sync` first and
+    // only then awaits the rooms refresh, the debounced social refresh and the
+    // member load, so its paging can already be finished — while the changes
+    // this signal exists to recover were committed just before it was sent,
+    // during the revoked-subscription window. Handing back the in-flight
+    // request would leave those changes unfetched until some later recovery,
+    // and would report readiness as if they had been.
+    //
+    // So an overlapping signal queues exactly one follow-up pass rather than
+    // reusing the request. Any number of signals arriving during a sync
+    // collapse into that single pass, which keeps the reconnect-race collapse
+    // this chain was built for while still guaranteeing one `/sync` that
+    // starts strictly after the most recent signal.
+    let queuedResync: Promise<void> | null = null;
+
+    const resynchronize = (): Promise<void> => {
+      const inFlight = outstandingFullSync;
+      if (!inFlight) return synchronize();
+      if (queuedResync) return queuedResync;
+      const request = (async () => {
+        // Never rejects, for the same reason `synchronize` does not: a failed
+        // predecessor must not stop the recovery this signal asked for.
+        await inFlight.catch(() => undefined);
+        if (disposed) return;
+        // Cleared before starting, so a signal arriving during the follow-up
+        // opens a new window rather than being folded into a finished one.
+        queuedResync = null;
+        await synchronize();
+      })();
+      queuedResync = request;
+      return request;
+    };
+
     // Opportunistic, unlike `synchronize`: if anything is already talking to
     // `/sync` there is nothing to checkpoint behind it, and the next tick will
     // come round again.
@@ -1826,7 +1862,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // generation check rejects it — the new connection has to earn readiness
       // through its own `realtime_ready`. The failure path needs no separate
       // branch: it disconnects before resolving, so the first gate catches it.
-      void synchronize().then(() => {
+      void resynchronize().then(() => {
         if (!disposed && socket.connected && connectionGeneration === generation) {
           setRealtimeReady(true);
         }
