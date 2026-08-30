@@ -1164,6 +1164,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     replayedWithoutUnreadRef.current.clear();
     syncingRef.current = true;
     let disposed = false;
+    // Readiness generation: bumped on every connect and disconnect, so a
+    // `/sync` can tell whether the connection it was started for is still the
+    // current one. `socket.connected` alone cannot: Socket.IO reconnects this
+    // same instance automatically (`reconnection` defaults to true), so a sync
+    // outliving a transport drop would otherwise find `connected === true`
+    // again and report readiness for a connection whose subscriptions have not
+    // been restored yet.
+    let connectionGeneration = 0;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const socket = createChatSocket(token);
     socketRef.current = socket;
@@ -1631,6 +1639,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const cleanupDisconnect = onSocketDisconnect(socket, (reason) => {
       // Unconditional, and before the retry branch: a dropped socket is not
       // ready by any definition, whatever reconnect path follows.
+      connectionGeneration += 1;
       setRealtimeReady(false);
       if (!disposed && reason === 'io server disconnect') {
         retryTimer = setTimeout(() => {
@@ -1646,6 +1655,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       syncingRef.current = true;
       // A fresh connection has not synced yet: readiness is re-earned by the
       // `realtime_ready` handler below, never inherited from the last session.
+      connectionGeneration += 1;
       setRealtimeReady(false);
     });
     const cleanupFriendRequest = onFriendRequest(socket, (payload) => {
@@ -1794,19 +1804,32 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
 
     const cleanupRealtimeReady = onRealtimeReady(socket, () => {
+      // Not once per connection: the server also re-sends this mid-session
+      // after it restores a subscription it had revoked (a kick that lost its
+      // conditional delete — roomService), and a restored subscription replays
+      // nothing that was published while it was gone. That makes this the
+      // client's standing recovery signal, so readiness has to be withdrawn
+      // for the duration of the recovery it starts. Leaving it true would let
+      // a waiter pass during exactly the window in which this client is known
+      // to be missing durable changes.
+      const generation = connectionGeneration;
+      setRealtimeReady(false);
+
       // `synchronize` resolves only after the buffered realtime events have
       // been flushed, so this is the first moment the client is both caught up
       // on durable changes and applying live ones directly.
       //
-      // The `socket.connected` gate is what keeps this a claim about *now*
-      // rather than about when the sync started. A sync awaits `/sync` paging,
-      // a rooms refresh, a debounced social refresh and a member load; if the
-      // socket drops anywhere in that window the disconnect handler clears the
-      // flag, and without this gate the resolving sync would set it back to
-      // true over a dead socket. The failure path needs no separate branch:
-      // it disconnects before resolving, so the same gate rejects it.
+      // Both gates keep that a claim about *now*. A sync awaits `/sync`
+      // paging, a rooms refresh, a debounced social refresh and a member load;
+      // if the socket drops in that window `socket.connected` rejects the
+      // resolving sync, and if it drops *and reconnects* in that window the
+      // generation check rejects it — the new connection has to earn readiness
+      // through its own `realtime_ready`. The failure path needs no separate
+      // branch: it disconnects before resolving, so the first gate catches it.
       void synchronize().then(() => {
-        if (!disposed && socket.connected) setRealtimeReady(true);
+        if (!disposed && socket.connected && connectionGeneration === generation) {
+          setRealtimeReady(true);
+        }
       });
     });
     socket.connect();
@@ -2952,6 +2975,12 @@ export function useProfilePopover() {
  *
  * It returns to `false` on connect, on disconnect, on logout and on provider
  * teardown, so it is a claim about the present moment and never a latch.
+ *
+ * It also returns to `false` on every `realtime_ready`, not only the first of
+ * a connection. The server re-sends that event mid-session whenever it
+ * restores a subscription it had revoked, and a restored subscription replays
+ * nothing published while it was gone — so each one opens a fresh window in
+ * which this client is missing durable changes until its `/sync` completes.
  *
  * Note what it deliberately does not cover: it is a *session*-level fact, not
  * a per-room one. A room is additionally unready while the user's membership

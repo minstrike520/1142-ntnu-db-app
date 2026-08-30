@@ -104,4 +104,73 @@ describe("room realtime readiness", () => {
 
     expect(roomReady(app.view.container, "room-1")).toBe(false);
   });
+
+  test("withdraws readiness for a mid-session realtime_ready", async () => {
+    // `realtime_ready` is not once-per-connection. The server re-sends it
+    // after restoring a subscription it had revoked, and that restore replays
+    // nothing published while the subscription was gone — so the client is
+    // missing durable changes until the sync it triggers completes. Readiness
+    // must drop for that window rather than staying true across it.
+    const app = await mountChatApp("/chat/room-1");
+    expect(roomReady(app.view.container, "room-1")).toBe(true);
+
+    const gate = __gateNextSync();
+    act(() => {
+      app.socket().serverEmit("realtime_ready");
+    });
+    await app.settle();
+
+    expect(roomReady(app.view.container, "room-1")).toBe(false);
+
+    await act(async () => {
+      gate.succeed();
+      await Promise.resolve();
+    });
+    await app.settle();
+
+    expect(roomReady(app.view.container, "room-1")).toBe(true);
+  });
+
+  test("does not let a previous connection's sync restore readiness", async () => {
+    // Socket.IO reconnects the same instance automatically, so a sync started
+    // before a transport drop can resolve after the reconnect, when
+    // `socket.connected` is true again. It must not report readiness for that
+    // new connection: the server restores subscriptions and re-emits
+    // `realtime_ready` per connection, and none of that has happened yet.
+    const app = await mountChatApp("/chat/room-1");
+    const socket = app.socket();
+    const connection = socket as unknown as { connected: boolean };
+
+    // Start a sync on the current connection and leave it in flight.
+    const gate = __gateNextSync();
+    act(() => {
+      socket.serverEmit("realtime_ready");
+    });
+    await app.settle();
+    expect(roomReady(app.view.container, "room-1")).toBe(false);
+
+    // The transport drops and Socket.IO brings the same instance back up. The
+    // events are emitted directly, and `connected` set by hand, because the
+    // mock's own `connect()` also emits `realtime_ready` — which is precisely
+    // the step this test must exclude: the new connection has not restored its
+    // subscriptions, so it has not earned readiness.
+    act(() => {
+      connection.connected = false;
+      socket.serverEmit("disconnect", "transport close");
+    });
+    act(() => {
+      connection.connected = true;
+      socket.serverEmit("connect");
+    });
+    await app.settle();
+
+    // The previous connection's sync now completes, with the socket connected.
+    await act(async () => {
+      gate.succeed();
+      await Promise.resolve();
+    });
+    await app.settle();
+
+    expect(roomReady(app.view.container, "room-1")).toBe(false);
+  });
 });
