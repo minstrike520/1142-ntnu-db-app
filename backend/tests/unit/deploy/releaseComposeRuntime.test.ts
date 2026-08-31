@@ -320,6 +320,108 @@ describe('backend stop grace period', () => {
 });
 
 /**
+ * Source-level properties of the release bundle, checked against the raw YAML
+ * rather than a rendered model.
+ *
+ * These deliberately need no Docker. `scripts/check-compose-invariants.mjs`
+ * holds the *rendered* models to `compose-invariants.json` (issue #631) and
+ * needs the Compose CLI to do it; keeping that dependency out of the unit tier
+ * means these still run on any machine, and a missing Docker in some future
+ * runner degrades the checker rather than silently emptying this suite too.
+ *
+ * They are also the layer where escaping is still visible: by the time Compose
+ * has rendered a model, `${VAR:?}` and `$${VAR}` have either been resolved or
+ * preserved depending on flags, so the file's own text is the honest source for
+ * "was this written to fail fast" and "was this escaped for the container".
+ */
+describe('release bundle source properties', () => {
+  const releaseText = readFileSync(path.join(repoRoot, 'docker-compose.release.yml'), 'utf8');
+  const releaseServices = composeServices('docker-compose.release.yml') as Record<
+    string,
+    { image?: string; build?: unknown }
+  >;
+
+  it('finds the services to check, so a rename cannot silently empty this suite', () => {
+    expect(Object.keys(releaseServices).sort()).toEqual(['backend', 'db', 'frontend', 'migrate']);
+  });
+
+  it('pins its own project name, which decides the volume names on an upgrade', () => {
+    // Asserted here rather than in compose-invariants.json because the checker
+    // renders with `-p near-chat` -- which overrides this key, so a rendered row
+    // would still pass with it deleted. Without it the project name comes from
+    // the directory the bundle happens to be unpacked into, so an upgrade
+    // extracted somewhere else starts an empty pgdata instead of the existing
+    // database (issue #631).
+    const parsed = Bun.YAML.parse(readFileSync(path.join(repoRoot, 'docker-compose.release.yml'), 'utf8')) as {
+      name?: string;
+    };
+    expect(parsed.name).toBe('near-chat');
+  });
+
+  it('ships no build stanza, because the bundle carries no source to build from', () => {
+    // A `build:` here would make a deployment rebuild from whatever happened to
+    // be in the extraction directory instead of running the published image.
+    for (const [name, service] of Object.entries(releaseServices)) {
+      expect([name, service.build]).toEqual([name, undefined]);
+    }
+  });
+
+  it('pins every image it does not take from the release workflow to a digest', () => {
+    for (const [name, service] of Object.entries(releaseServices)) {
+      const image = service.image;
+      expect([name, typeof image]).toEqual([name, 'string']);
+      // The application images arrive as ${BACKEND_IMAGE} / ${FRONTEND_IMAGE},
+      // which release-stack.yml resolves to digests it just published. Anything
+      // else in this file is a third-party image and has to be pinned here, or
+      // two deployments of one release can run different builds.
+      if (image!.startsWith('${')) continue;
+      expect([name, image]).toEqual([name, expect.stringMatching(/@sha256:[0-9a-f]{64}$/)]);
+    }
+  });
+
+  it('takes both application images from a required variable, not a default', () => {
+    // `:-` would boot something unintended when the variable is missing; the
+    // bundle has no source to fall back on, so it must fail at render instead.
+    for (const [name, variable] of [
+      ['backend', 'BACKEND_IMAGE'],
+      ['migrate', 'BACKEND_IMAGE'],
+      ['frontend', 'FRONTEND_IMAGE'],
+    ] as const) {
+      expect([name, releaseServices[name]?.image]).toEqual([name, `\${${variable}:?${variable} is required}`]);
+    }
+  });
+
+  it('escapes the healthcheck credentials so the container expands them', () => {
+    // `$${VAR}` reaches the container as `${VAR}` for its own shell. Written
+    // with a single `$`, Compose would substitute host-side and bake the
+    // credentials into the rendered config — and on a host that does not export
+    // them, into an empty string that never passes the healthcheck.
+    const test = (releaseServices as Record<string, { healthcheck?: { test?: string[] } }>).db?.healthcheck?.test;
+    expect(test).toEqual(['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']);
+  });
+
+  it('fails fast on every secret it cannot invent a default for', () => {
+    // Each of these either has no safe default (credentials, image references)
+    // or would be actively unsafe defaulted (CORS_ORIGINS defaulted open).
+    for (const variable of [
+      'POSTGRES_USER',
+      'POSTGRES_PASSWORD',
+      'POSTGRES_DB',
+      'DATABASE_URL',
+      'JWT_SECRET',
+      'CORS_ORIGINS',
+      'BACKEND_IMAGE',
+      'FRONTEND_IMAGE',
+    ]) {
+      expect([variable, releaseText.includes(`\${${variable}:?`)]).toEqual([variable, true]);
+      // And none of them may also appear with a default somewhere else in the
+      // file, which would quietly re-supply the value the `:?` exists to demand.
+      expect([variable, new RegExp(`\\$\\{${variable}:?-`).test(releaseText)]).toEqual([variable, false]);
+    }
+  });
+});
+
+/**
  * The ordering guarantee the commands depend on. Without it the backend can
  * boot against a schema the migrate service has not finished applying.
  */

@@ -116,6 +116,15 @@ jobs:
               - 'pnpm-workspace.yaml'
               - '.dockerignore'
               - 'docker-compose*.yml'
+              # This lane runs the compose invariant contract (issue #631), so
+              # the checker and the contract are backend inputs the same way the
+              # compose files are. Without them a PR editing only the guard --
+              # or only the contract rows it enforces -- leaves backend-required
+              # false, the lane is skipped, and `required-checks` accepts that
+              # skip: the check would silently stop running on changes to
+              # itself, which is exactly when it matters most.
+              - 'scripts/**'
+              - 'compose-invariants.json'
               - '.github/workflows/**'
               - '.github/actions/**'
             security:

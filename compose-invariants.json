@@ -1,0 +1,273 @@
+{
+  "$comment": [
+    "Property contract for the two production Compose models, enforced by",
+    "scripts/check-compose-invariants.mjs (issue #631).",
+    "",
+    "Each row asserts one property of ONE model against the rendered output of",
+    "`docker compose config --no-interpolate`. There is deliberately no",
+    "model-to-model diff: docker-compose.prod.yml and docker-compose.release.yml",
+    "are two products (source build + cloudflared tunnel + manual migration, vs.",
+    "an immutable image bundle with its own migrate service), so nearly every",
+    "field would differ legitimately and the allowlist absolving them would be",
+    "indistinguishable from no check at all.",
+    "",
+    "`why` is required on every row and must cite an issue, because the value",
+    "alone never says why it may not change. A row whose `path` no longer",
+    "resolves is a failure, not a pass -- otherwise a row left behind after a",
+    "refactor would silently stop guarding anything. Every service in a rendered",
+    "model must also be named by at least one row, so adding a service without",
+    "saying what governs it fails rather than slipping in ungoverned.",
+    "",
+    "NOT assertable here: the top-level `name:` key. The checker renders with",
+    "`-p near-chat` to keep prod's project, network and volume names off the",
+    "checkout directory name, and `-p` overrides the file's own `name:` -- so a",
+    "row asserting it would pass even with the key deleted. It is asserted from",
+    "the source YAML instead, in backend/tests/unit/deploy/releaseComposeRuntime.test.ts.",
+    "",
+    "expect: a literal to deep-equal, or {\"$absent\": true},",
+    "{\"$matches\": \"<regex>\"}, or {\"$keys\": [...]} for an exact key set."
+  ],
+  "invariants": [
+    {
+      "model": "prod",
+      "path": "services",
+      "expect": { "$keys": ["backend", "db", "frontend", "redis", "tunnel"] },
+      "why": "#631: the service set is the frame every other prod row is written against. A service added or renamed without updating this contract would otherwise be governed by nothing."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.ports[0].host_ip",
+      "expect": "127.0.0.1",
+      "why": "#631: cloudflared is the only ingress (docker-compose.prod.yml:1-9). A database reachable off-host bypasses the tunnel entirely, and this binding is also what makes trusting X-Forwarded-For safe -- see TRUST_PROXY_HOPS below."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.ports[0].host_ip",
+      "expect": "127.0.0.1",
+      "why": "#631: same loopback-only ingress rule. Published on 0.0.0.0 the API would be reachable without the tunnel, and TRUST_PROXY_HOPS=1 would then let any caller forge X-Forwarded-For and choose its own rate-limit bucket (#413)."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.ports[0].host_ip",
+      "expect": "127.0.0.1",
+      "why": "#631: same loopback-only ingress rule; the documented local production walkthrough browses http://localhost:3005 and needs nothing wider."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.ports",
+      "expect": { "$absent": true },
+      "why": "#631: this Redis has no password, so reachability from the compose network only IS its access control (docker-compose.prod.yml:29-34). Publishing any host port for it is never the right fix."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.ports",
+      "expect": { "$absent": true },
+      "why": "#631: cloudflared dials out to Cloudflare and accepts nothing inbound; a published port on it would be a second, unauthenticated ingress."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.TRUST_PROXY_HOPS",
+      "expect": "1",
+      "why": "#631: exactly one trusted hop (cloudflared), pinned as a literal rather than ${TRUST_PROXY_HOPS:-1} on purpose (docker-compose.prod.yml:78-84) -- a value inherited from a shared .env would silently replace the default and funnel every caller into one rate-limit bucket (#413)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.REDIS_URL",
+      "expect": "${REDIS_URL-redis://redis:6379}",
+      "why": "#631: single-dash `-`, not `:-`. An explicitly empty REDIS_URL must reach the container empty so the backend runs realtime single-node, which is a supported deployment rather than a value to default away (#471)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.LOG_LEVEL",
+      "expect": null,
+      "why": "#631: pass-through with no `=`, so an unset LOG_LEVEL stays absent in the container and the logger applies its own default. Rewriting it as LOG_LEVEL= would set it to the empty string, which is a different thing."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.INSTANCE_ID",
+      "expect": null,
+      "why": "#631: pass-through, like LOG_LEVEL. Unset means the backend generates one per process; an empty string is not the same input and would not round-trip through presence lease reclaim (#586)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.stop_grace_period",
+      "expect": "30s",
+      "why": "#586: the drain in src/index.ts has a ~14s worst case and arms a 20s deadline. Docker's 10s default SIGKILLs the process while it is handing presence leases back, leaving users showing online until PRESENCE_TTL_MS expires."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.depends_on.redis.condition",
+      "expect": "service_started",
+      "why": "#631: started, not healthy. src/utils/redis.ts treats Redis as a degraded mode rather than a boot dependency, so gating on its healthcheck would let a Redis that cannot bind stop the API serving routes that never touch Redis."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.build.dockerfile",
+      "expect": "./backend/Dockerfile.prod",
+      "why": "#558: prod builds from source, and this is the only production Dockerfile CI builds. Pointing it at the dev Dockerfile would ship a dev image under a production stack name."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.restart",
+      "expect": "always",
+      "why": "#631: the tunnel is the only ingress, so it must come back after a host reboot without anyone running a command. `unless-stopped` would leave it down after an operator stops it once."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.healthcheck.test[1]",
+      "expect": "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}",
+      "why": "#631: single `$`, so Compose interpolates these host-side before the container sees them. prod's db reads POSTGRES_USER from the host .env, so a `$$` escape here would send the literal string to pg_isready and the healthcheck would never pass."
+    },
+    {
+      "model": "prod",
+      "path": "volumes",
+      "expect": { "$keys": ["app_uploads", "pgdata"] },
+      "why": "#631: the two stateful volumes. A renamed volume silently starts an empty one, which for pgdata means an empty database and for app_uploads means every existing attachment 404s."
+    },
+
+    {
+      "model": "release",
+      "path": "services",
+      "expect": { "$keys": ["backend", "db", "frontend", "migrate"] },
+      "why": "#631: the service set is the frame every other release row is written against, and `migrate` in particular is what makes the bundle self-applying (#558)."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.build",
+      "expect": { "$absent": true },
+      "why": "#558: the release bundle ships no source. A `build:` here would make the bundle silently rebuild from whatever happened to be in the extraction directory instead of running the image the release published."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.build",
+      "expect": { "$absent": true },
+      "why": "#558: same -- the frontend image is published by the release workflow and must not be rebuilt at deploy time."
+    },
+    {
+      "model": "release",
+      "path": "services.db.image",
+      "expect": { "$matches": "^postgres:18-alpine@sha256:[0-9a-f]{64}$" },
+      "why": "#527: digest-pinned so the bundle is reproducible. A floating tag means two deployments of the same release can run different Postgres builds."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.image",
+      "expect": "${BACKEND_IMAGE:?BACKEND_IMAGE is required}",
+      "why": "#631: `:?` so a deployment missing BACKEND_IMAGE fails at render rather than booting something unintended. Unlike prod, the bundle has no source to fall back on."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.image",
+      "expect": "${BACKEND_IMAGE:?BACKEND_IMAGE is required}",
+      "why": "#558: migrate must run the same image as the backend, or migrations execute against a schema built by a different version of the code."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.image",
+      "expect": "${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}",
+      "why": "#631: same fail-fast rule as BACKEND_IMAGE."
+    },
+    {
+      "model": "release",
+      "path": "services.db.healthcheck.test[1]",
+      "expect": "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+      "why": "#631: `$$` escapes the interpolation so the container's own shell expands it. Written with a single `$` Compose would substitute host-side, and the credentials would be baked into the rendered config rather than read from the container environment."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.restart",
+      "expect": "no",
+      "why": "#558: migrate is a run-once job. Any restart policy turns a failed migration into a crash loop that re-runs it forever instead of stopping the deployment."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.depends_on.db.condition",
+      "expect": "service_healthy",
+      "why": "#558: migrations must not start against a Postgres that is still initializing, or the run fails on a connection refused that looks like a bad migration."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.depends_on.migrate.condition",
+      "expect": "service_completed_successfully",
+      "why": "#558: the backend must not boot against a schema migrate has not finished applying. Anything weaker lets the API serve requests mid-migration."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.TRUST_PROXY_HOPS",
+      "expect": "${TRUST_PROXY_HOPS:-0}",
+      "why": "#413: this bundle publishes the backend port directly, so callers arrive as themselves and the peer address is the right thing to bucket on. Defaulting above 0 here would let any caller forge X-Forwarded-For."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.REDIS_URL",
+      "expect": "${REDIS_URL:-}",
+      "why": "#527: the bundle ships no Redis of its own, so this is empty by default and the backend runs realtime single-node -- a supported deployment, not a misconfiguration."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.DATABASE_URL",
+      "expect": "${DATABASE_URL:?DATABASE_URL is required}",
+      "why": "#631: `:?` so a bundle deployed without a database URL fails at render instead of booting and failing per-request."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.JWT_SECRET",
+      "expect": "${JWT_SECRET:?JWT_SECRET is required}",
+      "why": "#631: `:?` so the bundle cannot boot with an empty signing secret, which would make every issued token forgeable."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.CORS_ORIGINS",
+      "expect": "${CORS_ORIGINS:?CORS_ORIGINS is required}",
+      "why": "#631: `:?` rather than a permissive default. A blank origin list defaulted to `*` would let any site drive the API with a user's credentials."
+    },
+    {
+      "model": "release",
+      "path": "services.db.ports",
+      "expect": { "$absent": true },
+      "why": "#631: unlike prod, the release bundle publishes no database port at all. The backend reaches it over the compose network, and an exposed Postgres on a real deployment host is directly reachable from the internet."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.ports[0].host_ip",
+      "expect": "0.0.0.0",
+      "why": "#631: intentionally public, unlike prod's loopback binding -- this bundle has no bundled reverse proxy, so publishing directly is how it is reached. Recorded so the difference reads as a deliberate choice rather than drift, and so pairing it with a non-zero TRUST_PROXY_HOPS fails this contract."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.ports[0].host_ip",
+      "expect": "0.0.0.0",
+      "why": "#631: same -- the bundle publishes the frontend directly."
+    },
+    {
+      "model": "release",
+      "path": "services.db.restart",
+      "expect": "unless-stopped",
+      "why": "#631: the bundle is the unattended deployment path, so its long-running services come back after a host reboot without an operator."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.restart",
+      "expect": "unless-stopped",
+      "why": "#631: same as db. Note migrate deliberately differs -- see its own row."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.restart",
+      "expect": "unless-stopped",
+      "why": "#631: same as db and backend."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.stop_grace_period",
+      "expect": "30s",
+      "why": "#586: same drain budget as prod -- Docker's 10s default SIGKILLs the backend while it is handing presence leases back."
+    },
+    {
+      "model": "release",
+      "path": "volumes",
+      "expect": { "$keys": ["app_uploads", "pgdata"] },
+      "why": "#631: the same two stateful volumes as prod. A rename in the bundle silently starts an empty database on an upgrade of an existing deployment."
+    }
+  ]
+}

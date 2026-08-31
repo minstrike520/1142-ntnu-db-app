@@ -6,7 +6,9 @@
     "dev": "docker compose up -d",
     "build": "pnpm --filter near-chat-frontend build && pnpm --filter near-chat-backend build",
     "check:node-engine": "node scripts/check-node-engine.mjs",
-    "test:node-engine": "node scripts/check-node-engine.test.mjs"
+    "test:node-engine": "node scripts/check-node-engine.test.mjs",
+    "check:compose-invariants": "node scripts/check-compose-invariants.mjs",
+    "test:compose-invariants": "node scripts/check-compose-invariants.test.mjs"
   },
   "devDependencies": {
     "semver": "^7.8.5",

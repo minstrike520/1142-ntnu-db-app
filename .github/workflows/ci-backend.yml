@@ -37,6 +37,53 @@ jobs:
           bun: 'true'
       - run: pnpm --filter near-chat-backend test:unit
 
+  # Holds docker-compose.prod.yml and docker-compose.release.yml to the property
+  # contract in compose-invariants.json (issue #631). In this lane rather than a
+  # new top-level workflow, for the reason spelled out above `release-compose`
+  # below: `required-checks` only aggregates the five existing lanes.
+  #
+  # Deliberately NOT gated on `inputs.run-build`, unlike every other job here
+  # that touches compose. run-build is true only on main or on a PR whose base
+  # is main (ci.yml), so a stacked PR would skip this check — and `required-checks`
+  # accepts a skip from a lane it did not mark required, so the drift would reach
+  # main with the gate green. The job is seconds long and needs no image build,
+  # so there is nothing to save by gating it.
+  compose-invariants:
+    name: production compose invariant contract
+    runs-on: ubuntu-latest
+    env:
+      # Pinned so a runner image upgrade cannot fail this job for a reason
+      # unrelated to the change under review: the contract asserts a *rendered*
+      # model, and Compose's own renderer is what produces it. Bump this
+      # deliberately, with the contract re-verified against the new renderer.
+      COMPOSE_VERSION: v5.1.1
+    steps:
+      - uses: actions/checkout@v7
+
+      # No `package:` — the checker and its tests import only Node builtins, so
+      # there is nothing to install. This is just the pinned Node toolchain.
+      - uses: ./.github/actions/setup-workspace
+
+      - name: Pin Docker Compose
+        run: |
+          set -euo pipefail
+          plugins="$HOME/.docker/cli-plugins"
+          mkdir -p "$plugins"
+          curl -fsSL --retry 3 -o "$plugins/docker-compose" \
+            "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64"
+          chmod +x "$plugins/docker-compose"
+          installed="$(docker compose version --short)"
+          # `docker compose version --short` omits the leading v.
+          if [ "v$installed" != "$COMPOSE_VERSION" ]; then
+            echo "::error::expected Compose $COMPOSE_VERSION, got v$installed"
+            exit 1
+          fi
+
+      # The checker's own tests first: a checker that cannot fail is worse than
+      # no checker, and this is what proves it still can.
+      - run: pnpm test:compose-invariants
+      - run: pnpm check:compose-invariants
+
   build:
     if: inputs.run-build
     runs-on: ubuntu-latest
