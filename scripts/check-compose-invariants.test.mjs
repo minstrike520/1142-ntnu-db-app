@@ -315,6 +315,50 @@ test("$contains pins the mount type, so a bind cannot stand in for the volume", 
   assert.match(failures[0], /"type":"bind"/);
 });
 
+test("a read-only stateful mount reads as a value, not a missing key", () => {
+  // Compose emits `read_only` only when asked, so `:ro` keeps type, source and
+  // target identical and a subset match would list only those. Postgres has to
+  // write to its data directory, so this takes the stack down at boot.
+  const contract = [
+    {
+      model: "prod",
+      path: "services.db.volumes",
+      expect: { $contains: { type: "volume", read_only: false, source: "pgdata", target: "/var/lib/postgresql" } },
+      why: "#631",
+    },
+  ];
+  const writable = baseModel();
+  writable.services.db = { volumes: [{ type: "volume", source: "pgdata", target: "/var/lib/postgresql" }] };
+  assert.deepEqual(evaluateAgainst(contract, { prod: writable }), []);
+
+  const readOnly = baseModel();
+  readOnly.services.db = {
+    volumes: [{ type: "volume", read_only: true, source: "pgdata", target: "/var/lib/postgresql" }],
+  };
+  const failures = evaluateAgainst(contract, { prod: readOnly });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /"read_only":true/);
+});
+
+test("$every pins the protocol, so a udp mapping cannot pass as the tcp one", () => {
+  // `3005:3000/udp` leaves host_ip, published and target all untouched, but the
+  // HTTP listener is TCP -- nothing answers on the published port.
+  const contract = [
+    {
+      model: "prod",
+      path: "services.backend.ports",
+      expect: { $every: { host_ip: "127.0.0.1", protocol: "tcp", published: "4005", target: 4000 } },
+      why: "#631",
+    },
+  ];
+  const tcp = baseModel();
+  assert.deepEqual(evaluateAgainst(contract, { prod: tcp }), []);
+
+  const udp = baseModel();
+  udp.services.backend.ports = [{ mode: "ingress", protocol: "udp", published: "4005", target: 4000, host_ip: "127.0.0.1" }];
+  assert.equal(evaluateAgainst(contract, { prod: udp }).length, 1);
+});
+
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
   // render modes; a row must not pass or fail on that.
@@ -476,6 +520,31 @@ test("the checked-in contract catches a published port aimed at the wrong contai
   // only db, migrate and backend, so it cannot catch this either.
   const rendered = renderRealModels();
   rendered.release.services.frontend.ports[0].target = 3001;
+  const failures = evaluateAgainst(checkedInContract(), rendered);
+  assert.ok(
+    failures.some((failure) => /docker-compose\.release\.yml services\.frontend\.ports/.test(failure)),
+    failures.join("\n"),
+  );
+});
+
+test("the checked-in contract catches a read-only stateful mount", needsDocker, () => {
+  // Postgres must write to its data directory; the uploads mount is the same
+  // story for every attachment. Neither compose file is booted by CI for prod,
+  // so this is the only place it is caught.
+  for (const [model, service] of [["prod", "db"], ["release", "backend"]]) {
+    const rendered = renderRealModels();
+    rendered[model].services[service].volumes[0].read_only = true;
+    const failures = evaluateAgainst(checkedInContract(), rendered);
+    assert.ok(
+      failures.some((failure) => new RegExp(`${MODELS[model]} services\\.${service}\\.volumes`).test(failure)),
+      `${model}: ${failures.join("\n")}`,
+    );
+  }
+});
+
+test("the checked-in contract catches a published port switched to udp", needsDocker, () => {
+  const rendered = renderRealModels();
+  rendered.release.services.frontend.ports[0].protocol = "udp";
   const failures = evaluateAgainst(checkedInContract(), rendered);
   assert.ok(
     failures.some((failure) => /docker-compose\.release\.yml services\.frontend\.ports/.test(failure)),

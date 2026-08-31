@@ -133,6 +133,19 @@ function normalizePorts(ports) {
 }
 
 /**
+ * Compose emits `read_only` only when the mount asks for it, so a writable
+ * mount and a read-only one differ by key presence -- the same trap as
+ * `host_ip`. A subset match lists only the keys it cares about, so without
+ * this a `:ro` suffix keeps `type`, `source` and `target` identical and slips
+ * through, taking Postgres down at boot (it must write to its data directory)
+ * and silently failing every upload.
+ */
+function normalizeMounts(mounts) {
+  if (!Array.isArray(mounts)) return mounts;
+  return mounts.map((mount) => ({ ...mount, read_only: mount.read_only ?? false }));
+}
+
+/**
  * Compose injects `networks: {default: null}` into every service and `command`
  * / `entrypoint` as null where the file sets neither. Those are artifacts of
  * the render, not of the file, so they are reduced to the attachment list and
@@ -153,6 +166,9 @@ function normalizeService(service) {
   }
   if (normalized.ports !== undefined) {
     normalized.ports = normalizePorts(normalized.ports);
+  }
+  if (normalized.volumes !== undefined) {
+    normalized.volumes = normalizeMounts(normalized.volumes);
   }
   return normalized;
 }
