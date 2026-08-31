@@ -124,6 +124,18 @@
     },
     {
       "model": "prod",
+      "path": "services.*.networks",
+      "expect": { "$every": ["default"] },
+      "why": "#631: cloudflared reaches frontend and backend over this one compose network rather than any published port (docker-compose.prod.yml:1-9), and backend reaches db and redis the same way. A service moved onto a second network, or given `network_mode` instead, is unreachable from the only ingress -- with every port, restart and image row still green. Written as `*` so a service added later is covered without anyone remembering to add a row."
+    },
+    {
+      "model": "prod",
+      "path": "networks",
+      "expect": { "$keys": ["default"] },
+      "why": "#631: one network, so the row above means what it says. Declaring a second one is how services start being split across networks that cannot see each other."
+    },
+    {
+      "model": "prod",
       "path": "volumes",
       "expect": { "$keys": ["app_uploads", "pgdata"] },
       "why": "#631: the two stateful volumes. A renamed volume silently starts an empty one, which for pgdata means an empty database and for app_uploads means every existing attachment 404s."
@@ -278,6 +290,18 @@
       "path": "services.backend.stop_grace_period",
       "expect": "30s",
       "why": "#586: same drain budget as prod -- Docker's 10s default SIGKILLs the backend while it is handing presence leases back."
+    },
+    {
+      "model": "release",
+      "path": "services.*.networks",
+      "expect": { "$every": ["default"] },
+      "why": "#631: the bundle has no tunnel, but the same connectivity is load-bearing: migrate and backend reach db, and frontend reaches backend, over this one network. A service split onto another network, or given `network_mode`, fails at runtime only -- nothing static catches it otherwise."
+    },
+    {
+      "model": "release",
+      "path": "networks",
+      "expect": { "$keys": ["default"] },
+      "why": "#631: one network, so the row above means what it says -- as in prod."
     },
     {
       "model": "release",

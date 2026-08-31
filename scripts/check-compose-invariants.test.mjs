@@ -292,6 +292,48 @@ test("compares objects independently of Compose's key order", () => {
   assert.deepEqual(evaluateAgainst(contract, { prod: reordered }), []);
 });
 
+test("a `*` path fans out over every service", () => {
+  const contract = [{ model: "prod", path: "services.*.networks", expect: { $every: ["default"] }, why: "#631" }];
+  const connected = baseModel();
+  connected.services.tunnel = { networks: { default: null } };
+  assert.deepEqual(evaluateAgainst(contract, { prod: connected }), []);
+
+  // On its own network, cloudflared cannot reach the services it fronts, and
+  // every port/restart/image row stays green.
+  const split = baseModel();
+  split.services.tunnel = { networks: { isolated: null } };
+  const failures = evaluateAgainst(contract, { prod: split });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /isolated/);
+});
+
+test("a `*` path reports a branch with no value rather than skipping it", () => {
+  // `network_mode: none` leaves the service with no `networks` key at all.
+  // Dropping unresolved branches would make that the one case the row misses.
+  const contract = [{ model: "prod", path: "services.*.networks", expect: { $every: ["default"] }, why: "#631" }];
+  const detached = baseModel();
+  detached.services.tunnel = { network_mode: "none" };
+  const failures = evaluateAgainst(contract, { prod: detached });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /<missing>/);
+});
+
+test("a `*` row does not excuse a service from the coverage rule", () => {
+  // Otherwise a blanket topology row would mean any new service counts as
+  // governed, which is the case the coverage rule exists to catch.
+  const tampered = baseModel();
+  tampered.services.adminer = { networks: { default: null } };
+  const failures = evaluateAgainst(
+    [{ model: "prod", path: "services.*.networks", expect: { $every: ["default"] }, why: "#631" }],
+    { prod: tampered },
+    { coverage: true },
+  );
+  assert.ok(
+    failures.some((failure) => /services\.adminer is not named by any row/.test(failure)),
+    failures.join("\n"),
+  );
+});
+
 test("normalizeModel drops the nulls Compose injects into every service", () => {
   const normalized = normalizeModel(baseModel());
   assert.deepEqual(normalized.services.backend.networks, ["default"]);
@@ -358,6 +400,19 @@ test("the checked-in contract catches a second, non-loopback port on prod", need
   const failures = evaluateAgainst(checkedInContract(), rendered);
   assert.ok(
     failures.some((failure) => /docker-compose\.prod\.yml services\.backend\.ports/.test(failure)),
+    failures.join("\n"),
+  );
+});
+
+test("the checked-in contract catches a service cut off from the compose network", needsDocker, () => {
+  // Detaching the tunnel takes production entirely offline while every port,
+  // restart, image and volume row stays green -- the P2 raised on PR #638.
+  const rendered = renderRealModels();
+  delete rendered.prod.services.tunnel.networks;
+  rendered.prod.services.tunnel.network_mode = "none";
+  const failures = evaluateAgainst(checkedInContract(), rendered);
+  assert.ok(
+    failures.some((failure) => /docker-compose\.prod\.yml services\.\*\.networks/.test(failure)),
     failures.join("\n"),
   );
 });

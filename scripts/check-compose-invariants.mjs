@@ -168,26 +168,47 @@ export function normalizeModel(model) {
 /** `services.backend.ports[0].host_ip` -> the value, or MISSING. */
 const MISSING = Symbol("missing");
 
-function readPath(root, path) {
-  const segments = path
-    .replace(/\[(\d+)\]/g, ".$1")
-    .split(".")
-    .filter((segment) => segment.length > 0);
+/**
+ * A `*` segment fans out over every key (or element) at that point and collects
+ * the rest of the path from each. `services.*.networks` is then one row that
+ * covers every service, including services added later -- which is the point
+ * for topology rules, where the risk is a *new* service wired up wrongly rather
+ * than an existing one being edited.
+ *
+ * A branch that does not resolve collects MISSING rather than being dropped, so
+ * "every service is on the default network" fails for a service that is on no
+ * network at all instead of quietly skipping it.
+ */
+function walk(current, segments) {
+  if (segments.length === 0) return current;
+  const [segment, ...rest] = segments;
+  if (current === null || current === undefined) return MISSING;
 
-  let current = root;
-  for (const segment of segments) {
-    if (current === null || current === undefined) return MISSING;
-    if (Array.isArray(current)) {
-      const index = Number(segment);
-      if (!Number.isInteger(index) || index < 0 || index >= current.length) return MISSING;
-      current = current[index];
-      continue;
-    }
+  if (segment === "*") {
+    if (Array.isArray(current)) return current.map((value) => walk(value, rest));
     if (typeof current !== "object") return MISSING;
-    if (!Object.prototype.hasOwnProperty.call(current, segment)) return MISSING;
-    current = current[segment];
+    return Object.keys(current)
+      .sort()
+      .map((key) => walk(current[key], rest));
   }
-  return current;
+  if (Array.isArray(current)) {
+    const index = Number(segment);
+    if (!Number.isInteger(index) || index < 0 || index >= current.length) return MISSING;
+    return walk(current[index], rest);
+  }
+  if (typeof current !== "object") return MISSING;
+  if (!Object.prototype.hasOwnProperty.call(current, segment)) return MISSING;
+  return walk(current[segment], rest);
+}
+
+function readPath(root, path) {
+  return walk(
+    root,
+    path
+      .replace(/\[(\d+)\]/g, ".$1")
+      .split(".")
+      .filter((segment) => segment.length > 0),
+  );
 }
 
 /**
@@ -202,7 +223,10 @@ function describe(value, expected) {
     expected !== null && typeof expected === "object" && !Array.isArray(expected) && "$keys" in expected && value && typeof value === "object"
       ? Object.keys(value).sort()
       : value;
-  const rendered = JSON.stringify(subject);
+  // A `*` fan-out can collect MISSING for a branch that does not resolve, and
+  // JSON.stringify renders a symbol in an array as null -- which reads as "the
+  // value is null" rather than "this service has none".
+  const rendered = JSON.stringify(subject, (_key, value) => (value === MISSING ? "<missing>" : value));
   return rendered.length > 400 ? `${rendered.slice(0, 400)}... (truncated)` : rendered;
 }
 
@@ -258,7 +282,13 @@ function matches(expected, actual) {
       // Non-empty on purpose: an empty list satisfies "every element is
       // loopback" vacuously, which is not what the row is claiming.
       if (!Array.isArray(actual) || actual.length === 0) return false;
-      return actual.every((element) => matchesSubset(expected.$every, element));
+      // A plain object matches each element as a subset (one port among its
+      // other fields); anything else is compared whole, which is what a `*`
+      // fan-out collecting whole values needs.
+      const subset = expected.$every !== null && typeof expected.$every === "object" && !Array.isArray(expected.$every);
+      return actual.every((element) =>
+        subset ? matchesSubset(expected.$every, element) : deepEqual(expected.$every, element),
+      );
     }
     if ("$contains" in expected) {
       if (!Array.isArray(actual)) return false;
@@ -339,8 +369,12 @@ export function evaluate(rootDirectory, render = renderModel) {
     // every row against it would bury the one failure that matters.
     if (!model) continue;
 
+    // A `*` row deliberately does NOT count toward coverage. It governs every
+    // service by construction, so letting it satisfy the rule would mean a new
+    // service could be added with only the blanket topology row applying to it
+    // -- which is exactly the "slipped in ungoverned" case coverage exists for.
     const service = /^services\.([^.[]+)/.exec(path)?.[1];
-    if (service) (covered[modelKey] ??= new Set()).add(service);
+    if (service && service !== "*") (covered[modelKey] ??= new Set()).add(service);
 
     const actual = readPath(model, path);
     if (!matches(expected, actual)) {
