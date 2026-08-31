@@ -25,7 +25,11 @@
     "the source YAML instead, in backend/tests/unit/deploy/releaseComposeRuntime.test.ts.",
     "",
     "expect: a literal to deep-equal, or {\"$absent\": true},",
-    "{\"$matches\": \"<regex>\"}, or {\"$keys\": [...]} for an exact key set."
+    "{\"$matches\": \"<regex>\"}, {\"$keys\": [...]} for an exact key set,",
+    "{\"$every\": {...}} for a non-empty list whose every element carries those",
+    "key/values, or {\"$contains\": {...}} for a list with at least one such",
+    "element. Indexing one element (ports[0]) is deliberately avoided for lists",
+    "that can grow: it says nothing about a second entry added after it."
   ],
   "invariants": [
     {
@@ -36,20 +40,20 @@
     },
     {
       "model": "prod",
-      "path": "services.db.ports[0].host_ip",
-      "expect": "127.0.0.1",
+      "path": "services.db.ports",
+      "expect": { "$every": { "host_ip": "127.0.0.1" } },
       "why": "#631: cloudflared is the only ingress (docker-compose.prod.yml:1-9). A database reachable off-host bypasses the tunnel entirely, and this binding is also what makes trusting X-Forwarded-For safe -- see TRUST_PROXY_HOPS below."
     },
     {
       "model": "prod",
-      "path": "services.backend.ports[0].host_ip",
-      "expect": "127.0.0.1",
+      "path": "services.backend.ports",
+      "expect": { "$every": { "host_ip": "127.0.0.1" } },
       "why": "#631: same loopback-only ingress rule. Published on 0.0.0.0 the API would be reachable without the tunnel, and TRUST_PROXY_HOPS=1 would then let any caller forge X-Forwarded-For and choose its own rate-limit bucket (#413)."
     },
     {
       "model": "prod",
-      "path": "services.frontend.ports[0].host_ip",
-      "expect": "127.0.0.1",
+      "path": "services.frontend.ports",
+      "expect": { "$every": { "host_ip": "127.0.0.1" } },
       "why": "#631: same loopback-only ingress rule; the documented local production walkthrough browses http://localhost:3005 and needs nothing wider."
     },
     {
@@ -123,6 +127,18 @@
       "path": "volumes",
       "expect": { "$keys": ["app_uploads", "pgdata"] },
       "why": "#631: the two stateful volumes. A renamed volume silently starts an empty one, which for pgdata means an empty database and for app_uploads means every existing attachment 404s."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.volumes",
+      "expect": { "$contains": { "source": "pgdata", "target": "/var/lib/postgresql" } },
+      "why": "#631: a top-level `pgdata:` declaration only says the volume exists. Deleting the mount, or moving its target off PGDATA, leaves the declaration in place and the database running on the container filesystem -- so every rebuild starts an empty database while the contract still passes."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.volumes",
+      "expect": { "$contains": { "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}", "target": "/app/uploads" } },
+      "why": "#631: same gap as pgdata. Without this mount every uploaded attachment lives in the container layer and 404s after the next rebuild, with the app_uploads declaration still present and unused."
     },
 
     {
@@ -229,14 +245,14 @@
     },
     {
       "model": "release",
-      "path": "services.backend.ports[0].host_ip",
-      "expect": "0.0.0.0",
+      "path": "services.backend.ports",
+      "expect": { "$every": { "host_ip": "0.0.0.0" } },
       "why": "#631: intentionally public, unlike prod's loopback binding -- this bundle has no bundled reverse proxy, so publishing directly is how it is reached. Recorded so the difference reads as a deliberate choice rather than drift, and so pairing it with a non-zero TRUST_PROXY_HOPS fails this contract."
     },
     {
       "model": "release",
-      "path": "services.frontend.ports[0].host_ip",
-      "expect": "0.0.0.0",
+      "path": "services.frontend.ports",
+      "expect": { "$every": { "host_ip": "0.0.0.0" } },
       "why": "#631: same -- the bundle publishes the frontend directly."
     },
     {
@@ -268,6 +284,18 @@
       "path": "volumes",
       "expect": { "$keys": ["app_uploads", "pgdata"] },
       "why": "#631: the same two stateful volumes as prod. A rename in the bundle silently starts an empty database on an upgrade of an existing deployment."
+    },
+    {
+      "model": "release",
+      "path": "services.db.volumes",
+      "expect": { "$contains": { "source": "pgdata", "target": "/var/lib/postgresql" } },
+      "why": "#631: as in prod, the top-level declaration is not the mount. On the bundle this is worse: an upgrade that drops the mount discards a real deployment's database rather than a local test one, and the unused declaration keeps the contract looking satisfied."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.volumes",
+      "expect": { "$contains": { "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}", "target": "/app/uploads" } },
+      "why": "#631: as in prod -- without the mount every attachment uploaded to a deployment is lost on the next image bump."
     }
   ]
 }

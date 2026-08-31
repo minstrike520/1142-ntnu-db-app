@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -225,6 +225,73 @@ test("reports a service-set mismatch as a key list, not the whole model", () => 
   assert.match(failures[0], /actual: \["adminer","backend"\]/);
 });
 
+test("$every holds a second published port to the same rule as the first", () => {
+  // Indexing ports[0] said nothing about a port added after it, so a service
+  // could gain a 0.0.0.0 binding beside its loopback one and still pass --
+  // reachable without the tunnel, while TRUST_PROXY_HOPS=1 keeps trusting
+  // forwarding headers the direct caller can now forge.
+  const contract = [
+    { model: "prod", path: "services.backend.ports", expect: { $every: { host_ip: "127.0.0.1" } }, why: "#631" },
+  ];
+  assert.deepEqual(evaluateAgainst(contract, { prod: baseModel() }), []);
+
+  const tampered = baseModel();
+  tampered.services.backend.ports.push({ mode: "ingress", protocol: "tcp", published: "4006", target: 4000, host_ip: "0.0.0.0" });
+  assert.equal(evaluateAgainst(contract, { prod: tampered }).length, 1);
+});
+
+test("$every rejects an empty list rather than passing it vacuously", () => {
+  const tampered = baseModel();
+  tampered.services.backend.ports = [];
+  const failures = evaluateAgainst(
+    [{ model: "prod", path: "services.backend.ports", expect: { $every: { host_ip: "127.0.0.1" } }, why: "#631" }],
+    { prod: tampered },
+  );
+  assert.equal(failures.length, 1);
+});
+
+test("$contains checks the mount exists, not just the volume declaration", () => {
+  // A top-level `pgdata:` declaration says the volume exists, not that anything
+  // mounts it. Dropping the mount leaves the declaration in place and the
+  // database on the container filesystem.
+  const contract = [
+    {
+      model: "prod",
+      path: "services.db.volumes",
+      expect: { $contains: { source: "pgdata", target: "/var/lib/postgresql" } },
+      why: "#631",
+    },
+  ];
+  const mounted = baseModel();
+  mounted.services.db = { volumes: [{ source: "pgdata", target: "/var/lib/postgresql", type: "volume" }] };
+  assert.deepEqual(evaluateAgainst(contract, { prod: mounted }), []);
+
+  // Target moved off PGDATA: the declaration and the mount both still exist.
+  const moved = baseModel();
+  moved.services.db = { volumes: [{ source: "pgdata", target: "/tmp/elsewhere", type: "volume" }] };
+  assert.equal(evaluateAgainst(contract, { prod: moved }).length, 1);
+
+  const unmounted = baseModel();
+  unmounted.services.db = {};
+  assert.equal(evaluateAgainst(contract, { prod: unmounted }).length, 1);
+});
+
+test("compares objects independently of Compose's key order", () => {
+  // Compose does not promise a stable key order and already varies it between
+  // render modes; a row must not pass or fail on that.
+  const contract = [
+    {
+      model: "prod",
+      path: "services.db.volumes",
+      expect: { $contains: { target: "/var/lib/postgresql", source: "pgdata" } },
+      why: "#631",
+    },
+  ];
+  const reordered = baseModel();
+  reordered.services.db = { volumes: [{ type: "volume", target: "/var/lib/postgresql", source: "pgdata" }] };
+  assert.deepEqual(evaluateAgainst(contract, { prod: reordered }), []);
+});
+
 test("normalizeModel drops the nulls Compose injects into every service", () => {
   const normalized = normalizeModel(baseModel());
   assert.deepEqual(normalized.services.backend.networks, ["default"]);
@@ -237,13 +304,10 @@ test("normalizeModel drops the nulls Compose injects into every service", () => 
  * exiting 0 the moment a model is tampered with.
  */
 const docker = spawnSync("docker", ["compose", "version"], { encoding: "utf8" });
-const dockerAvailable = !docker.error && docker.status === 0;
+const needsDocker = { skip: !docker.error && docker.status === 0 ? false : "docker compose unavailable" };
 
-test("the checked-in contract holds against the real models", { skip: dockerAvailable ? false : "docker compose unavailable" }, () => {
-  assert.deepEqual(evaluate(repoRoot), []);
-});
-
-test("the checked-in contract catches a real model being tampered with", { skip: dockerAvailable ? false : "docker compose unavailable" }, () => {
+/** The two production models as Compose actually renders them, right now. */
+function renderRealModels() {
   const rendered = {};
   for (const [key, file] of Object.entries(MODELS)) {
     const result = spawnSync(
@@ -254,22 +318,59 @@ test("the checked-in contract catches a real model being tampered with", { skip:
     assert.equal(result.status, 0, result.stderr);
     rendered[key] = JSON.parse(result.stdout);
   }
+  return rendered;
+}
 
-  const contract = JSON.parse(
-    spawnSync("node", ["-e", "process.stdout.write(require('fs').readFileSync('compose-invariants.json','utf8'))"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    }).stdout,
-  ).invariants;
+/** The rows as checked in, so these tests exercise the real contract. */
+function checkedInContract() {
+  return JSON.parse(readFileSync(join(repoRoot, "compose-invariants.json"), "utf8")).invariants;
+}
 
+test("the checked-in contract holds against the real models", needsDocker, () => {
+  assert.deepEqual(evaluate(repoRoot), []);
+});
+
+test("the checked-in contract catches a real model being tampered with", needsDocker, () => {
+  const rendered = renderRealModels();
   // Publishing prod's backend on every interface is the single change this
   // contract exists to stop: it puts the API on the network without the tunnel,
   // and TRUST_PROXY_HOPS=1 then lets any caller forge X-Forwarded-For.
   rendered.prod.services.backend.ports[0].host_ip = "0.0.0.0";
-  const failures = evaluateAgainst(contract, rendered);
+  const failures = evaluateAgainst(checkedInContract(), rendered);
   assert.ok(failures.length > 0, "tampering with a real model must fail the contract");
   assert.ok(
-    failures.some((failure) => /services\.backend\.ports\[0\]\.host_ip/.test(failure)),
+    failures.some((failure) => /docker-compose\.prod\.yml services\.backend\.ports/.test(failure)),
+    failures.join("\n"),
+  );
+});
+
+test("the checked-in contract catches a second, non-loopback port on prod", needsDocker, () => {
+  // The regression the review on PR #638 named: a port added beside the
+  // loopback one is the realistic way prod ends up reachable without the
+  // tunnel, and an index-0 row could not see it.
+  const rendered = renderRealModels();
+  rendered.prod.services.backend.ports.push({
+    mode: "ingress",
+    protocol: "tcp",
+    published: "4006",
+    target: 4000,
+  });
+  const failures = evaluateAgainst(checkedInContract(), rendered);
+  assert.ok(
+    failures.some((failure) => /docker-compose\.prod\.yml services\.backend\.ports/.test(failure)),
+    failures.join("\n"),
+  );
+});
+
+test("the checked-in contract catches a stateful volume that is declared but not mounted", needsDocker, () => {
+  // The other regression named in that review: deleting the mount while
+  // leaving the top-level declaration in place starts the database on the
+  // container filesystem.
+  const rendered = renderRealModels();
+  delete rendered.prod.services.db.volumes;
+  const failures = evaluateAgainst(checkedInContract(), rendered);
+  assert.ok(
+    failures.some((failure) => /docker-compose\.prod\.yml services\.db\.volumes/.test(failure)),
     failures.join("\n"),
   );
 });

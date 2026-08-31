@@ -206,14 +206,41 @@ function describe(value, expected) {
   return rendered.length > 400 ? `${rendered.slice(0, 400)}... (truncated)` : rendered;
 }
 
+/**
+ * Compared on a key-sorted rendering rather than raw JSON.stringify: Compose
+ * does not promise a stable key order, and already varies it between render
+ * modes. Array order is preserved, because for `healthcheck.test` and
+ * `command` it is the meaning.
+ */
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonical(value[key])]),
+  );
+}
+
 function deepEqual(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
+/** Does one array element carry all of the subset's key/values? */
+function matchesSubset(subset, element) {
+  if (element === null || typeof element !== "object") return false;
+  return Object.entries(subset).every(([key, value]) => deepEqual(value, element[key]));
 }
 
 /**
- * `expect` is a literal to deep-equal, or one of three operators. Kept this
+ * `expect` is a literal to deep-equal, or one of five operators. Kept this
  * small on purpose: a contract that can express arbitrary predicates stops
  * being readable as a statement of what production looks like.
+ *
+ * `$every` and `$contains` exist because indexing a single element is not a
+ * statement about a list. `ports[0].host_ip` says nothing about a *second*
+ * port added after it, and a second published port is precisely how a service
+ * ends up on 0.0.0.0 while the contract still passes.
  */
 function matches(expected, actual) {
   if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
@@ -226,6 +253,16 @@ function matches(expected, actual) {
     if ("$keys" in expected) {
       if (actual === MISSING || actual === null || typeof actual !== "object") return false;
       return deepEqual(expected.$keys, Object.keys(actual).sort());
+    }
+    if ("$every" in expected) {
+      // Non-empty on purpose: an empty list satisfies "every element is
+      // loopback" vacuously, which is not what the row is claiming.
+      if (!Array.isArray(actual) || actual.length === 0) return false;
+      return actual.every((element) => matchesSubset(expected.$every, element));
+    }
+    if ("$contains" in expected) {
+      if (!Array.isArray(actual)) return false;
+      return actual.some((element) => matchesSubset(expected.$contains, element));
     }
   }
   return actual !== MISSING && deepEqual(expected, actual);
