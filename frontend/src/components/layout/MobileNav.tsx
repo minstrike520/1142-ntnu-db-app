@@ -9,6 +9,10 @@ import GroupIcon from "@iconify-react/boxicons/group";
 import AlertTriangleIcon from "@iconify-react/boxicons/alert-triangle";
 import CogIcon from "@iconify-react/boxicons/cog";
 import LogoutIcon from "@iconify-react/boxicons/arrow-out-left-square-half-filled";
+import BarChartIcon from "@iconify-react/boxicons/bar-chart";
+type MobileNavProps = {
+  isAdmin?: boolean;
+};
 
 type NavItem = {
   label: string;
@@ -23,7 +27,7 @@ type NavItem = {
  * On larger screens the equivalent navigation lives in the sidebar rail, so
  * this is hidden via `md:hidden` by the parent layout.
  */
-export default function MobileNav() {
+export default function MobileNav({ isAdmin = false }: MobileNavProps) {
   const router = useRouter();
   const pathname = usePathname();
   const { friendRequests, setSelectedFriendForSidebar, handleLogout } = useChat();
@@ -55,6 +59,14 @@ export default function MobileNav() {
       onClick: () => router.push("/emergency"),
       icon: <AlertTriangleIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
+    ...(isAdmin
+      ? [{
+          label: t("adminPage.navLabel"),
+          active: pathname === "/admin",
+          onClick: () => router.push("/admin"),
+          icon: <BarChartIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
+        }]
+      : []),
     {
       label: t("sidebar.settings"),
       active: pathname === "/settings",

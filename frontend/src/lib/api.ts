@@ -129,10 +129,71 @@ type RequestOptions = {
   token?: string;
 };
 
+export interface AdminHealthResponse {
+  status: 'ok';
+}
+
+export interface AdminMetricsResponse {
+  process: {
+    uptimeSeconds: number;
+    cpu: { userMs: number; systemMs: number; percent: number | null };
+    memory: {
+      rssBytes: number;
+      heapUsedBytes: number;
+      heapTotalBytes: number;
+      externalBytes: number;
+    };
+  };
+  requests: {
+    totalRequests: number;
+    statusClasses: Record<'1xx' | '2xx' | '3xx' | '4xx' | '5xx' | 'other', number>;
+    latency: {
+      count: number;
+      avgMs: number;
+      p50Ms: number;
+      p95Ms: number;
+      p99Ms: number;
+      maxMs: number;
+    };
+    sampleSize: number;
+    sampleCapacity: number;
+  };
+  at: number;
+}
+
+export interface AdminLogEntry {
+  level: number;
+  time: number;
+  msg?: string;
+  [key: string]: unknown;
+}
+
+export interface AdminLogsResponse {
+  entries: AdminLogEntry[];
+  retained: number;
+  capacity: number;
+}
+
+export interface AdminSlowQuery {
+  query: string;
+  durationMs: number;
+  at: number;
+}
+
+export interface AdminSlowQueriesResponse {
+  queries: AdminSlowQuery[];
+  retained: number;
+  capacity: number;
+  thresholdMs: number;
+}
+
 let activeAccessToken: string | null = null;
 export const getActiveAccessToken = (): string | null => activeAccessToken;
 export const setActiveAccessToken = (token: string | null): void => {
   activeAccessToken = token;
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('auth:token-changed'));
+  }
 };
 
 const buildUrl = (path: string): string => `${getApiBaseUrl()}${API_PREFIX}${path}`;
@@ -274,6 +335,25 @@ const withJsonBody = (body: unknown): Pick<RequestInit, 'body' | 'headers'> => (
   body: JSON.stringify(body),
   headers: { 'Content-Type': 'application/json' },
 });
+
+export const getAdminHealth = (token: string): Promise<AdminHealthResponse> =>
+  requestJson<AdminHealthResponse>('/admin/health', {}, { token });
+
+export const getAdminMetrics = (token: string): Promise<AdminMetricsResponse> =>
+  requestJson<AdminMetricsResponse>('/admin/metrics', {}, { token });
+
+export const getAdminLogs = (token: string, limit?: number): Promise<AdminLogsResponse> => {
+  const suffix = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`;
+  return requestJson<AdminLogsResponse>(`/admin/logs${suffix}`, {}, { token });
+};
+
+export const getAdminSlowQueries = (
+  token: string,
+  limit?: number,
+): Promise<AdminSlowQueriesResponse> => {
+  const suffix = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`;
+  return requestJson<AdminSlowQueriesResponse>(`/admin/slow-queries${suffix}`, {}, { token });
+};
 
 export const register = (data: RegisterRequest): Promise<AuthResponse> =>
   requestJson<AuthResponse>('/auth/register', {

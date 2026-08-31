@@ -6,12 +6,43 @@ import { ChatProvider, useChat } from "@/context/ChatContext";
 import Sidebar from "@/components/layout/Sidebar";
 import MobileNav from "@/components/layout/MobileNav";
 import { useTranslation } from "@/hooks/useTranslation";
+import { useActiveAccessToken } from "@/hooks/useActiveAccessToken";
+import { ApiError, getAdminHealth } from "@/lib/api";
 
 function MainLayoutContent({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isMounted } = useChat();
+  const { isAuthenticated, isMounted, user } = useChat();
   const { t } = useTranslation();
   const pathname = usePathname();
   const router = useRouter();
+  const [adminAccess, setAdminAccess] = React.useState<{
+    token: string;
+    sessionKey: string;
+    allowed: boolean;
+  } | null>(null);
+  const activeToken = useActiveAccessToken();
+  const sessionKey = user.userId ?? "anonymous";
+
+  React.useEffect(() => {
+    if (!isMounted || !isAuthenticated) return;
+
+    if (!activeToken) return;
+
+    let cancelled = false;
+    void getAdminHealth(activeToken)
+      .then(() => {
+        if (!cancelled) setAdminAccess({ token: activeToken, sessionKey, allowed: true });
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setAdminAccess({ token: activeToken, sessionKey, allowed: false });
+        if (!(error instanceof ApiError && (error.status === 401 || error.status === 403))) {
+          console.error("Failed to verify admin navigation access:", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeToken, isAuthenticated, isMounted, sessionKey]);
 
   React.useEffect(() => {
     if (isAuthenticated && isMounted) {
@@ -44,18 +75,24 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
   // sidebar; every other route shows its content pane. Tablet and desktop keep
   // both panes side by side (md:flex).
   const isListRoot = pathname === "/";
+  const showAdminNavigation =
+    isMounted &&
+    isAuthenticated &&
+    adminAccess?.allowed === true &&
+    adminAccess.token === activeToken &&
+    adminAccess.sessionKey === sessionKey;
 
   return (
     <div className="flex flex-col md:flex-row h-dvh w-full overflow-hidden bg-background text-foreground font-sans transition-colors">
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <div className={`${isListRoot ? "flex" : "hidden"} md:flex h-full w-full md:w-auto`}>
-          <Sidebar />
+          <Sidebar isAdmin={showAdminNavigation} />
         </div>
         <div className={`${isListRoot ? "hidden" : "flex"} md:flex flex-1 min-w-0 h-full overflow-hidden`}>
           {children}
         </div>
       </div>
-      <MobileNav />
+      <MobileNav isAdmin={showAdminNavigation} />
     </div>
   );
 }

@@ -11,10 +11,12 @@ const onRender: React.ProfilerOnRenderCallback = (_id, _phase, actualDuration) =
   recordRender("Sidebar", actualDuration);
 };
 
-export default function Sidebar(): React.ReactElement {
+type SidebarProps = React.ComponentProps<typeof RealSidebar>;
+
+export default function Sidebar(props: SidebarProps): React.ReactElement {
   return (
     <Profiler id="Sidebar" onRender={onRender}>
-      <RealSidebar />
+      <RealSidebar {...props} />
     </Profiler>
   );
 }
