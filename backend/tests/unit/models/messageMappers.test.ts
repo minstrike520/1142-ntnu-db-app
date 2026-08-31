@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   mapAttachmentRow,
+  mapMessageChangeRow,
   mapMessageRow,
   mapMessageWithSenderRow,
   mapSnapshotAttachments,
@@ -98,5 +99,40 @@ describe('message mappers', () => {
       originalName: 'note.txt',
       uploadedAt: new Date('2026-01-01T00:00:00Z'),
     });
+  });
+
+  it('keeps historical snapshots masked when the current message is recalled', () => {
+    const change = mapMessageChangeRow({
+      message_id: 'message-1',
+      room_id: 'room-1',
+      sender_id: 'user-1',
+      content: 'historical secret',
+      reply_to_id: 'reply-1',
+      is_recalled: false,
+      current_is_recalled: true,
+      sent_at: new Date('2026-01-01T00:00:00Z'),
+      message_sequence: 1,
+      change_sequence: 2,
+      revision: 1,
+      change_type: 'edited',
+      sender_user_id: 'user-1',
+      sender_name: 'Alice',
+      sender_avatar_url: null,
+      sender_deleted_at: null,
+      mentions: ['user-2'],
+      attachments: [{
+        attachment_id: 'attachment-1',
+        file_type: 'text/plain',
+        original_name: 'secret.txt',
+        uploaded_at: '2026-01-01T00:00:00Z',
+      }],
+    });
+
+    expect(change.message).toMatchObject({
+      content: '',
+      isRecalled: true,
+      mentions: [],
+    });
+    expect(change.message).not.toHaveProperty('attachments');
   });
 });

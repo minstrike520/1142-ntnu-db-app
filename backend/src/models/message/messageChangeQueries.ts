@@ -21,7 +21,10 @@ export class MessageChangeQueries {
       WHERE change_sequence = ${changeSequence} AND message_id = ${messageId}
     `;
     if (!message || rows.length === 0) throw new Error('Message change snapshot not found');
-    return applyMessageSnapshot(message, rows[0]);
+    return applyMessageSnapshot(message, {
+      ...rows[0],
+      current_is_recalled: message.isRecalled,
+    });
   }
 
   async findChangesForUser(userId: string, cursor: number, limit: number): Promise<MessageChange[]> {

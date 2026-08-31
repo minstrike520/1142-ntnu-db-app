@@ -153,7 +153,7 @@ export function applyMessageSnapshot(
   snapshot: MessageSnapshotRow & { current_is_recalled?: boolean },
 ): MessageWithSender {
   const isRecalled = snapshot.is_recalled || snapshot.current_is_recalled === true;
-  return {
+  const next: MessageWithSender = {
     ...message,
     content: isRecalled ? '' : snapshot.content,
     replyToId: snapshot.reply_to_id ?? undefined,
@@ -163,8 +163,9 @@ export function applyMessageSnapshot(
     changeSequence: Number(snapshot.change_sequence),
     revision: Number(snapshot.revision),
     mentions: isRecalled ? [] : mapSnapshotMentions(snapshot.mentions),
-    attachments: isRecalled ? undefined : mapSnapshotAttachments(snapshot.attachments),
   };
+  if (!isRecalled) next.attachments = mapSnapshotAttachments(snapshot.attachments);
+  return next;
 }
 
 export function mapMessageChangeRow(row: MessageChangeRow): MessageChange {
