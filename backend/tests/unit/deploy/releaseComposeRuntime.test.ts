@@ -419,6 +419,21 @@ describe('release bundle source properties', () => {
       expect([variable, new RegExp(`\\$\\{${variable}:?-`).test(releaseText)]).toEqual([variable, false]);
     }
   });
+
+  it('binds each database credential to its own environment key', () => {
+    // The check above is satisfied by the file mentioning each variable
+    // anywhere, so it passes with POSTGRES_USER and POSTGRES_PASSWORD swapped
+    // between the two keys -- both are still present and still fail-fast. The
+    // stack then initializes Postgres with the password as its username while
+    // DATABASE_URL, built from the same .env, says otherwise, and migrate and
+    // backend cannot connect. CI cannot catch that either: its fixture sets
+    // both to the same value, so a swap is invisible there by construction.
+    const environment = (releaseServices as Record<string, { environment?: Record<string, string> }>).db?.environment;
+    expect(environment).toBeDefined();
+    for (const variable of ['POSTGRES_USER', 'POSTGRES_PASSWORD', 'POSTGRES_DB']) {
+      expect([variable, environment![variable]]).toEqual([variable, `\${${variable}:?${variable} is required}`]);
+    }
+  });
 });
 
 /**

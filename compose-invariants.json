@@ -118,6 +118,24 @@
     },
     {
       "model": "prod",
+      "path": "services.db.environment.POSTGRES_USER",
+      "expect": "${POSTGRES_USER}",
+      "why": "#631: pinned per key. prod has no `:?` fail-fast, so a swapped binding is even quieter here -- Postgres initializes with the wrong credentials and DATABASE_URL, built from the same .env, no longer matches."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.environment.POSTGRES_PASSWORD",
+      "expect": "${POSTGRES_PASSWORD}",
+      "why": "#631: the other half of the swap above -- only asserting both bindings makes either one meaningful."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.environment.POSTGRES_DB",
+      "expect": "${POSTGRES_DB}",
+      "why": "#631: same key-to-value binding, and the healthcheck below reads this same variable to decide the database is up."
+    },
+    {
+      "model": "prod",
       "path": "services.db.healthcheck.test[1]",
       "expect": "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}",
       "why": "#631: single `$`, so Compose interpolates these host-side before the container sees them. prod's db reads POSTGRES_USER from the host .env, so a `$$` escape here would send the literal string to pg_isready and the healthcheck would never pass."
@@ -194,6 +212,24 @@
       "path": "services.frontend.image",
       "expect": "${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}",
       "why": "#631: same fail-fast rule as BACKEND_IMAGE."
+    },
+    {
+      "model": "release",
+      "path": "services.db.environment.POSTGRES_USER",
+      "expect": "${POSTGRES_USER:?POSTGRES_USER is required}",
+      "why": "#631: pinned per key, not just \"the file mentions POSTGRES_USER somewhere\". Swapping the user and password values leaves both variables present and every fail-fast check satisfied, but Postgres then initializes with credentials that do not match DATABASE_URL, and migrate and backend cannot connect."
+    },
+    {
+      "model": "release",
+      "path": "services.db.environment.POSTGRES_PASSWORD",
+      "expect": "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}",
+      "why": "#631: the other half of the swap above -- only asserting both bindings makes either one meaningful."
+    },
+    {
+      "model": "release",
+      "path": "services.db.environment.POSTGRES_DB",
+      "expect": "${POSTGRES_DB:?POSTGRES_DB is required}",
+      "why": "#631: same key-to-value binding. A database name taken from the wrong variable initializes a database nothing connects to."
     },
     {
       "model": "release",
