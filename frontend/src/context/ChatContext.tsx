@@ -170,6 +170,8 @@ export interface User {
   username: string;
   email: string;
   avatar: string;
+  /** Navigation hint from GET /users/me; protected routes re-check access. */
+  isAdmin?: boolean;
   bio?: string;
   language?: UiLanguage;
   theme?: "light" | "dark";
@@ -427,6 +429,7 @@ const toStoredUser = (
   username: profile.name,
   email: profile.email,
   avatar: profile.avatarUrl ?? "",
+  isAdmin: profile.isAdmin,
   bio: profile.bio ?? "",
   language: normalizeLanguage(settings?.language),
   theme: settings?.theme ?? "light",

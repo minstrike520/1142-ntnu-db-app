@@ -62,6 +62,7 @@ export const __failNextListMessages = (): void => {
 let activeAccessToken: string | null = TEST_TOKEN;
 let settingsState: UserSettings = { ...mySettings };
 let adminAccess = false;
+let currentUserIsAdmin = false;
 let adminHealthStatus: number | null = null;
 let adminMonitoringStatus: number | null = null;
 let adminMonitoringGate: Promise<void> | null = null;
@@ -77,6 +78,7 @@ export const __resetApiMock = (): void => {
   activeAccessToken = TEST_TOKEN;
   settingsState = { ...mySettings };
   adminAccess = false;
+  currentUserIsAdmin = false;
   adminHealthStatus = null;
   adminMonitoringStatus = null;
   releaseAdminMonitoring?.();
@@ -101,6 +103,10 @@ export const setActiveAccessToken = (token: string | null): void => {
 
 export const __setAdminAccess = (allowed: boolean): void => {
   adminAccess = allowed;
+};
+
+export const __setCurrentUserAdmin = (isAdmin: boolean): void => {
+  currentUserIsAdmin = isAdmin;
 };
 
 export const __setAdminHealthStatus = (status: number | null): void => {
@@ -185,7 +191,7 @@ export const register = async (): Promise<AuthResponse> => refreshTokens();
 export const login = async (): Promise<AuthResponse> => refreshTokens();
 export const logout = async (): Promise<void> => undefined;
 
-export const getMe = async (): Promise<MyProfile> => ({ ...myProfile });
+export const getMe = async (): Promise<MyProfile> => ({ ...myProfile, isAdmin: currentUserIsAdmin });
 
 export const getUserProfile = async (userId: string): Promise<UserProfile> => {
   const profile = profiles[userId];
