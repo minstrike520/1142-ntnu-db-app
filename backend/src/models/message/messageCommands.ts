@@ -1,7 +1,12 @@
 import { SQL } from 'bun';
 import type { Message, MessageWithSender } from '@shared/types';
 import { ConflictError, ForbiddenError, ValidationError } from '../../utils/AppError';
-import { commandLockKey, findCommandReceipts, resolveCommandReceipt } from './commandIdempotency';
+import {
+  commandLockKey,
+  findCommandReceipts,
+  recordNoOpRecall,
+  resolveCommandReceipt,
+} from './commandIdempotency';
 import type { MessageQueries } from './messageQueries';
 import type { MessageChangeQueries } from './messageChangeQueries';
 import type { AttachmentSnapshotRow, MessageRow } from './mappers';
@@ -362,20 +367,7 @@ export class MessageCommands {
         // side table the lookup above also reads, pointing at the recall this
         // command converged on.
         if (commandId && actorId) {
-          await tx`
-            INSERT INTO message_command_receipts (
-              actor_id, command_id, message_id, change_type, change_sequence
-            )
-            VALUES (
-              ${actorId}, ${commandId}, ${messageId}, 'recalled',
-              (
-                SELECT change_sequence FROM message_changes
-                WHERE message_id = ${messageId} AND change_type = 'recalled'
-                ORDER BY change_sequence DESC LIMIT 1
-              )
-            )
-            ON CONFLICT (actor_id, command_id) DO NOTHING
-          `;
+          await recordNoOpRecall(tx, actorId, commandId, messageId);
           replayedCommand = true;
         }
         return;

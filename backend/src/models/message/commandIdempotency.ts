@@ -63,3 +63,25 @@ export async function findCommandReceipts(
     LIMIT 1
   `;
 }
+
+export async function recordNoOpRecall(
+  tx: SQL,
+  actorId: string,
+  commandId: string,
+  messageId: string,
+): Promise<void> {
+  await tx`
+    INSERT INTO message_command_receipts (
+      actor_id, command_id, message_id, change_type, change_sequence
+    )
+    VALUES (
+      ${actorId}, ${commandId}, ${messageId}, 'recalled',
+      (
+        SELECT change_sequence FROM message_changes
+        WHERE message_id = ${messageId} AND change_type = 'recalled'
+        ORDER BY change_sequence DESC LIMIT 1
+      )
+    )
+    ON CONFLICT (actor_id, command_id) DO NOTHING
+  `;
+}
