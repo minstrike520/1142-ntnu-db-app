@@ -359,6 +359,23 @@ test("$every pins the protocol, so a udp mapping cannot pass as the tcp one", ()
   assert.equal(evaluateAgainst(contract, { prod: udp }).length, 1);
 });
 
+test("an internal network reads as a value, not a missing key", () => {
+  // The third key Compose emits only when asked, after host_ip and read_only.
+  // An internal network is externally isolated, so cloudflared cannot dial out
+  // to Cloudflare -- while the network still exists, is still named `default`,
+  // and every service is still attached to it.
+  const contract = [{ model: "prod", path: "networks.default.internal", expect: false, why: "#631" }];
+  const reachable = baseModel();
+  reachable.networks = { default: { name: "near-chat_default" } };
+  assert.deepEqual(evaluateAgainst(contract, { prod: reachable }), []);
+
+  const isolated = baseModel();
+  isolated.networks = { default: { name: "near-chat_default", internal: true } };
+  const failures = evaluateAgainst(contract, { prod: isolated });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /actual: true/);
+});
+
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
   // render modes; a row must not pass or fail on that.
@@ -525,6 +542,18 @@ test("the checked-in contract catches a published port aimed at the wrong contai
     failures.some((failure) => /docker-compose\.release\.yml services\.frontend\.ports/.test(failure)),
     failures.join("\n"),
   );
+});
+
+test("the checked-in contract catches the default network turned internal", needsDocker, () => {
+  for (const model of ["prod", "release"]) {
+    const rendered = renderRealModels();
+    rendered[model].networks.default.internal = true;
+    const failures = evaluateAgainst(checkedInContract(), rendered);
+    assert.ok(
+      failures.some((failure) => new RegExp(`${MODELS[model]} networks\\.default\\.internal`).test(failure)),
+      `${model}: ${failures.join("\n")}`,
+    );
+  }
 });
 
 test("the checked-in contract catches a read-only stateful mount", needsDocker, () => {

@@ -173,12 +173,33 @@ function normalizeService(service) {
   return normalized;
 }
 
+/**
+ * `internal` is the third key Compose emits only when asked, after `host_ip`
+ * and `read_only`. An internal network is externally isolated, so cloudflared
+ * -- the only ingress -- cannot dial out to Cloudflare and the whole site goes
+ * offline, while the network still exists, is still named `default`, and every
+ * service is still attached to it.
+ */
+function normalizeNetworks(networks) {
+  if (!networks || typeof networks !== "object") return networks;
+  return Object.fromEntries(
+    Object.entries(networks).map(([name, network]) => [
+      name,
+      network && typeof network === "object" ? { ...network, internal: network.internal ?? false } : network,
+    ]),
+  );
+}
+
 export function normalizeModel(model) {
   const services = {};
   for (const [name, service] of Object.entries(model.services ?? {})) {
     services[name] = normalizeService(service ?? {});
   }
-  return { ...model, services };
+  const normalized = { ...model, services };
+  if (normalized.networks !== undefined) {
+    normalized.networks = normalizeNetworks(normalized.networks);
+  }
+  return normalized;
 }
 
 /** `services.backend.ports[0].host_ip` -> the value, or MISSING. */

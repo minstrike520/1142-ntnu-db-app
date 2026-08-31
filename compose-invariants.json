@@ -156,6 +156,12 @@
     },
     {
       "model": "prod",
+      "path": "networks.default.internal",
+      "expect": false,
+      "why": "#631: an internal network is externally isolated, so cloudflared -- the only ingress -- cannot dial out to Cloudflare and the entire site goes offline. The network still exists, is still named `default`, and every service is still attached to it, so the two rows above stay green. Compose emits `internal` only when set, so this is normalized to a boolean like `host_ip` and `read_only`."
+    },
+    {
+      "model": "prod",
       "path": "networks",
       "expect": { "$keys": ["default"] },
       "why": "#631: one network, so the row above means what it says. Declaring a second one is how services start being split across networks that cannot see each other."
@@ -352,6 +358,12 @@
       "path": "services.*.networks",
       "expect": { "$every": ["default"] },
       "why": "#631: the bundle has no tunnel, but the same connectivity is load-bearing: migrate and backend reach db, and frontend reaches backend, over this one network. A service split onto another network, or given `network_mode`, fails at runtime only -- nothing static catches it otherwise."
+    },
+    {
+      "model": "release",
+      "path": "networks.default.internal",
+      "expect": false,
+      "why": "#631: same isolation. The bundle publishes its ports directly, and an internal network takes that away while every other network row still passes."
     },
     {
       "model": "release",
