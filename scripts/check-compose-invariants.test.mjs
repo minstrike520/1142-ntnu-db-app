@@ -240,6 +240,25 @@ test("$every holds a second published port to the same rule as the first", () =>
   assert.equal(evaluateAgainst(contract, { prod: tampered }).length, 1);
 });
 
+test("$every pins the whole mapping, so a second loopback port is rejected too", () => {
+  // host_ip alone answers "is it reachable off-host". It does not answer "is
+  // this the only thing published", and a second port on the same service is a
+  // surface change nobody reviewed.
+  const contract = [
+    {
+      model: "prod",
+      path: "services.backend.ports",
+      expect: { $every: { host_ip: "127.0.0.1", published: "4005", target: 4000 } },
+      why: "#631",
+    },
+  ];
+  assert.deepEqual(evaluateAgainst(contract, { prod: baseModel() }), []);
+
+  const extra = baseModel();
+  extra.services.backend.ports.push({ mode: "ingress", protocol: "tcp", published: "4006", target: 4000, host_ip: "127.0.0.1" });
+  assert.equal(evaluateAgainst(contract, { prod: extra }).length, 1);
+});
+
 test("$every rejects an empty list rather than passing it vacuously", () => {
   const tampered = baseModel();
   tampered.services.backend.ports = [];
@@ -448,6 +467,35 @@ test("the checked-in contract catches a stateful volume that is declared but not
     failures.some((failure) => /docker-compose\.prod\.yml services\.db\.volumes/.test(failure)),
     failures.join("\n"),
   );
+});
+
+test("the checked-in contract catches a published port aimed at the wrong container port", needsDocker, () => {
+  // `3005:3001` still binds the same host address, so a host_ip-only rule
+  // passes it -- but the image runs with PORT=3000 (frontend/Dockerfile.prod),
+  // so nothing answers on the published port. The release-compose job starts
+  // only db, migrate and backend, so it cannot catch this either.
+  const rendered = renderRealModels();
+  rendered.release.services.frontend.ports[0].target = 3001;
+  const failures = evaluateAgainst(checkedInContract(), rendered);
+  assert.ok(
+    failures.some((failure) => /docker-compose\.release\.yml services\.frontend\.ports/.test(failure)),
+    failures.join("\n"),
+  );
+});
+
+test("the checked-in contract catches a renamed engine volume", needsDocker, () => {
+  // `pgdata: { name: ... }` keeps the logical key, the mount source, its target
+  // and its type all identical, so every other volume row still passes -- while
+  // Compose mounts a brand-new volume and the existing database appears gone.
+  for (const model of ["prod", "release"]) {
+    const rendered = renderRealModels();
+    rendered[model].volumes.pgdata.name = "near-chat-v2-pgdata";
+    const failures = evaluateAgainst(checkedInContract(), rendered);
+    assert.ok(
+      failures.some((failure) => new RegExp(`${MODELS[model]} volumes\\.pgdata\\.name`).test(failure)),
+      `${model}: ${failures.join("\n")}`,
+    );
+  }
 });
 
 test("the checked-in contract catches the database volume rewritten as a bind", needsDocker, () => {

@@ -41,19 +41,19 @@
     {
       "model": "prod",
       "path": "services.db.ports",
-      "expect": { "$every": { "host_ip": "127.0.0.1" } },
+      "expect": { "$every": { "host_ip": "127.0.0.1", "published": "5435", "target": 5432 } },
       "why": "#631: cloudflared is the only ingress (docker-compose.prod.yml:1-9). A database reachable off-host bypasses the tunnel entirely, and this binding is also what makes trusting X-Forwarded-For safe -- see TRUST_PROXY_HOPS below."
     },
     {
       "model": "prod",
       "path": "services.backend.ports",
-      "expect": { "$every": { "host_ip": "127.0.0.1" } },
+      "expect": { "$every": { "host_ip": "127.0.0.1", "published": "4005", "target": 4000 } },
       "why": "#631: same loopback-only ingress rule. Published on 0.0.0.0 the API would be reachable without the tunnel, and TRUST_PROXY_HOPS=1 would then let any caller forge X-Forwarded-For and choose its own rate-limit bucket (#413)."
     },
     {
       "model": "prod",
       "path": "services.frontend.ports",
-      "expect": { "$every": { "host_ip": "127.0.0.1" } },
+      "expect": { "$every": { "host_ip": "127.0.0.1", "published": "3005", "target": 3000 } },
       "why": "#631: same loopback-only ingress rule; the documented local production walkthrough browses http://localhost:3005 and needs nothing wider."
     },
     {
@@ -151,6 +151,18 @@
       "path": "networks",
       "expect": { "$keys": ["default"] },
       "why": "#631: one network, so the row above means what it says. Declaring a second one is how services start being split across networks that cannot see each other."
+    },
+    {
+      "model": "prod",
+      "path": "volumes.pgdata.name",
+      "expect": "near-chat_pgdata",
+      "why": "#631: the engine-level volume name, not just the logical key. A rename here mounts a brand-new engine volume: the logical key, the mount source, its target and its type all stay identical, so every other row still passes while the existing database and every uploaded attachment appear to vanish."
+    },
+    {
+      "model": "prod",
+      "path": "volumes.app_uploads.name",
+      "expect": "near-chat_app_uploads",
+      "why": "#631: same as pgdata -- a renamed engine volume leaves the attachments in the old one, which nothing then mounts."
     },
     {
       "model": "prod",
@@ -294,13 +306,13 @@
     {
       "model": "release",
       "path": "services.backend.ports",
-      "expect": { "$every": { "host_ip": "0.0.0.0" } },
+      "expect": { "$every": { "host_ip": "0.0.0.0", "published": "4005", "target": 4000 } },
       "why": "#631: intentionally public, unlike prod's loopback binding -- this bundle has no bundled reverse proxy, so publishing directly is how it is reached. Recorded so the difference reads as a deliberate choice rather than drift, and so pairing it with a non-zero TRUST_PROXY_HOPS fails this contract."
     },
     {
       "model": "release",
       "path": "services.frontend.ports",
-      "expect": { "$every": { "host_ip": "0.0.0.0" } },
+      "expect": { "$every": { "host_ip": "0.0.0.0", "published": "3005", "target": 3000 } },
       "why": "#631: same -- the bundle publishes the frontend directly."
     },
     {
@@ -338,6 +350,18 @@
       "path": "networks",
       "expect": { "$keys": ["default"] },
       "why": "#631: one network, so the row above means what it says -- as in prod."
+    },
+    {
+      "model": "release",
+      "path": "volumes.pgdata.name",
+      "expect": "near-chat_pgdata",
+      "why": "#631: the engine-level volume name, not just the logical key. Worse on the bundle than in prod: an upgrade that renames the engine volume silently starts a real deployment on an empty database while looking like a clean deploy."
+    },
+    {
+      "model": "release",
+      "path": "volumes.app_uploads.name",
+      "expect": "near-chat_app_uploads",
+      "why": "#631: same as pgdata -- a renamed engine volume leaves the attachments in the old one, which nothing then mounts."
     },
     {
       "model": "release",
