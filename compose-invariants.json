@@ -161,13 +161,13 @@
     {
       "model": "prod",
       "path": "services.db.volumes",
-      "expect": { "$contains": { "source": "pgdata", "target": "/var/lib/postgresql" } },
-      "why": "#631: a top-level `pgdata:` declaration only says the volume exists. Deleting the mount, or moving its target off PGDATA, leaves the declaration in place and the database running on the container filesystem -- so every rebuild starts an empty database while the contract still passes."
+      "expect": { "$contains": { "type": "volume", "source": "pgdata", "target": "/var/lib/postgresql" } },
+      "why": "#631: a top-level `pgdata:` declaration only says the volume exists. Deleting the mount, or moving its target off PGDATA, leaves the declaration in place and the database running on the container filesystem -- so every rebuild starts an empty database while the contract still passes. `type` is pinned too: rewritten as a long-syntax `type: bind` with the same source and target, the named volume goes unused and the bind path is resolved relative to wherever the compose file sits, so deploying from another directory silently starts an empty database."
     },
     {
       "model": "prod",
       "path": "services.backend.volumes",
-      "expect": { "$contains": { "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}", "target": "/app/uploads" } },
+      "expect": { "$contains": { "type": "volume", "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}", "target": "/app/uploads" } },
       "why": "#631: same gap as pgdata. Without this mount every uploaded attachment lives in the container layer and 404s after the next rebuild, with the app_uploads declaration still present and unused."
     },
 
@@ -348,13 +348,13 @@
     {
       "model": "release",
       "path": "services.db.volumes",
-      "expect": { "$contains": { "source": "pgdata", "target": "/var/lib/postgresql" } },
-      "why": "#631: as in prod, the top-level declaration is not the mount. On the bundle this is worse: an upgrade that drops the mount discards a real deployment's database rather than a local test one, and the unused declaration keeps the contract looking satisfied."
+      "expect": { "$contains": { "type": "volume", "source": "pgdata", "target": "/var/lib/postgresql" } },
+      "why": "#631: as in prod, the top-level declaration is not the mount, and `type` is pinned so a long-syntax `type: bind` with the same source and target cannot pass in its place. On the bundle this is worse: an upgrade that drops or rebinds the mount discards a real deployment's database rather than a local test one."
     },
     {
       "model": "release",
       "path": "services.backend.volumes",
-      "expect": { "$contains": { "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}", "target": "/app/uploads" } },
+      "expect": { "$contains": { "type": "volume", "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}", "target": "/app/uploads" } },
       "why": "#631: as in prod -- without the mount every attachment uploaded to a deployment is lost on the next image bump."
     }
   ]

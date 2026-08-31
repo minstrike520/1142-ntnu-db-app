@@ -276,6 +276,26 @@ test("$contains checks the mount exists, not just the volume declaration", () =>
   assert.equal(evaluateAgainst(contract, { prod: unmounted }).length, 1);
 });
 
+test("$contains pins the mount type, so a bind cannot stand in for the volume", () => {
+  // Rewritten as long-syntax `type: bind` with the same source and target, the
+  // named volume goes unused and the bind path resolves relative to wherever
+  // the compose file sits -- so deploying from another directory starts an
+  // empty database, with source and target both still "correct".
+  const contract = [
+    {
+      model: "prod",
+      path: "services.db.volumes",
+      expect: { $contains: { type: "volume", source: "pgdata", target: "/var/lib/postgresql" } },
+      why: "#631",
+    },
+  ];
+  const bound = baseModel();
+  bound.services.db = { volumes: [{ type: "bind", source: "pgdata", target: "/var/lib/postgresql" }] };
+  const failures = evaluateAgainst(contract, { prod: bound });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /"type":"bind"/);
+});
+
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
   // render modes; a row must not pass or fail on that.
@@ -428,6 +448,20 @@ test("the checked-in contract catches a stateful volume that is declared but not
     failures.some((failure) => /docker-compose\.prod\.yml services\.db\.volumes/.test(failure)),
     failures.join("\n"),
   );
+});
+
+test("the checked-in contract catches the database volume rewritten as a bind", needsDocker, () => {
+  for (const model of ["prod", "release"]) {
+    const rendered = renderRealModels();
+    rendered[model].services.db.volumes = [
+      { type: "bind", source: "pgdata", target: "/var/lib/postgresql" },
+    ];
+    const failures = evaluateAgainst(checkedInContract(), rendered);
+    assert.ok(
+      failures.some((failure) => new RegExp(`${MODELS[model]} services\\.db\\.volumes`).test(failure)),
+      `${model}: ${failures.join("\n")}`,
+    );
+  }
 });
 
 test("the CLI exits non-zero when the contract does not hold", () => {
