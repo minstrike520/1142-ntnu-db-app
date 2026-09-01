@@ -259,6 +259,36 @@
     },
     {
       "model": "release",
+      "path": "services.migrate.environment.DATABASE_URL",
+      "expect": "${DATABASE_URL:?DATABASE_URL is required}",
+      "why": "#631: migrate needs its OWN binding -- asserting the backend's says nothing about this one. Deleted or bound to a different variable, `migrate:up` has no target and fails, and the backend then waits forever on `service_completed_successfully`, so the bundle never comes up at all."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.environment.NODE_ENV",
+      "expect": "production",
+      "why": "#631: literal, not `${NODE_ENV}` -- the bundle is the production deployment path and must not be startable in another mode by a stray host variable. The same trap is documented at backend/src/utils/logger.ts:168."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.NODE_ENV",
+      "expect": "production",
+      "why": "#631: same literal-vs-interpolated rule as migrate above."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.environment.NODE_ENV",
+      "expect": "production",
+      "why": "#631: same literal-vs-interpolated rule; a frontend built or served in development mode ships dev bundles and error output."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.PORT",
+      "expect": 4000,
+      "why": "#631: must equal the container port the published mapping targets. Changed here alone, the backend listens somewhere the published port does not reach -- the same failure as retargeting the port, approached from the other side."
+    },
+    {
+      "model": "release",
       "path": "services.db.healthcheck.test[1]",
       "expect": "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
       "why": "#631: `$$` escapes the interpolation so the container's own shell expands it. Written with a single `$` Compose would substitute host-side, and the credentials would be baked into the rendered config rather than read from the container environment."

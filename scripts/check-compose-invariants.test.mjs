@@ -376,6 +376,35 @@ test("an internal network reads as a value, not a missing key", () => {
   assert.match(failures[0], /actual: true/);
 });
 
+test("asserting one service's binding says nothing about its sibling's", () => {
+  // migrate needs its own DATABASE_URL. Deleted, `migrate:up` has no target and
+  // fails; the backend then waits forever on service_completed_successfully, so
+  // the bundle never comes up. A whole-file `includes` check is satisfied by the
+  // backend's correct binding, which is exactly why this is a per-key row.
+  const contract = [
+    {
+      model: "release",
+      path: "services.migrate.environment.DATABASE_URL",
+      expect: "${DATABASE_URL:?DATABASE_URL is required}",
+      why: "#631",
+    },
+  ];
+  const bound = baseModel();
+  bound.services.migrate = { environment: { DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}" } };
+  assert.deepEqual(evaluateAgainst(contract, { release: bound }), []);
+
+  const dropped = baseModel();
+  dropped.services.migrate = { environment: { NODE_ENV: "production" } };
+  const failures = evaluateAgainst(contract, { release: dropped });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /actual: <missing>/);
+
+  // Rebound to a different required variable: still present, still fail-fast.
+  const rebound = baseModel();
+  rebound.services.migrate = { environment: { DATABASE_URL: "${JWT_SECRET:?JWT_SECRET is required}" } };
+  assert.equal(evaluateAgainst(contract, { release: rebound }).length, 1);
+});
+
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
   // render modes; a row must not pass or fail on that.
@@ -540,6 +569,16 @@ test("the checked-in contract catches a published port aimed at the wrong contai
   const failures = evaluateAgainst(checkedInContract(), rendered);
   assert.ok(
     failures.some((failure) => /docker-compose\.release\.yml services\.frontend\.ports/.test(failure)),
+    failures.join("\n"),
+  );
+});
+
+test("the checked-in contract catches migrate losing its own DATABASE_URL", needsDocker, () => {
+  const rendered = renderRealModels();
+  delete rendered.release.services.migrate.environment.DATABASE_URL;
+  const failures = evaluateAgainst(checkedInContract(), rendered);
+  assert.ok(
+    failures.some((failure) => /services\.migrate\.environment\.DATABASE_URL/.test(failure)),
     failures.join("\n"),
   );
 });
