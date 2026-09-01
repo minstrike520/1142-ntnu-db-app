@@ -542,18 +542,18 @@ test("the service key set closes the whole absent-by-default family at once", ()
   }
 });
 
-test("pinning the interpolation shape separates a hardcode from a default change", () => {
-  // A security switch has two very different edits. Raising a default is an
-  // ordinary product change. Replacing the interpolation with a literal takes
-  // the switch away from whoever deploys it -- RATE_LIMIT_DISABLED hardcoded to
-  // `true` sets rateLimit.disabled, and securityMiddleware skips both the global
-  // and the auth limiter, so login brute-force protection is gone for good.
-  // Pinning the value would reject both; pinning the shape rejects only the second.
+test("a boolean gate pins its whole binding, default included", () => {
+  // For a switch that is only ever `true` or `false`, the default IS the policy:
+  // `${RATE_LIMIT_DISABLED:-true}` keeps a perfectly well-formed interpolation
+  // while handing every deployer that does not set the variable a server with
+  // rateLimit.disabled -- securityMiddleware then skips both the global and the
+  // auth limiter, so login brute-force protection is gone. Shape-pinning accepts
+  // that edit, so a gate pins the whole string instead.
   const contract = [
     {
       model: "prod",
       path: "services.backend.environment.RATE_LIMIT_DISABLED",
-      expect: { $matches: "^\\$\\{RATE_LIMIT_DISABLED(\\}|:-|-)" },
+      expect: "${RATE_LIMIT_DISABLED}",
       why: "#631",
     },
   ];
@@ -563,13 +563,54 @@ test("pinning the interpolation shape separates a hardcode from a default change
     return model;
   };
 
+  assert.deepEqual(evaluateAgainst(contract, { prod: withEnv("${RATE_LIMIT_DISABLED}") }), []);
+
+  // A flipped default is as dangerous as a hardcode, and is rejected the same way.
+  for (const value of [
+    "${RATE_LIMIT_DISABLED:-true}",
+    "${RATE_LIMIT_DISABLED-true}",
+    "${RATE_LIMIT_DISABLED:-false}",
+    "true",
+    "false",
+    "${CI}",
+    "${JWT_SECRET}",
+  ]) {
+    assert.equal(evaluateAgainst(contract, { prod: withEnv(value) }).length, 1, value);
+  }
+});
+
+test("a tunable pins its interpolation shape, so its default stays a product decision", () => {
+  // The other half of the rule. ATTACHMENT_MAX_BYTES has no unsafe side, only a
+  // bigger or smaller one, and raising the cap is an ordinary product change that
+  // no invariant should have to be edited for. What must not happen is the
+  // interpolation being replaced by a literal, which takes the knob away from
+  // whoever deploys it. Shape-pinning rejects exactly that and nothing else.
+  const contract = [
+    {
+      model: "prod",
+      path: "services.backend.environment.ATTACHMENT_MAX_BYTES",
+      expect: { $matches: "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:-|-)" },
+      why: "#631",
+    },
+  ];
+  const withEnv = (value) => {
+    const model = baseModel();
+    model.services.backend.environment = [`ATTACHMENT_MAX_BYTES=${value}`];
+    return model;
+  };
+
   // Interpolated, in any of its three forms, and with any default.
-  for (const value of ["${RATE_LIMIT_DISABLED}", "${RATE_LIMIT_DISABLED:-false}", "${RATE_LIMIT_DISABLED-false}", "${RATE_LIMIT_DISABLED:-true}"]) {
+  for (const value of [
+    "${ATTACHMENT_MAX_BYTES}",
+    "${ATTACHMENT_MAX_BYTES:-10485760}",
+    "${ATTACHMENT_MAX_BYTES-10485760}",
+    "${ATTACHMENT_MAX_BYTES:-20971520}",
+  ]) {
     assert.deepEqual(evaluateAgainst(contract, { prod: withEnv(value) }), [], value);
   }
 
   // Hardcoded, or bound to a different variable.
-  for (const value of ["true", "false", "${CI}", "${JWT_SECRET}"]) {
+  for (const value of ["10485760", "${CI}", "${JWT_SECRET}"]) {
     assert.equal(evaluateAgainst(contract, { prod: withEnv(value) }).length, 1, value);
   }
 });
@@ -742,23 +783,28 @@ test("the checked-in contract catches a published port aimed at the wrong contai
   );
 });
 
-test("the checked-in contract catches rate limiting hardcoded off", needsDocker, () => {
-  for (const model of ["prod", "release"]) {
-    const rendered = renderRealModels();
-    const env = rendered[model].services.backend.environment;
-    if (Array.isArray(env)) {
-      rendered[model].services.backend.environment = env.map((entry) =>
-        entry.startsWith("RATE_LIMIT_DISABLED=") ? "RATE_LIMIT_DISABLED=true" : entry,
+test("the checked-in contract catches rate limiting turned off by hardcode or by default", needsDocker, () => {
+  // Both edits reach the same production: `true` disables the limiter for
+  // everyone, `${RATE_LIMIT_DISABLED:-true}` disables it for everyone who does
+  // not set the variable, which is the deployer this file exists to protect.
+  for (const value of ["true", "${RATE_LIMIT_DISABLED:-true}"]) {
+    for (const model of ["prod", "release"]) {
+      const rendered = renderRealModels();
+      const env = rendered[model].services.backend.environment;
+      if (Array.isArray(env)) {
+        rendered[model].services.backend.environment = env.map((entry) =>
+          entry.startsWith("RATE_LIMIT_DISABLED=") ? `RATE_LIMIT_DISABLED=${value}` : entry,
+        );
+      } else {
+        env.RATE_LIMIT_DISABLED = value;
+      }
+      assert.ok(
+        evaluateAgainst(checkedInContract(), rendered).some((f) =>
+          /services\.backend\.environment\.RATE_LIMIT_DISABLED/.test(f),
+        ),
+        `${model} rate limiting off via ${value}`,
       );
-    } else {
-      env.RATE_LIMIT_DISABLED = "true";
     }
-    assert.ok(
-      evaluateAgainst(checkedInContract(), rendered).some((f) =>
-        /services\.backend\.environment\.RATE_LIMIT_DISABLED/.test(f),
-      ),
-      `${model} rate limiting hardcoded off`,
-    );
   }
 });
 
