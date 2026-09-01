@@ -589,7 +589,7 @@ test("a tunable pins its interpolation shape, so its default stays a product dec
     {
       model: "prod",
       path: "services.backend.environment.ATTACHMENT_MAX_BYTES",
-      expect: { $matches: "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:-|-)" },
+      expect: { $matches: "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:?-[^{}]*\\})$" },
       why: "#631",
     },
   ];
@@ -613,7 +613,20 @@ test("a tunable pins its interpolation shape, so its default stays a product dec
   for (const value of ["10485760", "${CI}", "${JWT_SECRET}"]) {
     assert.equal(evaluateAgainst(contract, { prod: withEnv(value) }).length, 1, value);
   }
+
+  // The whole value must be one interpolation, not merely start as one.
+  // `${VAR}10485760` concatenates rather than replaces: an operator who sets 2
+  // gets 210485760, a cap they never chose and cannot see in the file.
+  for (const value of [
+    "${ATTACHMENT_MAX_BYTES}10485760",
+    "${ATTACHMENT_MAX_BYTES:-10485760}0",
+    "${ATTACHMENT_MAX_BYTES}${JWT_SECRET}",
+    "0${ATTACHMENT_MAX_BYTES}",
+  ]) {
+    assert.equal(evaluateAgainst(contract, { prod: withEnv(value) }).length, 1, value);
+  }
 });
+
 
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
@@ -996,5 +1009,114 @@ test("the CLI exits non-zero when the contract does not hold", () => {
     assert.match(result.stderr, /no `invariants` rows/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("every environment key on both models is named by a row, and every shape row is anchored", needsDocker, () => {
+  // The audit that produced the presence/typing and ALLOWED_DEV_ORIGINS rows,
+  // kept as a test so the class stays closed. A key covered only by the
+  // environment key-set row is a key whose value nothing checks: the key-set row
+  // sees PRESENCE_TTL_MS still present and says nothing about it being the
+  // literal 1. An unanchored shape row is the same hole one step in.
+  const rendered = renderRealModels();
+  const rows = checkedInContract();
+  const unpinned = [];
+  const unanchored = [];
+
+  for (const [modelKey, model] of Object.entries(rendered)) {
+    for (const [service, definition] of Object.entries(model.services)) {
+      const environment = definition.environment ?? {};
+      const keys = Array.isArray(environment)
+        ? environment.map((entry) => entry.split("=")[0])
+        : Object.keys(environment);
+      for (const key of keys) {
+        const path = `services.${service}.environment.${key}`;
+        const row = rows.find((candidate) => candidate.model === modelKey && candidate.path === path);
+        if (!row) {
+          unpinned.push(`${modelKey} ${path}`);
+        } else if (row.expect?.$matches && !row.expect.$matches.endsWith("$")) {
+          unanchored.push(`${modelKey} ${path}`);
+        }
+      }
+    }
+  }
+
+  assert.deepEqual(unpinned, [], "environment keys with no row of their own");
+  assert.deepEqual(unanchored, [], "shape rows not anchored at the end of the value");
+});
+
+test("the checked-in contract catches a tunable diluted rather than replaced", needsDocker, () => {
+  // Every one of these keeps a well-formed interpolation of the right variable
+  // at the start of the value, so a prefix-anchored shape row accepts it.
+  for (const model of ["prod", "release"]) {
+    for (const key of ["ATTACHMENT_MAX_BYTES", "JWT_EXPIRES_IN", "MAX_SESSIONS_PER_USER"]) {
+      const rendered = renderRealModels();
+      const environment = rendered[model].services.backend.environment;
+      const diluted = `\${${key}}999`;
+      if (Array.isArray(environment)) {
+        rendered[model].services.backend.environment = environment.map((entry) =>
+          entry.startsWith(`${key}=`) ? `${key}=${diluted}` : entry,
+        );
+      } else {
+        environment[key] = diluted;
+      }
+      assert.ok(
+        evaluateAgainst(checkedInContract(), rendered).some((failure) =>
+          failure.includes(`.${key}`),
+        ),
+        `${model} ${key} diluted to ${diluted}`,
+      );
+    }
+  }
+});
+
+test("the checked-in contract catches presence and typing timings hardcoded", needsDocker, () => {
+  // PRESENCE_TTL_MS bounds how long a crashed instance keeps its users showing
+  // as online, because nothing runs on a dead process to hand the leases back.
+  // Hardcoded, an operator cannot tune that against their own restart behaviour.
+  for (const model of ["prod", "release"]) {
+    for (const key of ["PRESENCE_GRACE_MS", "PRESENCE_TTL_MS", "TYPING_TTL_MS"]) {
+      const rendered = renderRealModels();
+      const environment = rendered[model].services.backend.environment;
+      if (Array.isArray(environment)) {
+        rendered[model].services.backend.environment = environment.map((entry) =>
+          entry.startsWith(`${key}=`) ? `${key}=1` : entry,
+        );
+      } else {
+        environment[key] = "1";
+      }
+      assert.ok(
+        evaluateAgainst(checkedInContract(), rendered).some((failure) =>
+          failure.includes(`.${key}`),
+        ),
+        `${model} ${key} hardcoded`,
+      );
+    }
+  }
+});
+
+test("the checked-in contract catches the frontend origin settings hardcoded", needsDocker, () => {
+  // ALLOWED_DEV_ORIGINS committed as `*` widens which origins Next.js accepts
+  // for every deployment at once, and no deployer can narrow it back.
+  // NEXT_PUBLIC_API_URL is the origin the browser calls, and on prod it must
+  // stay the same value the build arg receives.
+  for (const [model, key, value] of [
+    ["prod", "ALLOWED_DEV_ORIGINS", "*"],
+    ["release", "ALLOWED_DEV_ORIGINS", "*"],
+    ["prod", "NEXT_PUBLIC_API_URL", "https://committed.example"],
+  ]) {
+    const rendered = renderRealModels();
+    const environment = rendered[model].services.frontend.environment;
+    if (Array.isArray(environment)) {
+      rendered[model].services.frontend.environment = environment.map((entry) =>
+        entry.startsWith(`${key}=`) ? `${key}=${value}` : entry,
+      );
+    } else {
+      environment[key] = value;
+    }
+    assert.ok(
+      evaluateAgainst(checkedInContract(), rendered).some((failure) => failure.includes(`.${key}`)),
+      `${model} ${key} hardcoded to ${value}`,
+    );
   }
 });

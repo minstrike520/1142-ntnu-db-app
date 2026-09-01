@@ -305,41 +305,41 @@
       "model": "prod",
       "path": "services.backend.environment.ATTACHMENT_ALLOWED_MIME_TYPES",
       "expect": {
-        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_MIME_TYPES(\\}|:-|-)"
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_MIME_TYPES(\\}|:?-[^{}]*\\})$"
       },
-      "why": "#631: shape, not default. Hardcoded to a permissive list removes the deployment's ability to narrow it."
+      "why": "#631: shape, not default. Hardcoded to a permissive list removes the deployment's ability to narrow it. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_ALLOWED_MIME_TYPES}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
     },
     {
       "model": "prod",
       "path": "services.backend.environment.ATTACHMENT_ALLOWED_EXTENSIONS",
       "expect": {
-        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_EXTENSIONS(\\}|:-|-)"
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_EXTENSIONS(\\}|:?-[^{}]*\\})$"
       },
-      "why": "#631: shape, not default -- as with the MIME list above."
+      "why": "#631: shape, not default -- as with the MIME list above. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_ALLOWED_EXTENSIONS}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
     },
     {
       "model": "prod",
       "path": "services.backend.environment.ATTACHMENT_MAX_BYTES",
       "expect": {
-        "$matches": "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:-|-)"
+        "$matches": "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:?-[^{}]*\\})$"
       },
-      "why": "#631: shape, not default. This is the row that defines the boundary: raising the default from 10MB to 20MB is an ordinary product change and must pass, while hardcoding any literal must not."
+      "why": "#631: shape, not default. This is the row that defines the boundary: raising the default from 10MB to 20MB is an ordinary product change and must pass, while hardcoding any literal must not. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_MAX_BYTES}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
     },
     {
       "model": "prod",
       "path": "services.backend.environment.MAX_SESSIONS_PER_USER",
       "expect": {
-        "$matches": "^\\$\\{MAX_SESSIONS_PER_USER(\\}|:-|-)"
+        "$matches": "^\\$\\{MAX_SESSIONS_PER_USER(\\}|:?-[^{}]*\\})$"
       },
-      "why": "#631: shape, not default. Hardcoded high it removes the session cap a deployment can no longer restore."
+      "why": "#631: shape, not default. Hardcoded high it removes the session cap a deployment can no longer restore. Anchored at both ends: an unanchored prefix match accepts `${MAX_SESSIONS_PER_USER}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
     },
     {
       "model": "prod",
       "path": "services.backend.environment.JWT_EXPIRES_IN",
       "expect": {
-        "$matches": "^\\$\\{JWT_EXPIRES_IN(\\}|:-|-)"
+        "$matches": "^\\$\\{JWT_EXPIRES_IN(\\}|:?-[^{}]*\\})$"
       },
-      "why": "#631: shape, not default. Hardcoded long it fixes token lifetime beyond a deployment's control, and a stolen token stays valid for that whole window."
+      "why": "#631: shape, not default. Hardcoded long it fixes token lifetime beyond a deployment's control, and a stolen token stays valid for that whole window. Anchored at both ends: an unanchored prefix match accepts `${JWT_EXPIRES_IN}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
     },
     {
       "model": "prod",
@@ -941,41 +941,41 @@
       "model": "release",
       "path": "services.backend.environment.ATTACHMENT_ALLOWED_MIME_TYPES",
       "expect": {
-        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_MIME_TYPES(\\}|:-|-)"
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_MIME_TYPES(\\}|:?-[^{}]*\\})$"
       },
-      "why": "#631: shape, not default. Hardcoded to a permissive list removes the deployment's ability to narrow it."
+      "why": "#631: shape, not default. Hardcoded to a permissive list removes the deployment's ability to narrow it. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_ALLOWED_MIME_TYPES}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
     },
     {
       "model": "release",
       "path": "services.backend.environment.ATTACHMENT_ALLOWED_EXTENSIONS",
       "expect": {
-        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_EXTENSIONS(\\}|:-|-)"
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_EXTENSIONS(\\}|:?-[^{}]*\\})$"
       },
-      "why": "#631: shape, not default -- as with the MIME list above."
+      "why": "#631: shape, not default -- as with the MIME list above. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_ALLOWED_EXTENSIONS}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
     },
     {
       "model": "release",
       "path": "services.backend.environment.ATTACHMENT_MAX_BYTES",
       "expect": {
-        "$matches": "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:-|-)"
+        "$matches": "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:?-[^{}]*\\})$"
       },
-      "why": "#631: shape, not default. This is the row that defines the boundary: raising the default from 10MB to 20MB is an ordinary product change and must pass, while hardcoding any literal must not."
+      "why": "#631: shape, not default. This is the row that defines the boundary: raising the default from 10MB to 20MB is an ordinary product change and must pass, while hardcoding any literal must not. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_MAX_BYTES}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
     },
     {
       "model": "release",
       "path": "services.backend.environment.MAX_SESSIONS_PER_USER",
       "expect": {
-        "$matches": "^\\$\\{MAX_SESSIONS_PER_USER(\\}|:-|-)"
+        "$matches": "^\\$\\{MAX_SESSIONS_PER_USER(\\}|:?-[^{}]*\\})$"
       },
-      "why": "#631: shape, not default. Hardcoded high it removes the session cap a deployment can no longer restore."
+      "why": "#631: shape, not default. Hardcoded high it removes the session cap a deployment can no longer restore. Anchored at both ends: an unanchored prefix match accepts `${MAX_SESSIONS_PER_USER}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
     },
     {
       "model": "release",
       "path": "services.backend.environment.JWT_EXPIRES_IN",
       "expect": {
-        "$matches": "^\\$\\{JWT_EXPIRES_IN(\\}|:-|-)"
+        "$matches": "^\\$\\{JWT_EXPIRES_IN(\\}|:?-[^{}]*\\})$"
       },
-      "why": "#631: shape, not default. Hardcoded long it fixes token lifetime beyond a deployment's control, and a stolen token stays valid for that whole window."
+      "why": "#631: shape, not default. Hardcoded long it fixes token lifetime beyond a deployment's control, and a stolen token stays valid for that whole window. Anchored at both ends: an unanchored prefix match accepts `${JWT_EXPIRES_IN}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
     },
     {
       "model": "release",
@@ -1149,6 +1149,102 @@
         }
       },
       "why": "#631: as in prod -- without the mount every attachment uploaded to a deployment is lost on the next image bump."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.PRESENCE_GRACE_MS",
+      "expect": {
+        "$matches": "^\\$\\{PRESENCE_GRACE_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. Only the key set covered these three, so a literal passed. Hardcoded, the deployment loses the knob; hardcoded small it also breaks the feature -- presence grace absorbs a reconnect, and at a literal `1` every brief disconnect flaps the user offline."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.PRESENCE_TTL_MS",
+      "expect": {
+        "$matches": "^\\$\\{PRESENCE_TTL_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. This one bounds how long a crashed instance keeps its users showing as online, because nothing runs on a dead process to hand the leases back (the file says so at this key). Hardcoded, an operator cannot tune that against their own restart behaviour."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.TYPING_TTL_MS",
+      "expect": {
+        "$matches": "^\\$\\{TYPING_TTL_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as with the two presence timings above."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.PRESENCE_GRACE_MS",
+      "expect": {
+        "$matches": "^\\$\\{PRESENCE_GRACE_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as on prod."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.PRESENCE_TTL_MS",
+      "expect": {
+        "$matches": "^\\$\\{PRESENCE_TTL_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as on prod."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.TYPING_TTL_MS",
+      "expect": {
+        "$matches": "^\\$\\{TYPING_TTL_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as on prod."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.INSTANCE_ID",
+      "expect": {
+        "$matches": "^\\$\\{INSTANCE_ID(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. Unset means the backend generates one per process; a stable per-replica name lets a restarted process replace its own presence lease instead of adding a second one that waits out the TTL. Hardcoded, every replica shares one id and they overwrite each other's leases."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.environment.NEXT_PUBLIC_API_URL",
+      "expect": "${NEXT_PUBLIC_API_URL}",
+      "why": "#631: the whole binding. This is the origin the browser calls, and it must stay the same value the build arg above receives -- a build baked against one host and a runtime pointed at another is a silently broken deployment. Hardcoding it sends every production browser to whatever host was committed."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.environment.ALLOWED_DEV_ORIGINS",
+      "expect": "${ALLOWED_DEV_ORIGINS}",
+      "why": "#631: the whole binding, for the same reason CORS_ORIGINS is pinned rather than shape-matched -- a committed literal here (`*` above all) widens which origins Next.js accepts for every deployment at once, and no deployer can narrow it back."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.environment.NEXT_PUBLIC_API_URL",
+      "expect": {
+        "$matches": "^\\$\\{NEXT_PUBLIC_API_URL(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. release ships a localhost default for the bundle to be runnable as-is, so the default legitimately differs from prod; what must not change is that a deployer can still point it at their own host."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.environment.ALLOWED_DEV_ORIGINS",
+      "expect": {
+        "$matches": "^\\$\\{ALLOWED_DEV_ORIGINS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as with NEXT_PUBLIC_API_URL above. The empty default is the safe end already; what is load-bearing is that it stays deployer-settable rather than becoming a committed literal."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.CI",
+      "expect": "true",
+      "why": "#631: a literal, not an interpolation, for the reason the file gives at TRUST_PROXY_HOPS -- Compose interpolates from the project .env, so writing this as ${CI} would let a value carried over from .env.example quietly change container tooling behaviour in production."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.environment.CI",
+      "expect": "true",
+      "why": "#631: a literal, not an interpolation -- as with the backend's CI above."
     }
   ]
 }
