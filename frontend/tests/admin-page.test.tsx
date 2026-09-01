@@ -12,11 +12,13 @@ import {
 } from "./mocks/api";
 import { __getPathname, __resetNavigation } from "./mocks/next-navigation";
 
+const mockChatState = vi.hoisted(() => ({ userId: "user-1" }));
+
 vi.mock("@/context/ChatContext", () => ({
   useChat: () => ({
     isAuthenticated: true,
     isMounted: true,
-    user: { userId: "user-1" },
+    user: { userId: mockChatState.userId },
   }),
   useUiLanguage: () => "en",
 }));
@@ -25,6 +27,7 @@ describe("AdminPage", () => {
   test.beforeEach(() => {
     __resetApiMock();
     __resetNavigation("/");
+    mockChatState.userId = "user-1";
   });
 
   test("renders all monitoring sections after the admin check succeeds", async () => {
@@ -74,7 +77,7 @@ describe("AdminPage", () => {
     expect(__getApiCallLog("getAdminSlowQueries")).toHaveLength(0);
   });
 
-  test("polls again after five seconds without overlapping a deferred batch", async () => {
+  test("polls again after thirty seconds without overlapping a deferred batch", async () => {
     vi.useFakeTimers();
     try {
       __setAdminAccess(true);
@@ -86,8 +89,8 @@ describe("AdminPage", () => {
       expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
       const release = __holdNextAdminMonitoring();
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000);
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(30_000);
       });
       expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2);
 
@@ -96,7 +99,88 @@ describe("AdminPage", () => {
         await Promise.resolve();
       });
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("keeps two admin tabs within the shared production request budget", async () => {
+    vi.useFakeTimers();
+    try {
+      __setAdminAccess(true);
+      render(
+        <>
+          <AdminPage />
+          <AdminPage />
+        </>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15 * 60 * 1_000);
+      });
+
+      const adminRequests = __getApiCallLog().filter(({ fn }) =>
+        ["getAdminHealth", "getAdminMetrics", "getAdminLogs", "getAdminSlowQueries"].includes(fn),
+      );
+      expect(adminRequests.length).toBeLessThanOrEqual(200);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("continues temporary monitoring failures at the reduced polling frequency", async () => {
+    vi.useFakeTimers();
+    try {
+      __setAdminAccess(true);
+      render(<AdminPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
+
+      __setAdminMonitoringStatus(500);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2);
+
+      __setAdminMonitoringStatus(null);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("revalidates access and restarts polling when the session changes", async () => {
+    vi.useFakeTimers();
+    try {
+      __setAdminAccess(true);
+      const { rerender } = render(<AdminPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(__getApiCallLog("getAdminHealth")).toHaveLength(1);
+      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
+
+      mockChatState.userId = "user-2";
+      rerender(<AdminPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(__getApiCallLog("getAdminHealth")).toHaveLength(2);
+      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
       });
       expect(__getApiCallLog("getAdminMetrics")).toHaveLength(3);
     } finally {
@@ -116,13 +200,13 @@ describe("AdminPage", () => {
 
       __setAdminMonitoringStatus(401);
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(30_000);
       });
       expect(__getPathname()).toBe("/login?redirect=/admin");
       const callsAfterUnauthorized = __getApiCallLog("getAdminMetrics").length;
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(30_000);
       });
       expect(__getApiCallLog("getAdminMetrics")).toHaveLength(callsAfterUnauthorized);
     } finally {
@@ -144,7 +228,7 @@ describe("AdminPage", () => {
       });
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(30_000);
       });
       expect(__getPathname()).toBe("/login?redirect=/admin");
       expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
@@ -164,7 +248,7 @@ describe("AdminPage", () => {
       const release = __holdNextAdminMonitoring();
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(30_000);
       });
       expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2);
 
@@ -172,7 +256,7 @@ describe("AdminPage", () => {
       release();
       await act(async () => {
         await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(30_000);
       });
       expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2);
     } finally {

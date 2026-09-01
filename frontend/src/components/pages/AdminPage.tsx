@@ -18,7 +18,7 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { useActiveAccessToken } from "@/hooks/useActiveAccessToken";
 import { Button } from "@/components/ui/Button";
 
-const ADMIN_POLL_INTERVAL_MS = 5_000;
+const ADMIN_POLL_INTERVAL_MS = 30_000;
 const STATUS_CLASSES = ["1xx", "2xx", "3xx", "4xx", "5xx", "other"] as const;
 type AccessState = "checking" | "allowed" | "forbidden" | "error";
 type VerifiedAccess = { token: string; sessionKey: string };
