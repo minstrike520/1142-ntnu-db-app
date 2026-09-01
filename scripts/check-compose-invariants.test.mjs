@@ -542,6 +542,38 @@ test("the service key set closes the whole absent-by-default family at once", ()
   }
 });
 
+test("pinning the interpolation shape separates a hardcode from a default change", () => {
+  // A security switch has two very different edits. Raising a default is an
+  // ordinary product change. Replacing the interpolation with a literal takes
+  // the switch away from whoever deploys it -- RATE_LIMIT_DISABLED hardcoded to
+  // `true` sets rateLimit.disabled, and securityMiddleware skips both the global
+  // and the auth limiter, so login brute-force protection is gone for good.
+  // Pinning the value would reject both; pinning the shape rejects only the second.
+  const contract = [
+    {
+      model: "prod",
+      path: "services.backend.environment.RATE_LIMIT_DISABLED",
+      expect: { $matches: "^\\$\\{RATE_LIMIT_DISABLED(\\}|:-|-)" },
+      why: "#631",
+    },
+  ];
+  const withEnv = (value) => {
+    const model = baseModel();
+    model.services.backend.environment = [`RATE_LIMIT_DISABLED=${value}`];
+    return model;
+  };
+
+  // Interpolated, in any of its three forms, and with any default.
+  for (const value of ["${RATE_LIMIT_DISABLED}", "${RATE_LIMIT_DISABLED:-false}", "${RATE_LIMIT_DISABLED-false}", "${RATE_LIMIT_DISABLED:-true}"]) {
+    assert.deepEqual(evaluateAgainst(contract, { prod: withEnv(value) }), [], value);
+  }
+
+  // Hardcoded, or bound to a different variable.
+  for (const value of ["true", "false", "${CI}", "${JWT_SECRET}"]) {
+    assert.equal(evaluateAgainst(contract, { prod: withEnv(value) }).length, 1, value);
+  }
+});
+
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
   // render modes; a row must not pass or fail on that.
@@ -708,6 +740,26 @@ test("the checked-in contract catches a published port aimed at the wrong contai
     failures.some((failure) => /docker-compose\.release\.yml services\.frontend\.ports/.test(failure)),
     failures.join("\n"),
   );
+});
+
+test("the checked-in contract catches rate limiting hardcoded off", needsDocker, () => {
+  for (const model of ["prod", "release"]) {
+    const rendered = renderRealModels();
+    const env = rendered[model].services.backend.environment;
+    if (Array.isArray(env)) {
+      rendered[model].services.backend.environment = env.map((entry) =>
+        entry.startsWith("RATE_LIMIT_DISABLED=") ? "RATE_LIMIT_DISABLED=true" : entry,
+      );
+    } else {
+      env.RATE_LIMIT_DISABLED = "true";
+    }
+    assert.ok(
+      evaluateAgainst(checkedInContract(), rendered).some((f) =>
+        /services\.backend\.environment\.RATE_LIMIT_DISABLED/.test(f),
+      ),
+      `${model} rate limiting hardcoded off`,
+    );
+  }
 });
 
 test("the checked-in contract catches a required service scaled to zero", needsDocker, () => {

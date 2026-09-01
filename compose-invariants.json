@@ -291,6 +291,62 @@
     },
     {
       "model": "prod",
+      "path": "services.backend.environment.RATE_LIMIT_DISABLED",
+      "expect": {
+        "$matches": "^\\$\\{RATE_LIMIT_DISABLED(\\}|:-|-)"
+      },
+      "why": "#631: the interpolation SHAPE, not the default. Hardcoded to `true` this sets rateLimit.disabled at backend/src/config/env.ts:497, and securityMiddleware.ts skips BOTH the global and the auth limiter -- production loses login brute-force protection while the key set and every other row is unchanged. Pinning the shape rather than the value lets an operator still tune the default without letting anyone remove the operator's control of it."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.ATTACHMENT_TYPE_RESTRICTION_ENABLED",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_TYPE_RESTRICTION_ENABLED(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default. Hardcoded `false` disables MIME and extension checking on every upload for good, with no way for a deployment to turn it back on."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.ATTACHMENT_ALLOWED_MIME_TYPES",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_MIME_TYPES(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default. Hardcoded to a permissive list removes the deployment's ability to narrow it."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.ATTACHMENT_ALLOWED_EXTENSIONS",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_EXTENSIONS(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default -- as with the MIME list above."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.ATTACHMENT_MAX_BYTES",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default. This is the row that defines the boundary: raising the default from 10MB to 20MB is an ordinary product change and must pass, while hardcoding any literal must not."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.MAX_SESSIONS_PER_USER",
+      "expect": {
+        "$matches": "^\\$\\{MAX_SESSIONS_PER_USER(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default. Hardcoded high it removes the session cap a deployment can no longer restore."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.JWT_EXPIRES_IN",
+      "expect": {
+        "$matches": "^\\$\\{JWT_EXPIRES_IN(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default. Hardcoded long it fixes token lifetime beyond a deployment's control, and a stolen token stays valid for that whole window."
+    },
+    {
+      "model": "prod",
       "path": "services.db.environment",
       "expect": {
         "$keys": [
@@ -872,6 +928,62 @@
         ]
       },
       "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.RATE_LIMIT_DISABLED",
+      "expect": {
+        "$matches": "^\\$\\{RATE_LIMIT_DISABLED(\\}|:-|-)"
+      },
+      "why": "#631: the interpolation SHAPE, not the default. Hardcoded to `true` this sets rateLimit.disabled at backend/src/config/env.ts:497, and securityMiddleware.ts skips BOTH the global and the auth limiter -- production loses login brute-force protection while the key set and every other row is unchanged. Pinning the shape rather than the value lets an operator still tune the default without letting anyone remove the operator's control of it."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.ATTACHMENT_TYPE_RESTRICTION_ENABLED",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_TYPE_RESTRICTION_ENABLED(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default. Hardcoded `false` disables MIME and extension checking on every upload for good, with no way for a deployment to turn it back on."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.ATTACHMENT_ALLOWED_MIME_TYPES",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_MIME_TYPES(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default. Hardcoded to a permissive list removes the deployment's ability to narrow it."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.ATTACHMENT_ALLOWED_EXTENSIONS",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_EXTENSIONS(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default -- as with the MIME list above."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.ATTACHMENT_MAX_BYTES",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default. This is the row that defines the boundary: raising the default from 10MB to 20MB is an ordinary product change and must pass, while hardcoding any literal must not."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.MAX_SESSIONS_PER_USER",
+      "expect": {
+        "$matches": "^\\$\\{MAX_SESSIONS_PER_USER(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default. Hardcoded high it removes the session cap a deployment can no longer restore."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.JWT_EXPIRES_IN",
+      "expect": {
+        "$matches": "^\\$\\{JWT_EXPIRES_IN(\\}|:-|-)"
+      },
+      "why": "#631: shape, not default. Hardcoded long it fixes token lifetime beyond a deployment's control, and a stolen token stays valid for that whole window."
     },
     {
       "model": "release",
