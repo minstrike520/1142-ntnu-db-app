@@ -817,6 +817,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [adminMonitoring, setAdminMonitoring] = useState<AdminMonitoringState>(emptyAdminMonitoringState);
   const [adminError, setAdminError] = useState<AdminError>(null);
   const [adminRefreshNonce, setAdminRefreshNonce] = useState(0);
+  const [adminCheckNonce, setAdminCheckNonce] = useState(0);
   const [adminVerifiedToken, setAdminVerifiedToken] = useState<string | null>(null);
   const [adminVerifiedSessionKey, setAdminVerifiedSessionKey] = useState<string | null>(null);
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
@@ -1206,6 +1207,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const authToken = token;
     const sessionKey = currentUserId ?? "anonymous";
     setAdminAccess("checking");
@@ -1235,12 +1237,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         console.error("Failed to verify admin access:", error);
         setAdminError("access");
         setAdminAccess("error");
+        retryTimer = setTimeout(() => {
+          if (!cancelled) setAdminCheckNonce((current) => current + 1);
+        }, ADMIN_POLL_INTERVAL_MS);
       });
 
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
     };
-  }, [currentUserId, isAuthenticated, isAuthResolved, isMounted, pathname, router, token]);
+  }, [adminCheckNonce, currentUserId, isAuthenticated, isAuthResolved, isMounted, pathname, router, token]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {

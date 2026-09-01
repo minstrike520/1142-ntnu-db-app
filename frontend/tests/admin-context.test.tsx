@@ -6,6 +6,7 @@ import {
   __holdNextAdminMonitoring,
   __resetApiMock,
   __setAdminAccess,
+  __setAdminHealthStatus,
   __setAdminMonitoringStatus,
   setActiveAccessToken,
 } from "./mocks/api";
@@ -105,6 +106,38 @@ describe("ChatContext admin monitoring lifecycle", () => {
     act(() => setActiveAccessToken("rotated-token"));
     await waitFor(() => expect(__getApiCallLog("getAdminHealth")).toHaveLength(2));
     await waitFor(() => expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2));
+  });
+
+  test("retries a temporary access-check failure", async () => {
+    __setAdminAccess(true);
+    render(
+      <ChatProvider>
+        <AdminContextProbe />
+      </ChatProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("admin-data-loaded").textContent).toBe("yes"));
+
+    vi.useFakeTimers();
+    try {
+      __setAdminHealthStatus(500);
+      act(() => setActiveAccessToken("health-check-token"));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByTestId("admin-context").getAttribute("data-access")).toBe("error");
+      expect(screen.getByTestId("admin-context").getAttribute("data-error")).toBe("access");
+
+      __setAdminHealthStatus(null);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        for (let i = 0; i < 6; i += 1) await Promise.resolve();
+      });
+      expect(screen.getByTestId("admin-context").getAttribute("data-access")).toBe("allowed");
+      expect(__getApiCallLog("getAdminHealth")).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("does not update state or schedule polling after unmount", async () => {
