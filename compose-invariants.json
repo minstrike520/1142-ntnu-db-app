@@ -56,6 +56,85 @@
     },
     {
       "model": "prod",
+      "path": "services.backend",
+      "expect": {
+        "$keys": [
+          "build",
+          "depends_on",
+          "environment",
+          "networks",
+          "ports",
+          "profiles",
+          "stop_grace_period",
+          "volumes"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "prod",
+      "path": "services.db",
+      "expect": {
+        "$keys": [
+          "environment",
+          "healthcheck",
+          "image",
+          "networks",
+          "ports",
+          "profiles",
+          "volumes"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend",
+      "expect": {
+        "$keys": [
+          "build",
+          "depends_on",
+          "environment",
+          "networks",
+          "ports",
+          "profiles"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis",
+      "expect": {
+        "$keys": [
+          "command",
+          "healthcheck",
+          "image",
+          "networks",
+          "profiles",
+          "tmpfs"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel",
+      "expect": {
+        "$keys": [
+          "command",
+          "depends_on",
+          "environment",
+          "image",
+          "networks",
+          "profiles",
+          "restart"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "prod",
       "path": "services.db.ports",
       "expect": {
         "$every": {
@@ -497,6 +576,73 @@
         ]
       },
       "why": "#631: the service set is the frame every other release row is written against, and `migrate` in particular is what makes the bundle self-applying (#558)."
+    },
+    {
+      "model": "release",
+      "path": "services.backend",
+      "expect": {
+        "$keys": [
+          "command",
+          "depends_on",
+          "environment",
+          "image",
+          "networks",
+          "ports",
+          "profiles",
+          "restart",
+          "stop_grace_period",
+          "volumes"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "release",
+      "path": "services.db",
+      "expect": {
+        "$keys": [
+          "environment",
+          "healthcheck",
+          "image",
+          "networks",
+          "profiles",
+          "restart",
+          "volumes"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend",
+      "expect": {
+        "$keys": [
+          "depends_on",
+          "environment",
+          "image",
+          "networks",
+          "ports",
+          "profiles",
+          "restart"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate",
+      "expect": {
+        "$keys": [
+          "command",
+          "depends_on",
+          "environment",
+          "image",
+          "networks",
+          "profiles",
+          "restart"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
     },
     {
       "model": "release",

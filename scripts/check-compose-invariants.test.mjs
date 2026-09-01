@@ -500,6 +500,48 @@ test("a whole sub-object row catches a dependency deleted, not just weakened", (
   assert.equal(evaluateAgainst(contract, { prod: deleted }).length, 1);
 });
 
+test("the service key set closes the whole absent-by-default family at once", () => {
+  // Compose has a family of service keys that are absent by default and change
+  // how, or whether, the service runs. `scale: 0` renders the service exactly
+  // as before and starts zero containers of it; `privileged`, `cap_add`,
+  // `user`, `pid` and `devices` change what it can do to the host. Pinning them
+  // one at a time meant a fresh round per key, so the key set is asserted.
+  const keys = ["command", "depends_on", "environment", "image", "networks", "profiles", "restart"];
+  const contract = [{ model: "prod", path: "services.tunnel", expect: { $keys: keys }, why: "#631" }];
+
+  const base = () => {
+    const model = baseModel();
+    model.services.tunnel = {
+      command: "tunnel --no-autoupdate run",
+      depends_on: {},
+      environment: ["TUNNEL_TOKEN=${TUNNEL_TOKEN}"],
+      image: "cloudflare/cloudflared:latest",
+      networks: { default: null },
+      restart: "always",
+    };
+    return model;
+  };
+  assert.deepEqual(evaluateAgainst(contract, { prod: base() }), []);
+
+  for (const [key, value] of [
+    ["scale", 0],
+    ["deploy", { replicas: 0 }],
+    ["privileged", true],
+    ["cap_add", ["SYS_ADMIN"]],
+    ["user", "root"],
+    ["pid", "host"],
+    ["devices", ["/dev/kmsg:/dev/kmsg"]],
+  ]) {
+    const tampered = base();
+    tampered.services.tunnel[key] = value;
+    assert.equal(
+      evaluateAgainst(contract, { prod: tampered }).length,
+      1,
+      `expected a service gaining ${key} to fail the key-set row`,
+    );
+  }
+});
+
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
   // render modes; a row must not pass or fail on that.
@@ -666,6 +708,21 @@ test("the checked-in contract catches a published port aimed at the wrong contai
     failures.some((failure) => /docker-compose\.release\.yml services\.frontend\.ports/.test(failure)),
     failures.join("\n"),
   );
+});
+
+test("the checked-in contract catches a required service scaled to zero", needsDocker, () => {
+  // The rendered model still contains the service; only the container count
+  // changes. On prod's tunnel that is production with no ingress at all.
+  for (const key of ["scale", "deploy"]) {
+    const rendered = renderRealModels();
+    rendered.prod.services.tunnel[key] = key === "scale" ? 0 : { replicas: 0 };
+    assert.ok(
+      evaluateAgainst(checkedInContract(), rendered).some((f) =>
+        /docker-compose\.prod\.yml services\.tunnel\b/.test(f),
+      ),
+      `tunnel ${key}`,
+    );
+  }
 });
 
 test("the checked-in contract catches a rebound secret or a swapped image", needsDocker, () => {
