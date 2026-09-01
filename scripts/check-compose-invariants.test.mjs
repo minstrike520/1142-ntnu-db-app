@@ -405,6 +405,23 @@ test("asserting one service's binding says nothing about its sibling's", () => {
   assert.equal(evaluateAgainst(contract, { release: rebound }).length, 1);
 });
 
+test("a service behind a profile is rejected, though `config` still renders it", () => {
+  // The fourth key that means something by being absent. `config --format json`
+  // renders a profiled service identically, so the service-set, network and
+  // restart rows all still pass -- but `up` without a matching --profile skips
+  // it. On prod's tunnel that means starting everything except the only ingress.
+  const contract = [{ model: "prod", path: "services.*.profiles", expect: { $every: [] }, why: "#631" }];
+  const enabled = baseModel();
+  enabled.services.tunnel = { image: "cloudflare/cloudflared:latest" };
+  assert.deepEqual(evaluateAgainst(contract, { prod: enabled }), []);
+
+  const profiled = baseModel();
+  profiled.services.tunnel = { image: "cloudflare/cloudflared:latest", profiles: ["manual"] };
+  const failures = evaluateAgainst(contract, { prod: profiled });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /"manual"/);
+});
+
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
   // render modes; a row must not pass or fail on that.
@@ -571,6 +588,18 @@ test("the checked-in contract catches a published port aimed at the wrong contai
     failures.some((failure) => /docker-compose\.release\.yml services\.frontend\.ports/.test(failure)),
     failures.join("\n"),
   );
+});
+
+test("the checked-in contract catches a service put behind a profile", needsDocker, () => {
+  for (const [model, service] of [["prod", "tunnel"], ["release", "migrate"]]) {
+    const rendered = renderRealModels();
+    rendered[model].services[service].profiles = ["manual"];
+    const failures = evaluateAgainst(checkedInContract(), rendered);
+    assert.ok(
+      failures.some((failure) => new RegExp(`${MODELS[model]} services\\.\\*\\.profiles`).test(failure)),
+      `${model}: ${failures.join("\n")}`,
+    );
+  }
 });
 
 test("the checked-in contract catches migrate losing its own DATABASE_URL", needsDocker, () => {

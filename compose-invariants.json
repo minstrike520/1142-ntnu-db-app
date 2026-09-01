@@ -150,6 +150,12 @@
     },
     {
       "model": "prod",
+      "path": "services.*.profiles",
+      "expect": { "$every": [] },
+      "why": "#631: no service may sit behind a profile. `docker compose config` renders a profiled service exactly as before, so the service-set, network and restart rows all still pass -- but `up` without a matching `--profile` skips it. Verified: `profiles: [manual]` on the tunnel drops it from `config --services`, so the documented production command starts every service except the only ingress, and nothing reaches the site."
+    },
+    {
+      "model": "prod",
       "path": "services.*.networks",
       "expect": { "$every": ["default"] },
       "why": "#631: cloudflared reaches frontend and backend over this one compose network rather than any published port (docker-compose.prod.yml:1-9), and backend reaches db and redis the same way. A service moved onto a second network, or given `network_mode` instead, is unreachable from the only ingress -- with every port, restart and image row still green. Written as `*` so a service added later is covered without anyone remembering to add a row."
@@ -382,6 +388,12 @@
       "path": "services.backend.stop_grace_period",
       "expect": "30s",
       "why": "#586: same drain budget as prod -- Docker's 10s default SIGKILLs the backend while it is handing presence leases back."
+    },
+    {
+      "model": "release",
+      "path": "services.*.profiles",
+      "expect": { "$every": [] },
+      "why": "#631: same rule. A profiled `migrate` would be skipped by the bundle's own `up`, and the backend would then wait forever on `service_completed_successfully`."
     },
     {
       "model": "release",

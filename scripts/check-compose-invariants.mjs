@@ -170,6 +170,14 @@ function normalizeService(service) {
   if (normalized.volumes !== undefined) {
     normalized.volumes = normalizeMounts(normalized.volumes);
   }
+  // The fourth key that means something by being absent, after host_ip,
+  // read_only and internal -- and the one with the widest blast radius. A
+  // service with a profile is rendered by `config` exactly as before, so the
+  // service-set, network and restart rows all still pass, but `up` without a
+  // matching `--profile` skips it entirely. Verified: adding `profiles:
+  // [manual]` to prod's tunnel drops it from `config --services`, so the
+  // documented production command starts no ingress at all.
+  normalized.profiles = normalized.profiles ?? [];
   return normalized;
 }
 
