@@ -266,13 +266,25 @@ jobs:
           DATABASE_REQUIRED: ${{ needs.detect.outputs.database-required }}
           BROWSER_REQUIRED: ${{ needs.detect.outputs.browser-required }}
           SECURITY_REQUIRED: ${{ needs.detect.outputs.security-required }}
+          FRONTEND_COVERAGE_SUMMARY: ${{ needs.frontend.outputs.coverage_summary }}
+          BACKEND_COVERAGE_SUMMARY: ${{ needs.backend.outputs.coverage_summary }}
         run: |
           set -uo pipefail
 
           failed=false
+          coverage_failed=false
+          coverage_failure_reason=""
           fail() {
             echo "::error::$1"
             failed=true
+          }
+
+          coverage_fail() {
+            coverage_failed=true
+            if [[ -n "$coverage_failure_reason" ]]; then
+              coverage_failure_reason+="; "
+            fi
+            coverage_failure_reason+="$1"
           }
 
           # A lane that was supposed to run must succeed. Accepting `skipped`
@@ -298,6 +310,58 @@ jobs:
             fi
           }
 
+          coverage_row() { # name, required, lane result, JSON summary
+            local name="$1"
+            local required="$2"
+            local result="$3"
+            local summary="$4"
+            local status lines functions branches error
+
+            if [[ -z "$summary" ]]; then
+              if [[ "$required" == "false" && "$result" == "skipped" ]]; then
+                echo "| $name | \`N/A\` | \`—\` | \`—\` | \`—\` |"
+              else
+                echo "| $name | \`unavailable ($result)\` | \`—\` | \`—\` | \`—\` |"
+                coverage_fail "$name coverage summary was unavailable"
+              fi
+              return
+            fi
+
+            if ! jq -e 'type == "object" and (.status == "success" or .status == "error")' <<<"$summary" >/dev/null; then
+              echo "| $name | \`error: invalid coverage output\` | \`—\` | \`—\` | \`—\` |"
+              coverage_fail "$name coverage output was not valid structured JSON"
+              return
+            fi
+
+            status="$(jq -r '.status' <<<"$summary")"
+            if [[ "$status" != "success" ]]; then
+              error="$(jq -r '.error // "coverage collection failed"' <<<"$summary" | tr '\n|' ' /')"
+              echo "| $name | \`error: $error\` | \`—\` | \`—\` | \`—\` |"
+              coverage_fail "$name coverage collection failed: $error"
+              return
+            fi
+
+            # Do not let a payload with only `status: success` turn into an
+            # apparently available row. The parser emits one-decimal strings;
+            # this schema check also protects the gate if a producer regresses.
+            if ! jq -e --arg percentage '^(100([.]0+)?|[0-9]{1,2}([.][0-9]+)?)%$' '
+              type == "object" and
+              .status == "success" and
+              (.lines | type == "string" and test($percentage)) and
+              (.functions | type == "string" and test($percentage)) and
+              (.branches == null or (.branches | type == "string" and test($percentage)))
+            ' <<<"$summary" >/dev/null; then
+              echo "| $name | \`error: invalid coverage metrics\` | \`—\` | \`—\` | \`—\` |"
+              coverage_fail "$name coverage success payload had missing or invalid metrics"
+              return
+            fi
+
+            lines="$(jq -r '.lines // "—"' <<<"$summary")"
+            functions="$(jq -r '.functions // "—"' <<<"$summary")"
+            branches="$(jq -r '.branches // "—"' <<<"$summary")"
+            echo "| $name | \`available\` | \`$lines\` | \`$functions\` | \`$branches\` |"
+          }
+
           [[ "$DETECT_RESULT" == "success" ]] || fail "detect finished as $DETECT_RESULT"
 
           check_lane frontend "$FRONTEND_RESULT" "$FRONTEND_REQUIRED"
@@ -317,6 +381,19 @@ jobs:
             echo "| database | \`$DATABASE_REQUIRED\` | \`$DATABASE_RESULT\` |"
             echo "| browser | \`$BROWSER_REQUIRED\` | \`$BROWSER_RESULT\` |"
             echo "| security | \`$SECURITY_REQUIRED\` | \`$SECURITY_RESULT\` |"
+            echo
+            echo "### Test coverage"
+            echo
+            echo "| Test coverage | Status | Lines | Functions | Branches |"
+            echo "| --- | --- | ---: | ---: | ---: |"
+            coverage_row frontend "$FRONTEND_REQUIRED" "$FRONTEND_RESULT" "$FRONTEND_COVERAGE_SUMMARY"
+            coverage_row backend "$BACKEND_REQUIRED" "$BACKEND_RESULT" "$BACKEND_COVERAGE_SUMMARY"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # Keep annotations in the step log. Calling fail() from the redirected
+          # block above would write the ::error:: command as raw summary Markdown.
+          if [[ "$coverage_failed" == "true" ]]; then
+            fail "coverage summary diagnostics: $coverage_failure_reason"
+          fi
 
           [[ "$failed" == "false" ]]
