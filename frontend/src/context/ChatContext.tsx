@@ -88,6 +88,7 @@ import {
   type AdminLogEntry,
   type AdminSlowQuery,
 } from "@/lib/api";
+import { withRedirectParam } from "@/lib/redirect";
 import {
   createChatSocket,
   onEmergencyAlert,
@@ -287,9 +288,6 @@ interface ChatContextType {
   isAuthenticated: boolean;
   isAuthResolved: boolean;
   isMounted: boolean;
-  adminAccess: AdminAccessState;
-  adminMonitoring: AdminMonitoringState;
-  adminError: AdminError;
   roomsInitialized: boolean;
   selectedFriendForSidebar: Friend | null;
   setSelectedFriendForSidebar: React.Dispatch<React.SetStateAction<Friend | null>>;
@@ -350,7 +348,6 @@ interface ChatContextType {
   refreshSocialData: () => Promise<void>;
   updateRoomSorting: (nextOrder: Record<string, string[]>) => Promise<void>;
   markRoomAsRead: (roomId: string) => void;
-  refreshAdminMonitoring: () => void;
 }
 
 export type AdminAccessState = "checking" | "allowed" | "forbidden" | "error";
@@ -369,6 +366,8 @@ const emptyAdminMonitoringState: AdminMonitoringState = {
   lastUpdated: null,
 };
 export const ADMIN_POLL_INTERVAL_MS = 30_000;
+/** Login URL that returns the user to /admin once authenticated. */
+const ADMIN_LOGIN_PATH = withRedirectParam("/login", "/admin");
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
@@ -404,6 +403,18 @@ interface RightPanelContextType {
 }
 
 const RightPanelContext = createContext<RightPanelContextType | undefined>(undefined);
+
+// Admin monitoring polls every 30s. Publishing it on the main ChatContext value
+// would give that value a new identity on every poll and re-render every
+// useChat() consumer in the app, so it gets its own subscription channel.
+interface AdminContextType {
+  adminAccess: AdminAccessState;
+  adminMonitoring: AdminMonitoringState;
+  adminError: AdminError;
+  refreshAdminMonitoring: () => void;
+}
+
+const AdminContext = createContext<AdminContextType | undefined>(undefined);
 
 // Static key list for the stable handler proxies built in ChatProvider. Kept
 // at module level so building the proxies never reads a ref during render.
@@ -447,7 +458,6 @@ const HANDLER_KEYS = [
   "setUiLanguage",
   "refreshSocialData",
   "updateRoomSorting",
-  "refreshAdminMonitoring",
 ] as const;
 type HandlerKey = (typeof HANDLER_KEYS)[number];
 
@@ -1096,7 +1106,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     /* eslint-disable react-hooks/set-state-in-effect -- post-mount localStorage session hydration */
     if (!isMounted) return;
 
-    const loginPath = pathname === "/admin" ? "/login?redirect=/admin" : "/login";
+    const loginPath = pathname === "/admin" ? ADMIN_LOGIN_PATH : "/login";
 
     const savedUser = localStorage.getItem("user");
     const savedTheme = localStorage.getItem("theme");
@@ -1201,10 +1211,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     if (!isMounted || !isAuthResolved) return;
-    if (!isAuthenticated || !token) {
-      router.replace("/login?redirect=/admin");
-      return;
-    }
+    // The route guard in app/(main)/layout.tsx owns the redirect to login;
+    // here we only need to stay idle until a session exists.
+    if (!isAuthenticated || !token) return;
 
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1227,7 +1236,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         if (error instanceof ApiError && error.status === 401) {
           clearSession();
-          router.replace("/login?redirect=/admin");
+          router.replace(ADMIN_LOGIN_PATH);
           return;
         }
         if (error instanceof ApiError && error.status === 403) {
@@ -1313,7 +1322,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         if (error instanceof ApiError && error.status === 401) {
           shouldContinuePolling = false;
           clearSession();
-          router.replace("/login?redirect=/admin");
+          router.replace(ADMIN_LOGIN_PATH);
           return;
         }
         if (error instanceof ApiError && error.status === 403) {
@@ -2896,9 +2905,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const refreshAdminMonitoring = () => {
+  const refreshAdminMonitoring = useCallback(() => {
     setAdminRefreshNonce((current) => current + 1);
-  };
+  }, []);
 
   // -------------------------------------------------------------------------
   // Context value stabilization (hotspot #1, issue #383)
@@ -2954,7 +2963,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setUiLanguage,
     refreshSocialData: handleRefreshSocialData,
     updateRoomSorting,
-    refreshAdminMonitoring,
   };
   type Handlers = typeof handlers;
   // Compile-time exhaustiveness check: every key of `handlers` must appear in
@@ -2993,9 +3001,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       isAuthenticated,
       isAuthResolved,
       isMounted,
-      adminAccess,
-      adminMonitoring,
-      adminError,
       roomsInitialized,
       selectedFriendForSidebar,
       setSelectedFriendForSidebar,
@@ -3025,9 +3030,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       isAuthenticated,
       isAuthResolved,
       isMounted,
-      adminAccess,
-      adminMonitoring,
-      adminError,
       roomsInitialized,
       selectedFriendForSidebar,
       hasUnsavedChanges,
@@ -3047,28 +3049,35 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [showRightPanel],
   );
 
+  const adminValue = useMemo<AdminContextType>(
+    () => ({ adminAccess, adminMonitoring, adminError, refreshAdminMonitoring }),
+    [adminAccess, adminMonitoring, adminError, refreshAdminMonitoring],
+  );
+
   return (
     <ChatContext.Provider value={contextValue}>
       <UiLanguageContext.Provider value={uiLanguage}>
         <TypingUsersContext.Provider value={typingUsers}>
           <ProfilePopoverContext.Provider value={profilePopoverValue}>
             <RightPanelContext.Provider value={rightPanelValue}>
-              {children}
-              {messageNoticeKey && (
-                <div
-                  role="status"
-                  className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg"
-                >
-                  <span>{translate(uiLanguage, messageNoticeKey)}</span>
-                  <button
-                    type="button"
-                    className="font-semibold underline"
-                    onClick={() => setMessageNoticeKey(null)}
+              <AdminContext.Provider value={adminValue}>
+                {children}
+                {messageNoticeKey && (
+                  <div
+                    role="status"
+                    className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg"
                   >
-                    {translate(uiLanguage, "chatroom.dismissNotice")}
-                  </button>
-                </div>
-              )}
+                    <span>{translate(uiLanguage, messageNoticeKey)}</span>
+                    <button
+                      type="button"
+                      className="font-semibold underline"
+                      onClick={() => setMessageNoticeKey(null)}
+                    >
+                      {translate(uiLanguage, "chatroom.dismissNotice")}
+                    </button>
+                  </div>
+                )}
+              </AdminContext.Provider>
             </RightPanelContext.Provider>
           </ProfilePopoverContext.Provider>
         </TypingUsersContext.Provider>
@@ -3081,6 +3090,18 @@ export function useChat() {
   const context = useContext(ChatContext);
   if (context === undefined) {
     throw new Error("useChat must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/**
+ * Admin access state and monitoring snapshot. Separate from useChat so the 30s
+ * poll only re-renders the admin surface.
+ */
+export function useAdmin() {
+  const context = useContext(AdminContext);
+  if (context === undefined) {
+    throw new Error("useAdmin must be used within a ChatProvider");
   }
   return context;
 }

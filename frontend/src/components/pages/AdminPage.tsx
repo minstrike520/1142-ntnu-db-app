@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React from "react";
 import { useRouter } from "next/navigation";
-import { ADMIN_POLL_INTERVAL_MS, useChat } from "@/context/ChatContext";
+import { ADMIN_POLL_INTERVAL_MS, useAdmin } from "@/context/ChatContext";
 import type { AdminLogEntry, AdminMetricsResponse, AdminSlowQuery } from "@/lib/api";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
@@ -30,7 +30,7 @@ const formatNumber = (value: number): string => value.toLocaleString();
 
 export default function AdminPage() {
   const router = useRouter();
-  const { adminAccess, adminError, adminMonitoring } = useChat();
+  const { adminAccess, adminError, adminMonitoring } = useAdmin();
   const { t } = useTranslation();
 
   if (adminAccess === "checking") {
@@ -44,9 +44,7 @@ export default function AdminPage() {
   if (adminAccess === "forbidden" || adminAccess === "error") {
     const message = adminAccess === "forbidden"
       ? t("adminPage.forbiddenDescription")
-      : adminError === "access"
-        ? t("adminPage.accessError")
-        : t("adminPage.loadError");
+      : t("adminPage.accessError");
     return (
       <div className="flex h-full items-center justify-center p-6" data-testid="admin-forbidden">
         <section className="w-full max-w-lg border border-border-primary bg-surface-card p-8 text-center">
@@ -84,32 +82,37 @@ export default function AdminPage() {
           </div>
         )}
 
-        <MetricsSection metrics={adminMonitoring.metrics} t={t} />
-        <SlowQueriesSection queries={adminMonitoring.slowQueries} t={t} />
-        <LogsSection entries={adminMonitoring.logs} t={t} />
+        <MetricsSection metrics={adminMonitoring.metrics} />
+        <SlowQueriesSection queries={adminMonitoring.slowQueries} />
+        <LogsSection entries={adminMonitoring.logs} />
       </div>
     </main>
   );
 }
 
-function MetricsSection({
-  metrics,
-  t,
-}: {
-  metrics: AdminMetricsResponse | null;
-  t: (key: string, replacements?: Record<string, string | number>) => string;
-}) {
-  const statusValues = metrics ? STATUS_CLASSES.map((status) => [status, metrics.requests.statusClasses[status]] as const) : [];
+function MetricsSection({ metrics }: { metrics: AdminMetricsResponse | null }) {
+  const { t } = useTranslation();
+  const heading = (
+    <SectionHeading title={t("adminPage.metricsTitle")} description={t("adminPage.metricsDescription")} />
+  );
+
+  if (!metrics) {
+    return (
+      <section className="space-y-4" data-testid="admin-metrics">
+        {heading}
+        <LoadingPanel label={t("common.loading")} />
+      </section>
+    );
+  }
+
+  const { latency, statusClasses } = metrics.requests;
+  const statusValues = STATUS_CLASSES.map((status) => [status, statusClasses[status]] as const);
   const maxStatusCount = Math.max(1, ...statusValues.map(([, count]) => count));
-  const latency = metrics?.requests.latency;
 
   return (
     <section className="space-y-4" data-testid="admin-metrics">
-      <SectionHeading title={t("adminPage.metricsTitle")} description={t("adminPage.metricsDescription")} />
-      {!metrics ? (
-        <LoadingPanel label={t("common.loading")} />
-      ) : (
-        <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
+      {heading}
+      <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCard label={t("adminPage.totalRequests")} value={formatNumber(metrics.requests.totalRequests)} />
             <MetricCard label={t("adminPage.uptime")} value={`${metrics.process.uptimeSeconds.toFixed(1)} s`} />
@@ -133,16 +136,12 @@ function MetricsSection({
           <div className="border border-border-primary bg-surface-card p-4 xl:col-span-2">
             <h3 className="text-xs font-bold uppercase tracking-wider text-text-muted">{t("adminPage.latency")}</h3>
             <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              {latency && (
-                <>
-                  <MetricCard label={t("adminPage.latencySamples")} value={formatNumber(latency.count)} />
-                  <MetricCard label={t("adminPage.average") } value={`${latency.avgMs} ms`} />
-                  <MetricCard label={t("adminPage.p50")} value={`${latency.p50Ms} ms`} />
-                  <MetricCard label={t("adminPage.p95")} value={`${latency.p95Ms} ms`} />
-                  <MetricCard label={t("adminPage.p99")} value={`${latency.p99Ms} ms`} />
-                  <MetricCard label={t("adminPage.maximum")} value={`${latency.maxMs} ms`} />
-                </>
-              )}
+              <MetricCard label={t("adminPage.latencySamples")} value={formatNumber(latency.count)} />
+              <MetricCard label={t("adminPage.average")} value={`${latency.avgMs} ms`} />
+              <MetricCard label={t("adminPage.p50")} value={`${latency.p50Ms} ms`} />
+              <MetricCard label={t("adminPage.p95")} value={`${latency.p95Ms} ms`} />
+              <MetricCard label={t("adminPage.p99")} value={`${latency.p99Ms} ms`} />
+              <MetricCard label={t("adminPage.maximum")} value={`${latency.maxMs} ms`} />
             </div>
           </div>
           <div className="border border-border-primary bg-surface-card p-4 xl:col-span-2">
@@ -152,20 +151,15 @@ function MetricsSection({
               <MetricCard label={t("adminPage.heapTotal")} value={formatBytes(metrics.process.memory.heapTotalBytes)} />
               <MetricCard label={t("adminPage.externalMemory")} value={formatBytes(metrics.process.memory.externalBytes)} />
             </div>
-          </div>
         </div>
-      )}
+      </div>
     </section>
   );
 }
 
-function SlowQueriesSection({
-  queries,
-  t,
-}: {
-  queries: AdminSlowQuery[];
-  t: (key: string, replacements?: Record<string, string | number>) => string;
-}) {
+function SlowQueriesSection({ queries }: { queries: AdminSlowQuery[] }) {
+  const { t } = useTranslation();
+
   return (
     <section className="space-y-4" data-testid="admin-slow-queries">
       <SectionHeading title={t("adminPage.slowQueriesTitle")} description={t("adminPage.slowQueriesDescription")} />
@@ -199,17 +193,10 @@ function SlowQueriesSection({
   );
 }
 
-function LogsSection({
-  entries,
-  t,
-}: {
-  entries: AdminLogEntry[];
-  t: (key: string, replacements?: Record<string, string | number>) => string;
-}) {
-  const renderedEntries = useMemo(
-    () => entries.map((entry) => JSON.stringify(entry)).join("\n"),
-    [entries],
-  );
+function LogsSection({ entries }: { entries: AdminLogEntry[] }) {
+  const { t } = useTranslation();
+  // Each poll delivers a fresh `entries` array, so memoizing on it never hits.
+  const renderedEntries = entries.map((entry) => JSON.stringify(entry)).join("\n");
 
   return (
     <section className="space-y-4" data-testid="admin-logs">

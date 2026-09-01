@@ -342,18 +342,11 @@ export const getAdminHealth = (token: string): Promise<AdminHealthResponse> =>
 export const getAdminMetrics = (token: string): Promise<AdminMetricsResponse> =>
   requestJson<AdminMetricsResponse>('/admin/metrics', {}, { token });
 
-export const getAdminLogs = (token: string, limit?: number): Promise<AdminLogsResponse> => {
-  const suffix = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`;
-  return requestJson<AdminLogsResponse>(`/admin/logs${suffix}`, {}, { token });
-};
+export const getAdminLogs = (token: string): Promise<AdminLogsResponse> =>
+  requestJson<AdminLogsResponse>('/admin/logs', {}, { token });
 
-export const getAdminSlowQueries = (
-  token: string,
-  limit?: number,
-): Promise<AdminSlowQueriesResponse> => {
-  const suffix = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`;
-  return requestJson<AdminSlowQueriesResponse>(`/admin/slow-queries${suffix}`, {}, { token });
-};
+export const getAdminSlowQueries = (token: string): Promise<AdminSlowQueriesResponse> =>
+  requestJson<AdminSlowQueriesResponse>('/admin/slow-queries', {}, { token });
 
 export const register = (data: RegisterRequest): Promise<AuthResponse> =>
   requestJson<AuthResponse>('/auth/register', {

@@ -138,49 +138,45 @@ export const getAdminHealth = async (): Promise<{ status: "ok" }> => {
   return { status: "ok" };
 };
 
-export const getAdminMetrics = async () => {
-  apiCallLog.push({ fn: "getAdminMetrics", args: [] });
+/**
+ * The three monitoring endpoints share one call log, gate and failure switch;
+ * only the payload differs.
+ */
+const adminMonitoringEndpoint = <T>(fn: string, payload: () => T) => async (): Promise<T> => {
+  apiCallLog.push({ fn, args: [] });
   await adminMonitoringGate;
   if (adminMonitoringStatus !== null) throw new ApiError("Admin monitoring failed", adminMonitoringStatus);
-  return {
-    process: {
-      uptimeSeconds: 120,
-      cpu: { userMs: 10, systemMs: 5, percent: 2.5 },
-      memory: { rssBytes: 1000, heapUsedBytes: 500, heapTotalBytes: 800, externalBytes: 100 },
-    },
-    requests: {
-      totalRequests: 12,
-      statusClasses: { "1xx": 0, "2xx": 10, "3xx": 0, "4xx": 2, "5xx": 0, other: 0 },
-      latency: { count: 10, avgMs: 4, p50Ms: 3, p95Ms: 8, p99Ms: 9, maxMs: 10 },
-      sampleSize: 10,
-      sampleCapacity: 1000,
-    },
-    at: Date.now(),
-  };
+  return payload();
 };
 
-export const getAdminLogs = async () => {
-  apiCallLog.push({ fn: "getAdminLogs", args: [] });
-  await adminMonitoringGate;
-  if (adminMonitoringStatus !== null) throw new ApiError("Admin monitoring failed", adminMonitoringStatus);
-  return {
-    entries: [{ level: 30, time: Date.now(), msg: "request completed" }],
-    retained: 1,
-    capacity: 200,
-  };
-};
+export const getAdminMetrics = adminMonitoringEndpoint("getAdminMetrics", () => ({
+  process: {
+    uptimeSeconds: 120,
+    cpu: { userMs: 10, systemMs: 5, percent: 2.5 },
+    memory: { rssBytes: 1000, heapUsedBytes: 500, heapTotalBytes: 800, externalBytes: 100 },
+  },
+  requests: {
+    totalRequests: 12,
+    statusClasses: { "1xx": 0, "2xx": 10, "3xx": 0, "4xx": 2, "5xx": 0, other: 0 },
+    latency: { count: 10, avgMs: 4, p50Ms: 3, p95Ms: 8, p99Ms: 9, maxMs: 10 },
+    sampleSize: 10,
+    sampleCapacity: 1000,
+  },
+  at: Date.now(),
+}));
 
-export const getAdminSlowQueries = async () => {
-  apiCallLog.push({ fn: "getAdminSlowQueries", args: [] });
-  await adminMonitoringGate;
-  if (adminMonitoringStatus !== null) throw new ApiError("Admin monitoring failed", adminMonitoringStatus);
-  return {
-    queries: [{ query: "SELECT 1", durationMs: 120, at: Date.now() }],
-    retained: 1,
-    capacity: 100,
-    thresholdMs: 100,
-  };
-};
+export const getAdminLogs = adminMonitoringEndpoint("getAdminLogs", () => ({
+  entries: [{ level: 30, time: Date.now(), msg: "request completed" }],
+  retained: 1,
+  capacity: 200,
+}));
+
+export const getAdminSlowQueries = adminMonitoringEndpoint("getAdminSlowQueries", () => ({
+  queries: [{ query: "SELECT 1", durationMs: 120, at: Date.now() }],
+  retained: 1,
+  capacity: 100,
+  thresholdMs: 100,
+}));
 
 export const refreshTokens = async (): Promise<AuthResponse> => ({
   token: TEST_TOKEN,

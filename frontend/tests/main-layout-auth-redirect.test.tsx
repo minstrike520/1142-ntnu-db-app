@@ -28,7 +28,7 @@ describe("MainLayout unauthenticated route handling", () => {
     );
 
     await waitFor(() => {
-      expect(__getPathname()).toBe("/login?redirect=/admin");
+      expect(__getPathname()).toBe("/login?redirect=%2Fadmin");
     });
     expect(screen.queryByTestId("protected-content")).toBeNull();
   });

@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { ChatProvider, useChat } from "@/context/ChatContext";
+import { ChatProvider, useAdmin } from "@/context/ChatContext";
 import {
   __getApiCallLog,
   __holdNextAdminMonitoring,
@@ -13,7 +13,7 @@ import {
 import { __getPathname, __resetNavigation } from "./mocks/next-navigation";
 
 function AdminContextProbe() {
-  const { adminAccess, adminError, adminMonitoring, refreshAdminMonitoring } = useChat();
+  const { adminAccess, adminError, adminMonitoring, refreshAdminMonitoring } = useAdmin();
   return (
     <div data-testid="admin-context" data-access={adminAccess} data-error={adminError ?? ""}>
       <span data-testid="admin-data-loaded">{adminMonitoring.metrics ? "yes" : "no"}</span>
@@ -88,7 +88,7 @@ describe("ChatContext admin monitoring lifecycle", () => {
 
     __setAdminMonitoringStatus(401);
     act(() => screen.getByRole("button", { name: "refresh" }).click());
-    await waitFor(() => expect(__getPathname()).toBe("/login?redirect=/admin"));
+    await waitFor(() => expect(__getPathname()).toBe("/login?redirect=%2Fadmin"));
     const callsAfterUnauthorized = __getApiCallLog("getAdminMetrics").length;
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(__getApiCallLog("getAdminMetrics")).toHaveLength(callsAfterUnauthorized);
