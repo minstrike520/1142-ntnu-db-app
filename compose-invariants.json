@@ -283,13 +283,43 @@
     },
     {
       "model": "prod",
-      "path": "services.*.networks",
+      "path": "services.backend.networks",
       "expect": {
-        "$every": [
-          "default"
-        ]
+        "default": null
       },
-      "why": "#631: cloudflared reaches frontend and backend over this one compose network rather than any published port (docker-compose.prod.yml:1-9), and backend reaches db and redis the same way. A service moved onto a second network, or given `network_mode` instead, is unreachable from the only ingress -- with every port, restart and image row still green. Written as `*` so a service added later is covered without anyone remembering to add a row."
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
     },
     {
       "model": "prod",
@@ -921,13 +951,35 @@
     },
     {
       "model": "release",
-      "path": "services.*.networks",
+      "path": "services.backend.networks",
       "expect": {
-        "$every": [
-          "default"
-        ]
+        "default": null
       },
-      "why": "#631: the bundle has no tunnel, but the same connectivity is load-bearing: migrate and backend reach db, and frontend reaches backend, over this one network. A service split onto another network, or given `network_mode`, fails at runtime only -- nothing static catches it otherwise."
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "release",
+      "path": "services.db.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
     },
     {
       "model": "release",

@@ -146,17 +146,37 @@ function normalizeMounts(mounts) {
 }
 
 /**
- * Compose injects `networks: {default: null}` into every service and `command`
- * / `entrypoint` as null where the file sets neither. Those are artifacts of
- * the render, not of the file, so they are reduced to the attachment list and
- * dropped respectively -- otherwise a contract row on `command` could not tell
- * "the file sets no command" from "the file sets a null command".
+ * A service may spell its attachments as a list (`networks: [default]`) or as a
+ * map (`networks: {default: null}`), and Compose injects the map form into every
+ * service that names none. Only the injection is a render artifact; the
+ * attachment VALUE is file content and must survive normalization.
+ *
+ * An earlier version reduced this to the sorted list of network names, which
+ * threw the value away: `default: {aliases: [db]}` normalized to the same
+ * `["default"]` as a plain attachment. Docker does not promise which container a
+ * shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db`,
+ * so a frontend claiming that alias can take the backend's database connection
+ * to port 5432 on the frontend instead. `priority` and `ipv4_address` were
+ * discarded the same way. The list spelling is normalized INTO the map form so
+ * the two spellings still compare equal.
+ */
+function normalizeAttachments(networks) {
+  if (Array.isArray(networks)) return Object.fromEntries(networks.map((name) => [name, null]));
+  if (!networks || typeof networks !== "object") return networks;
+  return Object.fromEntries(Object.entries(networks).map(([name, config]) => [name, config ?? null]));
+}
+
+/**
+ * Compose renders `command` / `entrypoint` as null where the file sets neither.
+ * That is an artifact of the render, not of the file, so it is dropped --
+ * otherwise a contract row on `command` could not tell "the file sets no
+ * command" from "the file sets a null command".
  */
 function normalizeService(service) {
   const normalized = { ...service };
 
-  if (normalized.networks && typeof normalized.networks === "object" && !Array.isArray(normalized.networks)) {
-    normalized.networks = Object.keys(normalized.networks).sort();
+  if (normalized.networks !== undefined) {
+    normalized.networks = normalizeAttachments(normalized.networks);
   }
   for (const key of ["command", "entrypoint"]) {
     if (normalized[key] === null) delete normalized[key];

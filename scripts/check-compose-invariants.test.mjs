@@ -645,7 +645,7 @@ test("compares objects independently of Compose's key order", () => {
 });
 
 test("a `*` path fans out over every service", () => {
-  const contract = [{ model: "prod", path: "services.*.networks", expect: { $every: ["default"] }, why: "#631" }];
+  const contract = [{ model: "prod", path: "services.*.networks", expect: { $every: { default: null } }, why: "#631" }];
   const connected = baseModel();
   connected.services.tunnel = { networks: { default: null } };
   assert.deepEqual(evaluateAgainst(contract, { prod: connected }), []);
@@ -657,6 +657,51 @@ test("a `*` path fans out over every service", () => {
   const failures = evaluateAgainst(contract, { prod: split });
   assert.equal(failures.length, 1);
   assert.match(failures[0], /isolated/);
+});
+
+test("a network attachment keeps its configuration through normalization", () => {
+  // The attachment VALUE is file content, not a render artifact. Reducing it to
+  // the network name made `default: {aliases: [db]}` indistinguishable from a
+  // plain attachment -- and Docker does not promise which container a shared
+  // alias resolves to, while .env.example:8 points DATABASE_URL at host `db`.
+  const contract = [
+    { model: "prod", path: "services.backend.networks", expect: { default: null }, why: "#631" },
+  ];
+  assert.deepEqual(evaluateAgainst(contract, { prod: baseModel() }), []);
+
+  for (const attachment of [
+    { aliases: ["db"] },
+    { priority: 100 },
+    { ipv4_address: "10.0.0.9" },
+    { link_local_ips: ["169.254.0.1"] },
+  ]) {
+    const tampered = baseModel();
+    tampered.services.backend.networks = { default: attachment };
+    assert.equal(
+      evaluateAgainst(contract, { prod: tampered }).length,
+      1,
+      JSON.stringify(attachment),
+    );
+  }
+
+  // A second attachment is not a per-key violation, so the row is compared
+  // whole rather than as a subset. Verified against the real renderer that
+  // `networks: [default, side]` renders as {default: null, side: null} with
+  // `side` never reaching the top-level networks map, so nothing else sees it.
+  const extra = baseModel();
+  extra.services.backend.networks = { default: null, side: null };
+  assert.equal(evaluateAgainst(contract, { prod: extra }).length, 1, "second network");
+});
+
+test("the two spellings of the same attachment compare equal", () => {
+  // `networks: [default]` and `networks: {default: null}` are the same
+  // instruction; a row must not pass or fail on which one the file uses.
+  const contract = [
+    { model: "prod", path: "services.backend.networks", expect: { default: null }, why: "#631" },
+  ];
+  const listForm = baseModel();
+  listForm.services.backend.networks = ["default"];
+  assert.deepEqual(evaluateAgainst(contract, { prod: listForm }), []);
 });
 
 test("a `*` path reports a branch with no value rather than skipping it", () => {
@@ -688,7 +733,7 @@ test("a `*` row does not excuse a service from the coverage rule", () => {
 
 test("normalizeModel drops the nulls Compose injects into every service", () => {
   const normalized = normalizeModel(baseModel());
-  assert.deepEqual(normalized.services.backend.networks, ["default"]);
+  assert.deepEqual(normalized.services.backend.networks, { default: null });
   assert.ok(!("command" in normalized.services.backend), "a null command is a render artifact, not a set command");
 });
 
@@ -764,7 +809,7 @@ test("the checked-in contract catches a service cut off from the compose network
   rendered.prod.services.tunnel.network_mode = "none";
   const failures = evaluateAgainst(checkedInContract(), rendered);
   assert.ok(
-    failures.some((failure) => /docker-compose\.prod\.yml services\.\*\.networks/.test(failure)),
+    failures.some((failure) => /docker-compose\.prod\.yml services\.tunnel\.networks/.test(failure)),
     failures.join("\n"),
   );
 });
@@ -1119,4 +1164,24 @@ test("the checked-in contract catches the frontend origin settings hardcoded", n
       `${model} ${key} hardcoded to ${value}`,
     );
   }
+});
+
+test("every service on both models has a networks row of its own", needsDocker, () => {
+  // The wildcard row this replaced could only ever say "every service carries
+  // these key/values", which is a subset check -- it could not say "and nothing
+  // else", so a service joining a second network slipped through. Exact
+  // per-service rows can say it, at the cost of not covering a service added
+  // later; this test is that cost paid back.
+  const rendered = renderRealModels();
+  const rows = checkedInContract();
+  const missing = [];
+  for (const [modelKey, model] of Object.entries(rendered)) {
+    for (const service of Object.keys(model.services)) {
+      const path = `services.${service}.networks`;
+      if (!rows.some((row) => row.model === modelKey && row.path === path)) {
+        missing.push(`${modelKey} ${path}`);
+      }
+    }
+  }
+  assert.deepEqual(missing, [], "services whose network attachment nothing pins");
 });
