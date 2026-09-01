@@ -141,18 +141,6 @@
     },
     {
       "model": "prod",
-      "path": "services.backend.depends_on.redis.condition",
-      "expect": "service_started",
-      "why": "#631: started, not healthy. src/utils/redis.ts treats Redis as a degraded mode rather than a boot dependency, so gating on its healthcheck would let a Redis that cannot bind stop the API serving routes that never touch Redis."
-    },
-    {
-      "model": "prod",
-      "path": "services.backend.build.dockerfile",
-      "expect": "./backend/Dockerfile.prod",
-      "why": "#558: prod builds from source, and this is the only production Dockerfile CI builds. Pointing it at the dev Dockerfile would ship a dev image under a production stack name."
-    },
-    {
-      "model": "prod",
       "path": "services.tunnel.restart",
       "expect": "always",
       "why": "#631: the tunnel is the only ingress, so it must come back after a host reboot without anyone running a command. `unless-stopped` would leave it down after an operator stops it once."
@@ -174,12 +162,6 @@
       "path": "services.db.environment.POSTGRES_DB",
       "expect": "${POSTGRES_DB}",
       "why": "#631: same key-to-value binding, and the healthcheck below reads this same variable to decide the database is up."
-    },
-    {
-      "model": "prod",
-      "path": "services.db.healthcheck.test[1]",
-      "expect": "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}",
-      "why": "#631: single `$`, so Compose interpolates these host-side before the container sees them. prod's db reads POSTGRES_USER from the host .env, so a `$$` escape here would send the literal string to pg_isready and the healthcheck would never pass."
     },
     {
       "model": "prod",
@@ -262,6 +244,114 @@
         ]
       },
       "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.depends_on",
+      "expect": {
+        "db": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "redis": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.build",
+      "expect": {
+        "context": ".",
+        "dockerfile": "./backend/Dockerfile.prod"
+      },
+      "why": "#631: the whole build object. Pointing prod's frontend at ./frontend/Dockerfile instead of Dockerfile.prod still builds, but that image's CMD is `pnpm dev`, so production would serve from the Next.js development server. ci-frontend.yml builds Dockerfile.prod directly and never reads this wiring, so nothing else catches it."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.healthcheck",
+      "expect": {
+        "interval": "5s",
+        "retries": 10,
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+        ],
+        "timeout": "5s"
+      },
+      "why": "#631: the whole healthcheck. Its retries and interval decide when `service_healthy` fires, which is what gates the dependent service above; its test decides whether it can ever pass at all. Asserted whole so a weakened probe cannot pass by leaving the command intact."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.depends_on",
+      "expect": {
+        "backend": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.build",
+      "expect": {
+        "args": [
+          "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}"
+        ],
+        "context": ".",
+        "dockerfile": "./frontend/Dockerfile.prod"
+      },
+      "why": "#631: the whole build object. Pointing prod's frontend at ./frontend/Dockerfile instead of Dockerfile.prod still builds, but that image's CMD is `pnpm dev`, so production would serve from the Next.js development server. ci-frontend.yml builds Dockerfile.prod directly and never reads this wiring, so nothing else catches it."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.healthcheck",
+      "expect": {
+        "interval": "5s",
+        "retries": 10,
+        "test": [
+          "CMD-SHELL",
+          "redis-cli ping | grep -q PONG"
+        ],
+        "timeout": "5s"
+      },
+      "why": "#631: the whole healthcheck. Its retries and interval decide when `service_healthy` fires, which is what gates the dependent service above; its test decides whether it can ever pass at all. Asserted whole so a weakened probe cannot pass by leaving the command intact."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.command",
+      "expect": [
+        "redis-server",
+        "--save",
+        "",
+        "--appendonly",
+        "no"
+      ],
+      "why": "#631: the whole command. redis's disables persistence deliberately, the tunnel's is the tunnel itself, and the bun argv are held to the runner stage's real layout by backend/tests/unit/deploy/releaseComposeRuntime.test.ts -- this row is the rendered-model half of that guard."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.depends_on",
+      "expect": {
+        "backend": {
+          "condition": "service_started",
+          "required": true
+        },
+        "frontend": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.command",
+      "expect": "tunnel --no-autoupdate run",
+      "why": "#631: the whole command. redis's disables persistence deliberately, the tunnel's is the tunnel itself, and the bun argv are held to the runner stage's real layout by backend/tests/unit/deploy/releaseComposeRuntime.test.ts -- this row is the rendered-model half of that guard."
     },
     {
       "model": "prod",
@@ -440,27 +530,9 @@
     },
     {
       "model": "release",
-      "path": "services.db.healthcheck.test[1]",
-      "expect": "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
-      "why": "#631: `$$` escapes the interpolation so the container's own shell expands it. Written with a single `$` Compose would substitute host-side, and the credentials would be baked into the rendered config rather than read from the container environment."
-    },
-    {
-      "model": "release",
       "path": "services.migrate.restart",
       "expect": "no",
       "why": "#558: migrate is a run-once job. Any restart policy turns a failed migration into a crash loop that re-runs it forever instead of stopping the deployment."
-    },
-    {
-      "model": "release",
-      "path": "services.migrate.depends_on.db.condition",
-      "expect": "service_healthy",
-      "why": "#558: migrations must not start against a Postgres that is still initializing, or the run fails on a connection refused that looks like a bad migration."
-    },
-    {
-      "model": "release",
-      "path": "services.backend.depends_on.migrate.condition",
-      "expect": "service_completed_successfully",
-      "why": "#558: the backend must not boot against a schema migrate has not finished applying. Anything weaker lets the API serve requests mid-migration."
     },
     {
       "model": "release",
@@ -629,6 +701,72 @@
         ]
       },
       "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.depends_on",
+      "expect": {
+        "migrate": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.command",
+      "expect": [
+        "bun",
+        "src/index.ts"
+      ],
+      "why": "#631: the whole command. redis's disables persistence deliberately, the tunnel's is the tunnel itself, and the bun argv are held to the runner stage's real layout by backend/tests/unit/deploy/releaseComposeRuntime.test.ts -- this row is the rendered-model half of that guard."
+    },
+    {
+      "model": "release",
+      "path": "services.db.healthcheck",
+      "expect": {
+        "interval": "5s",
+        "retries": 12,
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"
+        ],
+        "timeout": "5s"
+      },
+      "why": "#631: the whole healthcheck. Its retries and interval decide when `service_healthy` fires, which is what gates the dependent service above; its test decides whether it can ever pass at all. Asserted whole so a weakened probe cannot pass by leaving the command intact."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.depends_on",
+      "expect": {
+        "backend": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.depends_on",
+      "expect": {
+        "db": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.command",
+      "expect": [
+        "bun",
+        "run",
+        "migrate:up"
+      ],
+      "why": "#631: the whole command. redis's disables persistence deliberately, the tunnel's is the tunnel itself, and the bun argv are held to the runner stage's real layout by backend/tests/unit/deploy/releaseComposeRuntime.test.ts -- this row is the rendered-model half of that guard."
     },
     {
       "model": "release",

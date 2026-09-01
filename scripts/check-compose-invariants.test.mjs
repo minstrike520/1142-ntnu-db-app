@@ -474,6 +474,32 @@ test("the environment key set is structural; values are pinned only where load-b
   assert.equal(evaluateAgainst(contract, { prod: added }).length, 1);
 });
 
+test("a whole sub-object row catches a dependency deleted, not just weakened", () => {
+  // Naming a condition (`depends_on.db.condition`) cannot see the dependency
+  // being removed outright -- there is no condition left to check. prod's
+  // backend runs migrate:up on start and prod sets no restart policy, so
+  // booting before the database is healthy leaves it down for good.
+  const contract = [
+    {
+      model: "prod",
+      path: "services.backend.depends_on",
+      expect: { db: { condition: "service_healthy", required: true } },
+      why: "#631",
+    },
+  ];
+  const gated = baseModel();
+  gated.services.backend.depends_on = { db: { condition: "service_healthy", required: true } };
+  assert.deepEqual(evaluateAgainst(contract, { prod: gated }), []);
+
+  const weakened = baseModel();
+  weakened.services.backend.depends_on = { db: { condition: "service_started", required: true } };
+  assert.equal(evaluateAgainst(contract, { prod: weakened }).length, 1);
+
+  const deleted = baseModel();
+  delete deleted.services.backend.depends_on;
+  assert.equal(evaluateAgainst(contract, { prod: deleted }).length, 1);
+});
+
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
   // render modes; a row must not pass or fail on that.
@@ -639,6 +665,20 @@ test("the checked-in contract catches a published port aimed at the wrong contai
   assert.ok(
     failures.some((failure) => /docker-compose\.release\.yml services\.frontend\.ports/.test(failure)),
     failures.join("\n"),
+  );
+});
+
+test("the checked-in contract catches prod frontend built from the dev Dockerfile", needsDocker, () => {
+  // ./frontend/Dockerfile builds fine, but its CMD is `pnpm dev`, so production
+  // would serve from the Next.js development server. ci-frontend.yml builds
+  // Dockerfile.prod directly and never reads this wiring.
+  const rendered = renderRealModels();
+  rendered.prod.services.frontend.build.dockerfile = "./frontend/Dockerfile";
+  assert.ok(
+    evaluateAgainst(checkedInContract(), rendered).some((f) =>
+      /docker-compose\.prod\.yml services\.frontend\.build/.test(f),
+    ),
+    "prod frontend dev Dockerfile",
   );
 });
 
