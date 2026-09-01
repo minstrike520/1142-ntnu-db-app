@@ -1,0 +1,1367 @@
+{
+  "$comment": [
+    "Property contract for the two production Compose models, enforced by",
+    "scripts/check-compose-invariants.mjs (issue #631).",
+    "",
+    "Each row asserts one property of ONE model against the rendered output of",
+    "`docker compose config --no-interpolate`. There is deliberately no",
+    "model-to-model diff: docker-compose.prod.yml and docker-compose.release.yml",
+    "are two products (source build + cloudflared tunnel + manual migration, vs.",
+    "an immutable image bundle with its own migrate service), so nearly every",
+    "field would differ legitimately and the allowlist absolving them would be",
+    "indistinguishable from no check at all.",
+    "",
+    "`why` is required on every row and must cite an issue, because the value",
+    "alone never says why it may not change. A row whose `path` no longer",
+    "resolves is a failure, not a pass -- otherwise a row left behind after a",
+    "refactor would silently stop guarding anything. Every service in a rendered",
+    "model must also be named by at least one row, so adding a service without",
+    "saying what governs it fails rather than slipping in ungoverned.",
+    "",
+    "NOT assertable here: the top-level `name:` key. The checker renders with",
+    "`-p near-chat` to keep prod's project, network and volume names off the",
+    "checkout directory name, and `-p` overrides the file's own `name:` -- so a",
+    "row asserting it would pass even with the key deleted. It is asserted from",
+    "the source YAML instead, in backend/tests/unit/deploy/releaseComposeRuntime.test.ts.",
+    "",
+    "That same `-p` has a consequence worth stating plainly: for prod, whose file",
+    "carries no `name:`, the `near-chat_` prefix on every network and volume name",
+    "below is supplied by the checker, not by the file. Those rows still catch an",
+    "explicit per-volume `name:` override, but they cannot see that a real",
+    "`docker compose -f docker-compose.prod.yml up -d` names the project after",
+    "whatever directory it runs in. Pinning prod's project name changes",
+    "production behavior, which #631 forbids; it is tracked in #632.",
+    "",
+    "Choosing the granularity for an environment value. Two rules, and the",
+    "difference between them is not cosmetic -- getting it backwards is how a",
+    "well-formed interpolation smuggles a policy change past this file:",
+    "",
+    "  A boolean gate (RATE_LIMIT_DISABLED, ATTACHMENT_TYPE_RESTRICTION_ENABLED)",
+    "  pins its WHOLE binding, default included. It is only ever true or false,",
+    "  so the default IS the policy: `${RATE_LIMIT_DISABLED:-true}` is a valid",
+    "  interpolation of the right variable that hands every deployer who does not",
+    "  set it a server with rate limiting off. There is no edit to a gate's",
+    "  default that is not a policy change, so there is nothing for a shape rule",
+    "  to leave free.",
+    "",
+    "  A tunable (ATTACHMENT_MAX_BYTES, MAX_SESSIONS_PER_USER, JWT_EXPIRES_IN,",
+    "  the attachment allow-lists, the presence and typing timings) pins its",
+    "  SHAPE. It has no unsafe side, only a larger or smaller one, and changing",
+    "  its default is ordinary product work that should not require editing an",
+    "  invariant. What must not happen is the interpolation being replaced by a",
+    "  literal, taking the knob away from whoever deploys it.",
+    "",
+    "A shape regex must be anchored at BOTH ends:",
+    "^\\$\\{VAR(\\}|:?-[^{}]*\\})$ -- the whole value is one interpolation, not",
+    "merely a value that starts as one. Anchored only at the front, `${VAR}999`",
+    "matches; that concatenates rather than replaces, so an operator who sets 2",
+    "gets 2999, a value they never chose and cannot see in the file.",
+    "",
+    "Every environment key on both models must have a row of its own. The",
+    "environment key-set rows see only that a key is still present; they say",
+    "nothing about its value, so a key with no row of its own is a value nothing",
+    "checks. Both rules are enforced by a test in",
+    "scripts/check-compose-invariants.test.mjs rather than by review.",
+    "",
+    "A subset check cannot say \"and nothing else\", so it is the wrong tool for a",
+    "list whose contents are fully known. `$contains` and a plain-object `$every`",
+    "name the fields they care about and are blind twice over: to the fields they",
+    "do not name, and to elements added beside the one they matched. Three",
+    "separate holes came from that one habit -- a network attachment carrying",
+    "`aliases`, a mount carrying `volume.subpath`, and a port carrying",
+    "`mode: host`, none of which disturb any field the row did name; plus a",
+    "second network, a second mount and a second port, which are not subset",
+    "violations at all. So services.<svc>.networks, .ports and .volumes are",
+    "compared WHOLE, and a test keeps them that way. Reach for a subset match",
+    "only where the list is genuinely open-ended, which none of these are.",
+    "",
+    "The cost of an exact per-service row is that it cannot cover a service added",
+    "later, which is what a `services.*.` row would have done. Tests pay that",
+    "back: every service must have a networks row, and every rendered ports or",
+    "volumes list must have a row that compares it whole.",
+    "",
+    "expect: a literal to deep-equal, or {\"$absent\": true},",
+    "{\"$matches\": \"<regex>\"}, {\"$keys\": [...]} for an exact key set,",
+    "{\"$every\": {...}} for a non-empty list whose every element carries those",
+    "key/values, or {\"$contains\": {...}} for a list with at least one such",
+    "element. Indexing one element (ports[0]) is deliberately avoided for lists",
+    "that can grow: it says nothing about a second entry added after it."
+  ],
+  "invariants": [
+    {
+      "model": "prod",
+      "path": "services",
+      "expect": {
+        "$keys": [
+          "backend",
+          "db",
+          "frontend",
+          "redis",
+          "tunnel"
+        ]
+      },
+      "why": "#631: the service set is the frame every other prod row is written against. A service added or renamed without updating this contract would otherwise be governed by nothing."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend",
+      "expect": {
+        "$keys": [
+          "build",
+          "depends_on",
+          "environment",
+          "networks",
+          "ports",
+          "profiles",
+          "stop_grace_period",
+          "volumes"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "prod",
+      "path": "services.db",
+      "expect": {
+        "$keys": [
+          "environment",
+          "healthcheck",
+          "image",
+          "networks",
+          "ports",
+          "profiles",
+          "volumes"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend",
+      "expect": {
+        "$keys": [
+          "build",
+          "depends_on",
+          "environment",
+          "networks",
+          "ports",
+          "profiles"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis",
+      "expect": {
+        "$keys": [
+          "command",
+          "healthcheck",
+          "image",
+          "networks",
+          "profiles",
+          "tmpfs"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel",
+      "expect": {
+        "$keys": [
+          "command",
+          "depends_on",
+          "environment",
+          "image",
+          "networks",
+          "profiles",
+          "restart"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.ports",
+      "expect": [
+        {
+          "host_ip": "127.0.0.1",
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "5435",
+          "target": 5432
+        }
+      ],
+      "why": "#631: the WHOLE port list, compared exactly. Same reason as the mount rows: a subset check cannot say \"and nothing else\". `mode` is the field it was blind to -- `mode: host` publishes the container port directly on the host rather than through Compose's ingress path, changing how the binding this row exists to pin is actually made, while host_ip, published and target all still read correctly."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.ports",
+      "expect": [
+        {
+          "host_ip": "127.0.0.1",
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "4005",
+          "target": 4000
+        }
+      ],
+      "why": "#631: the WHOLE port list, compared exactly. Same reason as the mount rows: a subset check cannot say \"and nothing else\". `mode` is the field it was blind to -- `mode: host` publishes the container port directly on the host rather than through Compose's ingress path, changing how the binding this row exists to pin is actually made, while host_ip, published and target all still read correctly."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.ports",
+      "expect": [
+        {
+          "host_ip": "127.0.0.1",
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "3005",
+          "target": 3000
+        }
+      ],
+      "why": "#631: the WHOLE port list, compared exactly. Same reason as the mount rows: a subset check cannot say \"and nothing else\". `mode` is the field it was blind to -- `mode: host` publishes the container port directly on the host rather than through Compose's ingress path, changing how the binding this row exists to pin is actually made, while host_ip, published and target all still read correctly."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.ports",
+      "expect": {
+        "$absent": true
+      },
+      "why": "#631: this Redis has no password, so reachability from the compose network only IS its access control (docker-compose.prod.yml:29-34). Publishing any host port for it is never the right fix."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.ports",
+      "expect": {
+        "$absent": true
+      },
+      "why": "#631: cloudflared dials out to Cloudflare and accepts nothing inbound; a published port on it would be a second, unauthenticated ingress."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.TRUST_PROXY_HOPS",
+      "expect": "1",
+      "why": "#631: exactly one trusted hop (cloudflared), pinned as a literal rather than ${TRUST_PROXY_HOPS:-1} on purpose (docker-compose.prod.yml:78-84) -- a value inherited from a shared .env would silently replace the default and funnel every caller into one rate-limit bucket (#413)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.REDIS_URL",
+      "expect": "${REDIS_URL-redis://redis:6379}",
+      "why": "#631: single-dash `-`, not `:-`. An explicitly empty REDIS_URL must reach the container empty so the backend runs realtime single-node, which is a supported deployment rather than a value to default away (#471)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.LOG_LEVEL",
+      "expect": null,
+      "why": "#631: pass-through with no `=`, so an unset LOG_LEVEL stays absent in the container and the logger applies its own default. Rewriting it as LOG_LEVEL= would set it to the empty string, which is a different thing."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.INSTANCE_ID",
+      "expect": null,
+      "why": "#631: pass-through, like LOG_LEVEL. Unset means the backend generates one per process; an empty string is not the same input and would not round-trip through presence lease reclaim (#586)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.stop_grace_period",
+      "expect": "30s",
+      "why": "#586: the drain in src/index.ts has a ~14s worst case and arms a 20s deadline. Docker's 10s default SIGKILLs the process while it is handing presence leases back, leaving users showing online until PRESENCE_TTL_MS expires."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.restart",
+      "expect": "always",
+      "why": "#631: the tunnel is the only ingress, so it must come back after a host reboot without anyone running a command. `unless-stopped` would leave it down after an operator stops it once."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.environment.POSTGRES_USER",
+      "expect": "${POSTGRES_USER}",
+      "why": "#631: pinned per key. prod has no `:?` fail-fast, so a swapped binding is even quieter here -- Postgres initializes with the wrong credentials and DATABASE_URL, built from the same .env, no longer matches."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.environment.POSTGRES_PASSWORD",
+      "expect": "${POSTGRES_PASSWORD}",
+      "why": "#631: the other half of the swap above -- only asserting both bindings makes either one meaningful."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.environment.POSTGRES_DB",
+      "expect": "${POSTGRES_DB}",
+      "why": "#631: same key-to-value binding, and the healthcheck below reads this same variable to decide the database is up."
+    },
+    {
+      "model": "prod",
+      "path": "services.*.profiles",
+      "expect": {
+        "$every": []
+      },
+      "why": "#631: no service may sit behind a profile. `docker compose config` renders a profiled service exactly as before, so the service-set, network and restart rows all still pass -- but `up` without a matching `--profile` skips it. Verified: `profiles: [manual]` on the tunnel drops it from `config --services`, so the documented production command starts every service except the only ingress, and nothing reaches the site."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment",
+      "expect": {
+        "$keys": [
+          "ATTACHMENT_ALLOWED_EXTENSIONS",
+          "ATTACHMENT_ALLOWED_MIME_TYPES",
+          "ATTACHMENT_MAX_BYTES",
+          "ATTACHMENT_TYPE_RESTRICTION_ENABLED",
+          "CI",
+          "CORS_ORIGINS",
+          "DATABASE_URL",
+          "INSTANCE_ID",
+          "JWT_EXPIRES_IN",
+          "JWT_SECRET",
+          "LOG_LEVEL",
+          "MAX_SESSIONS_PER_USER",
+          "NODE_ENV",
+          "PORT",
+          "PRESENCE_GRACE_MS",
+          "PRESENCE_TTL_MS",
+          "RATE_LIMIT_DISABLED",
+          "REDIS_URL",
+          "TRUST_PROXY_HOPS",
+          "TYPING_TTL_MS"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.RATE_LIMIT_DISABLED",
+      "expect": "${RATE_LIMIT_DISABLED}",
+      "why": "#631: the WHOLE binding, not just the interpolation shape. This is a boolean gate on whether a protection runs at all, so its DEFAULT is part of the security property: `${RATE_LIMIT_DISABLED:-true}` still interpolates the right variable, but any deployment that does not set it gets rate limiting off -- env.ts:497 sets rateLimit.disabled and securityMiddleware skips both the global and the auth limiter. Tunables like ATTACHMENT_MAX_BYTES keep the shape rule; a gate does not, because for a gate the default IS the policy."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.ATTACHMENT_TYPE_RESTRICTION_ENABLED",
+      "expect": "${ATTACHMENT_TYPE_RESTRICTION_ENABLED:-false}",
+      "why": "#631: the whole binding, for the same reason as RATE_LIMIT_DISABLED -- a boolean gate whose default decides whether MIME and extension checking runs for any deployment that does not set it. Changing that default is a policy change and has to be a deliberate edit here."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.ATTACHMENT_ALLOWED_MIME_TYPES",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_MIME_TYPES(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. Hardcoded to a permissive list removes the deployment's ability to narrow it. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_ALLOWED_MIME_TYPES}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.ATTACHMENT_ALLOWED_EXTENSIONS",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_EXTENSIONS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as with the MIME list above. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_ALLOWED_EXTENSIONS}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.ATTACHMENT_MAX_BYTES",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. This is the row that defines the boundary: raising the default from 10MB to 20MB is an ordinary product change and must pass, while hardcoding any literal must not. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_MAX_BYTES}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.MAX_SESSIONS_PER_USER",
+      "expect": {
+        "$matches": "^\\$\\{MAX_SESSIONS_PER_USER(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. Hardcoded high it removes the session cap a deployment can no longer restore. Anchored at both ends: an unanchored prefix match accepts `${MAX_SESSIONS_PER_USER}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.JWT_EXPIRES_IN",
+      "expect": {
+        "$matches": "^\\$\\{JWT_EXPIRES_IN(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. Hardcoded long it fixes token lifetime beyond a deployment's control, and a stolen token stays valid for that whole window. Anchored at both ends: an unanchored prefix match accepts `${JWT_EXPIRES_IN}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.environment",
+      "expect": {
+        "$keys": [
+          "POSTGRES_DB",
+          "POSTGRES_PASSWORD",
+          "POSTGRES_USER"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.environment",
+      "expect": {
+        "$keys": [
+          "ALLOWED_DEV_ORIGINS",
+          "CI",
+          "NEXT_PUBLIC_API_URL",
+          "NODE_ENV"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.environment",
+      "expect": {
+        "$keys": [
+          "TUNNEL_TOKEN"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.depends_on",
+      "expect": {
+        "db": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "redis": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.build",
+      "expect": {
+        "context": ".",
+        "dockerfile": "./backend/Dockerfile.prod"
+      },
+      "why": "#631: the whole build object. Pointing prod's frontend at ./frontend/Dockerfile instead of Dockerfile.prod still builds, but that image's CMD is `pnpm dev`, so production would serve from the Next.js development server. ci-frontend.yml builds Dockerfile.prod directly and never reads this wiring, so nothing else catches it."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.healthcheck",
+      "expect": {
+        "interval": "5s",
+        "retries": 10,
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+        ],
+        "timeout": "5s"
+      },
+      "why": "#631: the whole healthcheck. Its retries and interval decide when `service_healthy` fires, which is what gates the dependent service above; its test decides whether it can ever pass at all. Asserted whole so a weakened probe cannot pass by leaving the command intact."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.depends_on",
+      "expect": {
+        "backend": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.build",
+      "expect": {
+        "args": [
+          "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}"
+        ],
+        "context": ".",
+        "dockerfile": "./frontend/Dockerfile.prod"
+      },
+      "why": "#631: the whole build object. Pointing prod's frontend at ./frontend/Dockerfile instead of Dockerfile.prod still builds, but that image's CMD is `pnpm dev`, so production would serve from the Next.js development server. ci-frontend.yml builds Dockerfile.prod directly and never reads this wiring, so nothing else catches it."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.healthcheck",
+      "expect": {
+        "interval": "5s",
+        "retries": 10,
+        "test": [
+          "CMD-SHELL",
+          "redis-cli ping | grep -q PONG"
+        ],
+        "timeout": "5s"
+      },
+      "why": "#631: the whole healthcheck. Its retries and interval decide when `service_healthy` fires, which is what gates the dependent service above; its test decides whether it can ever pass at all. Asserted whole so a weakened probe cannot pass by leaving the command intact."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.command",
+      "expect": [
+        "redis-server",
+        "--save",
+        "",
+        "--appendonly",
+        "no"
+      ],
+      "why": "#631: the whole command. redis's disables persistence deliberately, the tunnel's is the tunnel itself, and the bun argv are held to the runner stage's real layout by backend/tests/unit/deploy/releaseComposeRuntime.test.ts -- this row is the rendered-model half of that guard."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.depends_on",
+      "expect": {
+        "backend": {
+          "condition": "service_started",
+          "required": true
+        },
+        "frontend": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.command",
+      "expect": "tunnel --no-autoupdate run",
+      "why": "#631: the whole command. redis's disables persistence deliberately, the tunnel's is the tunnel itself, and the bun argv are held to the runner stage's real layout by backend/tests/unit/deploy/releaseComposeRuntime.test.ts -- this row is the rendered-model half of that guard."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.DATABASE_URL",
+      "expect": "${DATABASE_URL}",
+      "why": "#631: the binding, not just the key name. Rebound to ${JWT_SECRET} the key set is unchanged and every other row passes, but Dockerfile.prod runs migrate:up at start with the JWT secret as its connection string and the container exits. CI never boots docker-compose.prod.yml, so nothing else catches it."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.JWT_SECRET",
+      "expect": "${JWT_SECRET}",
+      "why": "#631: the binding. Bound to a different variable the API signs and verifies tokens with the wrong secret, or with an empty string -- prod uses bare ${VAR}, so a missing value renders empty rather than failing (that fail-fast asymmetry is #632's)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.CORS_ORIGINS",
+      "expect": "${CORS_ORIGINS}",
+      "why": "#631: the binding. Bound to the wrong variable the allowed-origin list becomes something arbitrary, and under prod's bare ${VAR} an unset value renders empty."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.PORT",
+      "expect": "${PORT}",
+      "why": "#631: the binding, and it must stay the variable the published mapping's target is written against."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.NODE_ENV",
+      "expect": "${NODE_ENV}",
+      "why": "#631: pins the CURRENT state, which is interpolated rather than the literal `production` release uses. That asymmetry is deliberate drift owned by #632; this row exists so it cannot change to some third thing unnoticed in the meantime, and #632 updates this row when it fixes it."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.environment.NODE_ENV",
+      "expect": "${NODE_ENV}",
+      "why": "#631: same as the backend's -- current state pinned, the interpolated-vs-literal drift is #632's."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.environment.TUNNEL_TOKEN",
+      "expect": "${TUNNEL_TOKEN}",
+      "why": "#631: the binding. The previous round added the key set, which a rebind to ${JWT_SECRET} satisfies exactly -- one key, still named TUNNEL_TOKEN. cloudflared then receives something that is not a tunnel token and the only ingress never comes up."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.image",
+      "expect": "postgres:18-alpine",
+      "why": "#631: pins the CURRENT image. Not digest-pinned, unlike release -- that gap is #632's, and this row makes an unnoticed change to a different image or tag fail in the meantime."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.image",
+      "expect": "redis:8-alpine",
+      "why": "#631: pins the current image. redis holds derived state only, but a different image can change the persistence and eviction defaults the command deliberately overrides."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.tmpfs",
+      "expect": [
+        "/data"
+      ],
+      "why": "#631: the whole tmpfs list. A tmpfs is a mount that discards every write, so this list is the statement of exactly which path is ephemeral and, just as importantly, that nothing else is. It pairs with the command row above -- persistence is off (`--save \"\" --appendonly no`), so Redis's data directory is deliberately backed by nothing. Found by auditing service key VALUES rather than key sets: the key-set row saw `tmpfs` present and said nothing about where it points."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.image",
+      "expect": "cloudflare/cloudflared:latest",
+      "why": "#631: the only ingress. Swapped for any other image -- busybox, say -- the ports, restart, command, environment, depends_on and network rows all still pass while `tunnel --no-autoupdate run` cannot execute and production has no way in."
+    },
+    {
+      "model": "prod",
+      "path": "networks",
+      "expect": {
+        "$keys": [
+          "default"
+        ]
+      },
+      "why": "#631: one network, so the row above means what it says. Declaring a second one is how services start being split across networks that cannot see each other."
+    },
+    {
+      "model": "prod",
+      "path": "networks.default",
+      "expect": {
+        "name": "near-chat_default",
+        "internal": false
+      },
+      "why": "#631: the default network asserted WHOLE, not key by key. `external: true` alone stops `up` creating it -- on a clean host the deploy fails outright, and where another stack owns a network of that name the services silently join it. `internal: true` cuts cloudflared off from Cloudflare. Rather than enumerate those keys one at a time, and the next one after that, the object is small and fully known, so it is pinned entirely: any key added here has to be added to this row too, with a reason."
+    },
+    {
+      "model": "prod",
+      "path": "volumes",
+      "expect": {
+        "$keys": [
+          "app_uploads",
+          "pgdata"
+        ]
+      },
+      "why": "#631: the two stateful volumes. A renamed volume silently starts an empty one, which for pgdata means an empty database and for app_uploads means every existing attachment 404s."
+    },
+    {
+      "model": "prod",
+      "path": "volumes.pgdata",
+      "expect": {
+        "name": "near-chat_pgdata"
+      },
+      "why": "#631: the pgdata volume asserted WHOLE. `external: true` stops `up` creating it -- a clean host fails, and a host with a same-named volume from another stack silently adopts that one instead. `name` decides which engine volume is mounted at all. Pinned entirely for the same reason as the network above."
+    },
+    {
+      "model": "prod",
+      "path": "volumes.app_uploads",
+      "expect": {
+        "name": "near-chat_app_uploads"
+      },
+      "why": "#631: the app_uploads volume asserted WHOLE. `external: true` stops `up` creating it -- a clean host fails, and a host with a same-named volume from another stack silently adopts that one instead. `name` decides which engine volume is mounted at all. Pinned entirely for the same reason as the network above."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.volumes",
+      "expect": [
+        {
+          "source": "pgdata",
+          "target": "/var/lib/postgresql",
+          "type": "volume",
+          "volume": {},
+          "read_only": false
+        }
+      ],
+      "why": "#631: the WHOLE mount list, compared exactly. A subset check names the fields it cares about and is blind to the rest, which hides two different edits. Compose's long syntax carries a `volume` block: `volume: {subpath: base}` mounts a SUBDIRECTORY of the volume rather than its root, so a clean deployment fails to mount and an existing pgdata presents `base/` as /var/lib/postgresql -- PostgreSQL finds no data directory and does not start. And an ADDED mount is not a subset violation at all: verified that a second entry mounting /var/run/docker.sock into the backend passed every row. Comparing the list whole is the only form that says \"these mounts and no others\"."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.volumes",
+      "expect": [
+        {
+          "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}",
+          "target": "/app/uploads",
+          "type": "volume",
+          "volume": {},
+          "read_only": false
+        }
+      ],
+      "why": "#631: the WHOLE mount list, compared exactly. A subset check names the fields it cares about and is blind to the rest, which hides two different edits. Compose's long syntax carries a `volume` block: `volume: {subpath: base}` mounts a SUBDIRECTORY of the volume rather than its root, so a clean deployment fails to mount and an existing pgdata presents `base/` as /var/lib/postgresql -- PostgreSQL finds no data directory and does not start. And an ADDED mount is not a subset violation at all: verified that a second entry mounting /var/run/docker.sock into the backend passed every row. Comparing the list whole is the only form that says \"these mounts and no others\"."
+    },
+    {
+      "model": "release",
+      "path": "services",
+      "expect": {
+        "$keys": [
+          "backend",
+          "db",
+          "frontend",
+          "migrate"
+        ]
+      },
+      "why": "#631: the service set is the frame every other release row is written against, and `migrate` in particular is what makes the bundle self-applying (#558)."
+    },
+    {
+      "model": "release",
+      "path": "services.backend",
+      "expect": {
+        "$keys": [
+          "command",
+          "depends_on",
+          "environment",
+          "image",
+          "networks",
+          "ports",
+          "profiles",
+          "restart",
+          "stop_grace_period",
+          "volumes"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "release",
+      "path": "services.db",
+      "expect": {
+        "$keys": [
+          "environment",
+          "healthcheck",
+          "image",
+          "networks",
+          "profiles",
+          "restart",
+          "volumes"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend",
+      "expect": {
+        "$keys": [
+          "depends_on",
+          "environment",
+          "image",
+          "networks",
+          "ports",
+          "profiles",
+          "restart"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate",
+      "expect": {
+        "$keys": [
+          "command",
+          "depends_on",
+          "environment",
+          "image",
+          "networks",
+          "profiles",
+          "restart"
+        ]
+      },
+      "why": "#631: the service's top-level key SET. Compose has a whole family of keys that are absent by default and change how -- or whether -- the service runs: `scale: 0` and `deploy.replicas: 0` render the service normally but start zero containers of it, which on the tunnel means production with no ingress; `privileged`, `cap_add`, `user`, `pid` and `devices` change what it can do to the host. Pinning individual ones has meant a new round per key, so the set is asserted instead: any key added to this service fails until it is added here with a reason. Values stay per-property, because unlike the key set they legitimately evolve."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.build",
+      "expect": {
+        "$absent": true
+      },
+      "why": "#558: the release bundle ships no source. A `build:` here would make the bundle silently rebuild from whatever happened to be in the extraction directory instead of running the image the release published."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.build",
+      "expect": {
+        "$absent": true
+      },
+      "why": "#558: same -- the frontend image is published by the release workflow and must not be rebuilt at deploy time."
+    },
+    {
+      "model": "release",
+      "path": "services.db.image",
+      "expect": {
+        "$matches": "^postgres:18-alpine@sha256:[0-9a-f]{64}$"
+      },
+      "why": "#527: digest-pinned so the bundle is reproducible. A floating tag means two deployments of the same release can run different Postgres builds."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.image",
+      "expect": "${BACKEND_IMAGE:?BACKEND_IMAGE is required}",
+      "why": "#631: `:?` so a deployment missing BACKEND_IMAGE fails at render rather than booting something unintended. Unlike prod, the bundle has no source to fall back on."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.image",
+      "expect": "${BACKEND_IMAGE:?BACKEND_IMAGE is required}",
+      "why": "#558: migrate must run the same image as the backend, or migrations execute against a schema built by a different version of the code."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.image",
+      "expect": "${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}",
+      "why": "#631: same fail-fast rule as BACKEND_IMAGE."
+    },
+    {
+      "model": "release",
+      "path": "services.db.environment.POSTGRES_USER",
+      "expect": "${POSTGRES_USER:?POSTGRES_USER is required}",
+      "why": "#631: pinned per key, not just \"the file mentions POSTGRES_USER somewhere\". Swapping the user and password values leaves both variables present and every fail-fast check satisfied, but Postgres then initializes with credentials that do not match DATABASE_URL, and migrate and backend cannot connect."
+    },
+    {
+      "model": "release",
+      "path": "services.db.environment.POSTGRES_PASSWORD",
+      "expect": "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}",
+      "why": "#631: the other half of the swap above -- only asserting both bindings makes either one meaningful."
+    },
+    {
+      "model": "release",
+      "path": "services.db.environment.POSTGRES_DB",
+      "expect": "${POSTGRES_DB:?POSTGRES_DB is required}",
+      "why": "#631: same key-to-value binding. A database name taken from the wrong variable initializes a database nothing connects to."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.environment.DATABASE_URL",
+      "expect": "${DATABASE_URL:?DATABASE_URL is required}",
+      "why": "#631: migrate needs its OWN binding -- asserting the backend's says nothing about this one. Deleted or bound to a different variable, `migrate:up` has no target and fails, and the backend then waits forever on `service_completed_successfully`, so the bundle never comes up at all."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.environment.NODE_ENV",
+      "expect": "production",
+      "why": "#631: literal, not `${NODE_ENV}` -- the bundle is the production deployment path and must not be startable in another mode by a stray host variable. The same trap is documented at backend/src/utils/logger.ts:168."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.NODE_ENV",
+      "expect": "production",
+      "why": "#631: same literal-vs-interpolated rule as migrate above."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.environment.NODE_ENV",
+      "expect": "production",
+      "why": "#631: same literal-vs-interpolated rule; a frontend built or served in development mode ships dev bundles and error output."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.PORT",
+      "expect": 4000,
+      "why": "#631: must equal the container port the published mapping targets. Changed here alone, the backend listens somewhere the published port does not reach -- the same failure as retargeting the port, approached from the other side."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.restart",
+      "expect": "no",
+      "why": "#558: migrate is a run-once job. Any restart policy turns a failed migration into a crash loop that re-runs it forever instead of stopping the deployment."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.TRUST_PROXY_HOPS",
+      "expect": "${TRUST_PROXY_HOPS:-0}",
+      "why": "#413: this bundle publishes the backend port directly, so callers arrive as themselves and the peer address is the right thing to bucket on. Defaulting above 0 here would let any caller forge X-Forwarded-For."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.REDIS_URL",
+      "expect": "${REDIS_URL:-}",
+      "why": "#527: the bundle ships no Redis of its own, so this is empty by default and the backend runs realtime single-node -- a supported deployment, not a misconfiguration."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.DATABASE_URL",
+      "expect": "${DATABASE_URL:?DATABASE_URL is required}",
+      "why": "#631: `:?` so a bundle deployed without a database URL fails at render instead of booting and failing per-request."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.JWT_SECRET",
+      "expect": "${JWT_SECRET:?JWT_SECRET is required}",
+      "why": "#631: `:?` so the bundle cannot boot with an empty signing secret, which would make every issued token forgeable."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.CORS_ORIGINS",
+      "expect": "${CORS_ORIGINS:?CORS_ORIGINS is required}",
+      "why": "#631: `:?` rather than a permissive default. A blank origin list defaulted to `*` would let any site drive the API with a user's credentials."
+    },
+    {
+      "model": "release",
+      "path": "services.db.ports",
+      "expect": {
+        "$absent": true
+      },
+      "why": "#631: unlike prod, the release bundle publishes no database port at all. The backend reaches it over the compose network, and an exposed Postgres on a real deployment host is directly reachable from the internet."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.ports",
+      "expect": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "4005",
+          "target": 4000,
+          "host_ip": "0.0.0.0"
+        }
+      ],
+      "why": "#631: the WHOLE port list, compared exactly. Same reason as the mount rows: a subset check cannot say \"and nothing else\". `mode` is the field it was blind to -- `mode: host` publishes the container port directly on the host rather than through Compose's ingress path, changing how the binding this row exists to pin is actually made, while host_ip, published and target all still read correctly."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.ports",
+      "expect": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "3005",
+          "target": 3000,
+          "host_ip": "0.0.0.0"
+        }
+      ],
+      "why": "#631: the WHOLE port list, compared exactly. Same reason as the mount rows: a subset check cannot say \"and nothing else\". `mode` is the field it was blind to -- `mode: host` publishes the container port directly on the host rather than through Compose's ingress path, changing how the binding this row exists to pin is actually made, while host_ip, published and target all still read correctly."
+    },
+    {
+      "model": "release",
+      "path": "services.db.restart",
+      "expect": "unless-stopped",
+      "why": "#631: the bundle is the unattended deployment path, so its long-running services come back after a host reboot without an operator."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.restart",
+      "expect": "unless-stopped",
+      "why": "#631: same as db. Note migrate deliberately differs -- see its own row."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.restart",
+      "expect": "unless-stopped",
+      "why": "#631: same as db and backend."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.stop_grace_period",
+      "expect": "30s",
+      "why": "#586: same drain budget as prod -- Docker's 10s default SIGKILLs the backend while it is handing presence leases back."
+    },
+    {
+      "model": "release",
+      "path": "services.*.profiles",
+      "expect": {
+        "$every": []
+      },
+      "why": "#631: same rule. A profiled `migrate` would be skipped by the bundle's own `up`, and the backend would then wait forever on `service_completed_successfully`."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "release",
+      "path": "services.db.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.networks",
+      "expect": {
+        "default": null
+      },
+      "why": "#631: the WHOLE attachment map, compared exactly. Two different edits hide here and neither shows up in a row that only checks the network NAME. `default: {aliases: [db]}` is still an attachment to `default`, but Docker does not promise which container a shared alias resolves to, and .env.example:8 points DATABASE_URL at host `db` -- so a frontend claiming that alias can take the backend's database connection to port 5432 on the frontend; `priority`, `ipv4_address` and `link_local_ips` ride in the same place. And attaching to a SECOND network is not a subset violation, so it needs exact equality rather than a per-key check: verified that `networks: [default, side]` renders as {default: null, side: null} with `side` never declared at the top level, so the top-level network row does not see it either."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment",
+      "expect": {
+        "$keys": [
+          "ATTACHMENT_ALLOWED_EXTENSIONS",
+          "ATTACHMENT_ALLOWED_MIME_TYPES",
+          "ATTACHMENT_MAX_BYTES",
+          "ATTACHMENT_TYPE_RESTRICTION_ENABLED",
+          "CORS_ORIGINS",
+          "DATABASE_URL",
+          "INSTANCE_ID",
+          "JWT_EXPIRES_IN",
+          "JWT_SECRET",
+          "MAX_SESSIONS_PER_USER",
+          "NODE_ENV",
+          "PORT",
+          "PRESENCE_GRACE_MS",
+          "PRESENCE_TTL_MS",
+          "RATE_LIMIT_DISABLED",
+          "REDIS_URL",
+          "TRUST_PROXY_HOPS",
+          "TYPING_TTL_MS"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.RATE_LIMIT_DISABLED",
+      "expect": "${RATE_LIMIT_DISABLED:-false}",
+      "why": "#631: the WHOLE binding, not just the interpolation shape. This is a boolean gate on whether a protection runs at all, so its DEFAULT is part of the security property: `${RATE_LIMIT_DISABLED:-true}` still interpolates the right variable, but any deployment that does not set it gets rate limiting off -- env.ts:497 sets rateLimit.disabled and securityMiddleware skips both the global and the auth limiter. Tunables like ATTACHMENT_MAX_BYTES keep the shape rule; a gate does not, because for a gate the default IS the policy."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.ATTACHMENT_TYPE_RESTRICTION_ENABLED",
+      "expect": "${ATTACHMENT_TYPE_RESTRICTION_ENABLED:-false}",
+      "why": "#631: the whole binding, for the same reason as RATE_LIMIT_DISABLED -- a boolean gate whose default decides whether MIME and extension checking runs for any deployment that does not set it. Changing that default is a policy change and has to be a deliberate edit here."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.ATTACHMENT_ALLOWED_MIME_TYPES",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_MIME_TYPES(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. Hardcoded to a permissive list removes the deployment's ability to narrow it. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_ALLOWED_MIME_TYPES}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.ATTACHMENT_ALLOWED_EXTENSIONS",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_ALLOWED_EXTENSIONS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as with the MIME list above. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_ALLOWED_EXTENSIONS}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.ATTACHMENT_MAX_BYTES",
+      "expect": {
+        "$matches": "^\\$\\{ATTACHMENT_MAX_BYTES(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. This is the row that defines the boundary: raising the default from 10MB to 20MB is an ordinary product change and must pass, while hardcoding any literal must not. Anchored at both ends: an unanchored prefix match accepts `${ATTACHMENT_MAX_BYTES}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.MAX_SESSIONS_PER_USER",
+      "expect": {
+        "$matches": "^\\$\\{MAX_SESSIONS_PER_USER(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. Hardcoded high it removes the session cap a deployment can no longer restore. Anchored at both ends: an unanchored prefix match accepts `${MAX_SESSIONS_PER_USER}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.JWT_EXPIRES_IN",
+      "expect": {
+        "$matches": "^\\$\\{JWT_EXPIRES_IN(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. Hardcoded long it fixes token lifetime beyond a deployment's control, and a stolen token stays valid for that whole window. Anchored at both ends: an unanchored prefix match accepts `${JWT_EXPIRES_IN}<junk>`, which concatenates rather than replaces, so the operator's value silently becomes a different one (#631)."
+    },
+    {
+      "model": "release",
+      "path": "services.db.environment",
+      "expect": {
+        "$keys": [
+          "POSTGRES_DB",
+          "POSTGRES_PASSWORD",
+          "POSTGRES_USER"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.environment",
+      "expect": {
+        "$keys": [
+          "ALLOWED_DEV_ORIGINS",
+          "NEXT_PUBLIC_API_URL",
+          "NODE_ENV"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.environment",
+      "expect": {
+        "$keys": [
+          "DATABASE_URL",
+          "NODE_ENV"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.depends_on",
+      "expect": {
+        "migrate": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.command",
+      "expect": [
+        "bun",
+        "src/index.ts"
+      ],
+      "why": "#631: the whole command. redis's disables persistence deliberately, the tunnel's is the tunnel itself, and the bun argv are held to the runner stage's real layout by backend/tests/unit/deploy/releaseComposeRuntime.test.ts -- this row is the rendered-model half of that guard."
+    },
+    {
+      "model": "release",
+      "path": "services.db.healthcheck",
+      "expect": {
+        "interval": "5s",
+        "retries": 12,
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"
+        ],
+        "timeout": "5s"
+      },
+      "why": "#631: the whole healthcheck. Its retries and interval decide when `service_healthy` fires, which is what gates the dependent service above; its test decides whether it can ever pass at all. Asserted whole so a weakened probe cannot pass by leaving the command intact."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.depends_on",
+      "expect": {
+        "backend": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.depends_on",
+      "expect": {
+        "db": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "why": "#631: the whole dependency object. Conditions are the difference between a clean boot and a crash loop: prod's backend must wait for db `service_healthy` because Dockerfile.prod runs migrate:up on start and prod sets no restart policy, so one early connection failure leaves the service down for good. Asserted whole rather than condition by condition -- a dependency deleted outright is invisible to a row that names it."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.command",
+      "expect": [
+        "bun",
+        "run",
+        "migrate:up"
+      ],
+      "why": "#631: the whole command. redis's disables persistence deliberately, the tunnel's is the tunnel itself, and the bun argv are held to the runner stage's real layout by backend/tests/unit/deploy/releaseComposeRuntime.test.ts -- this row is the rendered-model half of that guard."
+    },
+    {
+      "model": "release",
+      "path": "networks",
+      "expect": {
+        "$keys": [
+          "default"
+        ]
+      },
+      "why": "#631: one network, so the row above means what it says -- as in prod."
+    },
+    {
+      "model": "release",
+      "path": "networks.default",
+      "expect": {
+        "name": "near-chat_default",
+        "internal": false
+      },
+      "why": "#631: same whole-object rule as prod. The bundle is deployed onto hosts this repo never sees, so a network it does not create itself is the difference between a clean deploy and one that fails or joins a stranger's network."
+    },
+    {
+      "model": "release",
+      "path": "volumes",
+      "expect": {
+        "$keys": [
+          "app_uploads",
+          "pgdata"
+        ]
+      },
+      "why": "#631: the same two stateful volumes as prod. A rename in the bundle silently starts an empty database on an upgrade of an existing deployment."
+    },
+    {
+      "model": "release",
+      "path": "volumes.pgdata",
+      "expect": {
+        "name": "near-chat_pgdata"
+      },
+      "why": "#631: same whole-object rule -- on the bundle, adopting a stranger's pgdata volume or creating a new one is the difference between an upgrade and data loss."
+    },
+    {
+      "model": "release",
+      "path": "volumes.app_uploads",
+      "expect": {
+        "name": "near-chat_app_uploads"
+      },
+      "why": "#631: same whole-object rule -- on the bundle, adopting a stranger's app_uploads volume or creating a new one is the difference between an upgrade and data loss."
+    },
+    {
+      "model": "release",
+      "path": "services.db.volumes",
+      "expect": [
+        {
+          "source": "pgdata",
+          "target": "/var/lib/postgresql",
+          "type": "volume",
+          "volume": {},
+          "read_only": false
+        }
+      ],
+      "why": "#631: the WHOLE mount list, compared exactly. A subset check names the fields it cares about and is blind to the rest, which hides two different edits. Compose's long syntax carries a `volume` block: `volume: {subpath: base}` mounts a SUBDIRECTORY of the volume rather than its root, so a clean deployment fails to mount and an existing pgdata presents `base/` as /var/lib/postgresql -- PostgreSQL finds no data directory and does not start. And an ADDED mount is not a subset violation at all: verified that a second entry mounting /var/run/docker.sock into the backend passed every row. Comparing the list whole is the only form that says \"these mounts and no others\"."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.volumes",
+      "expect": [
+        {
+          "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}",
+          "target": "/app/uploads",
+          "type": "volume",
+          "volume": {},
+          "read_only": false
+        }
+      ],
+      "why": "#631: the WHOLE mount list, compared exactly. A subset check names the fields it cares about and is blind to the rest, which hides two different edits. Compose's long syntax carries a `volume` block: `volume: {subpath: base}` mounts a SUBDIRECTORY of the volume rather than its root, so a clean deployment fails to mount and an existing pgdata presents `base/` as /var/lib/postgresql -- PostgreSQL finds no data directory and does not start. And an ADDED mount is not a subset violation at all: verified that a second entry mounting /var/run/docker.sock into the backend passed every row. Comparing the list whole is the only form that says \"these mounts and no others\"."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.PRESENCE_GRACE_MS",
+      "expect": {
+        "$matches": "^\\$\\{PRESENCE_GRACE_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. Only the key set covered these three, so a literal passed. Hardcoded, the deployment loses the knob; hardcoded small it also breaks the feature -- presence grace absorbs a reconnect, and at a literal `1` every brief disconnect flaps the user offline."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.PRESENCE_TTL_MS",
+      "expect": {
+        "$matches": "^\\$\\{PRESENCE_TTL_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. This one bounds how long a crashed instance keeps its users showing as online, because nothing runs on a dead process to hand the leases back (the file says so at this key). Hardcoded, an operator cannot tune that against their own restart behaviour."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.TYPING_TTL_MS",
+      "expect": {
+        "$matches": "^\\$\\{TYPING_TTL_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as with the two presence timings above."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.PRESENCE_GRACE_MS",
+      "expect": {
+        "$matches": "^\\$\\{PRESENCE_GRACE_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as on prod."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.PRESENCE_TTL_MS",
+      "expect": {
+        "$matches": "^\\$\\{PRESENCE_TTL_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as on prod."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.TYPING_TTL_MS",
+      "expect": {
+        "$matches": "^\\$\\{TYPING_TTL_MS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as on prod."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment.INSTANCE_ID",
+      "expect": {
+        "$matches": "^\\$\\{INSTANCE_ID(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. Unset means the backend generates one per process; a stable per-replica name lets a restarted process replace its own presence lease instead of adding a second one that waits out the TTL. Hardcoded, every replica shares one id and they overwrite each other's leases."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.environment.NEXT_PUBLIC_API_URL",
+      "expect": "${NEXT_PUBLIC_API_URL}",
+      "why": "#631: the whole binding. This is the origin the browser calls, and it must stay the same value the build arg above receives -- a build baked against one host and a runtime pointed at another is a silently broken deployment. Hardcoding it sends every production browser to whatever host was committed."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.environment.ALLOWED_DEV_ORIGINS",
+      "expect": "${ALLOWED_DEV_ORIGINS}",
+      "why": "#631: the whole binding, for the same reason CORS_ORIGINS is pinned rather than shape-matched -- a committed literal here (`*` above all) widens which origins Next.js accepts for every deployment at once, and no deployer can narrow it back."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.environment.NEXT_PUBLIC_API_URL",
+      "expect": {
+        "$matches": "^\\$\\{NEXT_PUBLIC_API_URL(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default. release ships a localhost default for the bundle to be runnable as-is, so the default legitimately differs from prod; what must not change is that a deployer can still point it at their own host."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.environment.ALLOWED_DEV_ORIGINS",
+      "expect": {
+        "$matches": "^\\$\\{ALLOWED_DEV_ORIGINS(\\}|:?-[^{}]*\\})$"
+      },
+      "why": "#631: shape, not default -- as with NEXT_PUBLIC_API_URL above. The empty default is the safe end already; what is load-bearing is that it stays deployer-settable rather than becoming a committed literal."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.CI",
+      "expect": "true",
+      "why": "#631: a literal, not an interpolation, for the reason the file gives at TRUST_PROXY_HOPS -- Compose interpolates from the project .env, so writing this as ${CI} would let a value carried over from .env.example quietly change container tooling behaviour in production."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.environment.CI",
+      "expect": "true",
+      "why": "#631: a literal, not an interpolation -- as with the backend's CI above."
+    }
+  ]
+}

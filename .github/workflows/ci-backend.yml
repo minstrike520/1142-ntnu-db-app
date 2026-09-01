@@ -37,6 +37,53 @@ jobs:
           bun: 'true'
       - run: pnpm --filter near-chat-backend test:unit
 
+  # Holds docker-compose.prod.yml and docker-compose.release.yml to the property
+  # contract in compose-invariants.json (issue #631). In this lane rather than a
+  # new top-level workflow, for the reason spelled out above `release-compose`
+  # below: `required-checks` only aggregates the five existing lanes.
+  #
+  # Deliberately NOT gated on `inputs.run-build`, unlike every other job here
+  # that touches compose. run-build is true only on main or on a PR whose base
+  # is main (ci.yml), so a stacked PR would skip this check — and `required-checks`
+  # accepts a skip from a lane it did not mark required, so the drift would reach
+  # main with the gate green. The job is seconds long and needs no image build,
+  # so there is nothing to save by gating it.
+  compose-invariants:
+    name: production compose invariant contract
+    runs-on: ubuntu-latest
+    env:
+      # Pinned so a runner image upgrade cannot fail this job for a reason
+      # unrelated to the change under review: the contract asserts a *rendered*
+      # model, and Compose's own renderer is what produces it. Bump this
+      # deliberately, with the contract re-verified against the new renderer.
+      COMPOSE_VERSION: v5.1.1
+    steps:
+      - uses: actions/checkout@v7
+
+      # No `package:` — the checker and its tests import only Node builtins, so
+      # there is nothing to install. This is just the pinned Node toolchain.
+      - uses: ./.github/actions/setup-workspace
+
+      - name: Pin Docker Compose
+        run: |
+          set -euo pipefail
+          plugins="$HOME/.docker/cli-plugins"
+          mkdir -p "$plugins"
+          curl -fsSL --retry 3 -o "$plugins/docker-compose" \
+            "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64"
+          chmod +x "$plugins/docker-compose"
+          installed="$(docker compose version --short)"
+          # `docker compose version --short` omits the leading v.
+          if [ "v$installed" != "$COMPOSE_VERSION" ]; then
+            echo "::error::expected Compose $COMPOSE_VERSION, got v$installed"
+            exit 1
+          fi
+
+      # The checker's own tests first: a checker that cannot fail is worse than
+      # no checker, and this is what proves it still can.
+      - run: pnpm test:compose-invariants
+      - run: pnpm check:compose-invariants
+
   build:
     if: inputs.run-build
     runs-on: ubuntu-latest
@@ -87,13 +134,20 @@ jobs:
           # RUNNER_TEMP rather than the workspace so no .env can be swept into an
           # artifact, and passed with --env-file, which replaces the default
           # ./.env discovery entirely.
+          #
+          # The password deliberately differs from the username. With both set
+          # to the same value this job booted happily with POSTGRES_USER and
+          # POSTGRES_PASSWORD swapped between the two compose keys — a real
+          # deployment with distinct credentials would have initialized Postgres
+          # with the password as its username while DATABASE_URL said otherwise,
+          # and migrate would never have connected (issue #631).
           cat > "$RUNNER_TEMP/release.env" <<'EOF'
           BACKEND_IMAGE=near-chat-backend:ci
           FRONTEND_IMAGE=frontend-is-not-started-in-this-job
           POSTGRES_USER=near
-          POSTGRES_PASSWORD=near
+          POSTGRES_PASSWORD=ci-only-password-not-the-username
           POSTGRES_DB=near_chat
-          DATABASE_URL=postgresql://near:near@db:5432/near_chat
+          DATABASE_URL=postgresql://near:ci-only-password-not-the-username@db:5432/near_chat
           JWT_SECRET=ci-only-value-not-a-real-secret
           CORS_ORIGINS=http://localhost:3005
           EOF
@@ -144,7 +198,7 @@ jobs:
             # Publishes no port: 4005 belongs to the compose backend. Not --rm,
             # because the exit code has to survive the container.
             docker run -d --name "$name" --network "$net" \
-              -e DATABASE_URL=postgresql://near:near@db:5432/near_chat \
+              -e DATABASE_URL=postgresql://near:ci-only-password-not-the-username@db:5432/near_chat \
               -e JWT_SECRET=ci-only-value-not-a-real-secret \
               -e CORS_ORIGINS=http://localhost:3005 \
               near-chat-backend:ci "$@" >/dev/null
@@ -322,9 +376,9 @@ jobs:
           cat > "$RUNNER_TEMP/dev.env" <<'EOF'
           NODE_ENV=development
           POSTGRES_USER=near
-          POSTGRES_PASSWORD=near
+          POSTGRES_PASSWORD=ci-only-password-not-the-username
           POSTGRES_DB=near_chat
-          DATABASE_URL=postgresql://near:near@db:5432/near_chat
+          DATABASE_URL=postgresql://near:ci-only-password-not-the-username@db:5432/near_chat
           PORT=4000
           JWT_SECRET=ci-only-value-not-a-real-secret
           JWT_EXPIRES_IN=15m
