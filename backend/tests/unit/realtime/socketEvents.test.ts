@@ -223,14 +223,13 @@ describe('Socket.IO ephemeral events E2E', () => {
     tabA.emit('typing', { roomId: 'room-1', isTyping: true });
     await waitForExpect(() => expect(seen).toHaveLength(1));
 
-    // The second claim is not news, so it is not broadcast either.
     tabB.emit('typing', { roomId: 'room-1', isTyping: true });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(seen).toHaveLength(1);
+    await waitForExpect(() => expect(seen).toHaveLength(2));
 
+    // Losing one of the two sessions must not retract the user's claim.
     tabB.disconnect();
     await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(seen).toHaveLength(1);
+    expect(seen.every((event) => event.isTyping)).toBe(true);
 
     tabA.emit('typing', { roomId: 'room-1', isTyping: false });
     await waitForExpect(() => {

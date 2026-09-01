@@ -95,7 +95,7 @@ describe('attachSockets', () => {
     });
   });
 
-  it('refreshes typing without re-checking membership or re-broadcasting', async () => {
+  it('refreshes typing without re-checking membership', async () => {
     // Let the connection's own subscription restore settle first: it calls
     // findMember once per active room, and that call is not what this pins.
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -107,8 +107,21 @@ describe('attachSockets', () => {
     await handlers.typing({ roomId: 'room-active', isTyping: true });
 
     expect(membershipChecks() - baseline).toBe(1);
-    expect(roomEmit).toHaveBeenCalledTimes(1);
-    expect(roomEmit).toHaveBeenCalledWith('user_typing', {
+  });
+
+  /**
+   * The client arms its own removal timer only when it receives `true`
+   * (`frontend/src/context/ChatContext.tsx:1593-1607`), so every refresh has to
+   * reach the room. Collapsing these into a single edge event makes the
+   * indicator vanish after one client timeout while the user is still typing.
+   */
+  it('re-broadcasts every typing refresh, which is the client heartbeat', async () => {
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+
+    expect(roomEmit).toHaveBeenCalledTimes(3);
+    expect(roomEmit).toHaveBeenLastCalledWith('user_typing', {
       roomId: 'room-active',
       userId: 'user-1',
       isTyping: true,

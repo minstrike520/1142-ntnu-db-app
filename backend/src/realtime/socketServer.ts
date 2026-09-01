@@ -57,11 +57,14 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
    * Which sockets currently claim each `(room, user)` pair.
    *
    * `user_typing` is a statement about a *user*, but a user has as many sockets
-   * as open tabs, so the claim has to be aggregated before it can be broadcast.
-   * Keyed per socket — which is what this replaced — a second tab sending
+   * as open tabs, so retracting it takes more than one socket's say-so. Keyed
+   * per socket — which is what this replaced — a second tab sending
    * `isTyping: false`, or simply closing, retracts a claim the first tab is
    * still refreshing, and every other member sees the indicator disappear while
    * the user is still typing.
+   *
+   * Only the retraction is aggregated. `true` stays a per-refresh broadcast
+   * because the client treats it as a heartbeat; see the send site below.
    *
    * Nested maps rather than one map under a composite key: `roomId` and `userId`
    * are both opaque strings from outside this process, and there is no separator
@@ -73,8 +76,8 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
    */
   const typingRooms = new Map<string, Map<string, Set<string>>>();
 
-  /** Record a socket's claim. True only when it is the user's first in the room. */
-  const addTypingSocket = (roomId: string, userId: string, socketId: string): boolean => {
+  /** Record a socket's claim on a room. */
+  const addTypingSocket = (roomId: string, userId: string, socketId: string): void => {
     let byUser = typingRooms.get(roomId);
     if (!byUser) {
       byUser = new Map();
@@ -85,12 +88,7 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
       sockets = new Set();
       byUser.set(userId, sockets);
     }
-    // Whether the set was empty *before* this socket joined it — not whether it
-    // now holds one. A socket refreshing its own claim leaves the size at one,
-    // so testing the size afterwards reports every keystroke as a fresh claim.
-    const claimed = sockets.size === 0;
     sockets.add(socketId);
-    return claimed;
   };
 
   /**
@@ -333,10 +331,17 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
         expiry.unref?.();
         typingClaims.set(key, { expiry, checkedAt });
 
-        // Only the edge is broadcast. A second tab joining a claim the room has
-        // already been told about is not news, and re-sending `true` per
-        // keystroke made the indicator a per-keystroke fan-out to every member.
-        if (addTypingSocket(roomId, userId, socket.id)) emitTyping(roomId, true);
+        addTypingSocket(roomId, userId, socket.id);
+        // Every refresh is broadcast, not only the first claim. `true` is the
+        // heartbeat the client expiry runs on: it arms its own removal timer
+        // solely on receiving `true` (`frontend/src/context/ChatContext.tsx`),
+        // so collapsing refreshes into one edge event would hide the indicator
+        // after one client timeout while the user is still typing.
+        //
+        // Only the retraction is edge-triggered, and that asymmetry is the
+        // point: `false` is a statement that the *user* stopped, which no single
+        // socket is entitled to make on its own.
+        emitTyping(roomId, true);
       } catch (err) {
         socket.emit('error', mapErrorToApiShape(err));
       }
