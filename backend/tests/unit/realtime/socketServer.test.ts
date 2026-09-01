@@ -95,6 +95,75 @@ describe('attachSockets', () => {
     });
   });
 
+  it('refreshes typing without re-checking membership or re-broadcasting', async () => {
+    // Let the connection's own subscription restore settle first: it calls
+    // findMember once per active room, and that call is not what this pins.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const membershipChecks = () => roomMemberRepo.findMember.mock.calls.length;
+    const baseline = membershipChecks();
+
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+
+    expect(membershipChecks() - baseline).toBe(1);
+    expect(roomEmit).toHaveBeenCalledTimes(1);
+    expect(roomEmit).toHaveBeenCalledWith('user_typing', {
+      roomId: 'room-active',
+      userId: 'user-1',
+      isTyping: true,
+    });
+  });
+
+  it('re-checks membership once per TTL even while a claim is refreshed', async () => {
+    const previous = process.env.TYPING_TTL_MS;
+    process.env.TYPING_TTL_MS = '10';
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const membershipChecks = () => roomMemberRepo.findMember.mock.calls.length;
+      const baseline = membershipChecks();
+
+      await handlers.typing({ roomId: 'room-active', isTyping: true });
+      await handlers.typing({ roomId: 'room-active', isTyping: true });
+      expect(membershipChecks() - baseline).toBe(1);
+
+      // Access is revoked while the user keeps typing. The claim is refreshed
+      // continuously, so only the TTL bound forces the re-check that stops them.
+      roomMemberRepo.findMember.mockResolvedValue(null);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await handlers.typing({ roomId: 'room-active', isTyping: true });
+
+      expect(membershipChecks() - baseline).toBe(2);
+      expect(socket.emit).toHaveBeenCalledWith('error', {
+        statusCode: 403,
+        message: 'Not a member of this room',
+        code: 'FORBIDDEN',
+      });
+    } finally {
+      if (previous === undefined) delete process.env.TYPING_TTL_MS;
+      else process.env.TYPING_TTL_MS = previous;
+    }
+  });
+
+  it('rejects a typing stop from a non-member', async () => {
+    roomMemberRepo.findMember.mockResolvedValue(null);
+
+    await handlers.typing({ roomId: 'room-hidden', isTyping: false });
+
+    expect(roomEmit).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('error', {
+      statusCode: 403,
+      message: 'Not a member of this room',
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('does not broadcast a stop for a room this socket never claimed', async () => {
+    await handlers.typing({ roomId: 'room-active', isTyping: false });
+
+    expect(roomEmit).not.toHaveBeenCalled();
+  });
+
   it('expires typing automatically at the server TTL', async () => {
     const previous = process.env.TYPING_TTL_MS;
     process.env.TYPING_TTL_MS = '10';

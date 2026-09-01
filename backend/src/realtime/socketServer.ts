@@ -47,7 +47,67 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
   const presence = deps.presence ?? { trackUserConnection, trackUserDisconnection };
   const sessionLimit = maxSessionsPerUser();
   const sessionCounts = new Map<string, number>();
-  const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * One live typing claim per socket per room: the expiry that retracts it if
+   * the socket goes silent, and when this socket's membership of that room was
+   * last verified.
+   */
+  const typingClaims = new Map<string, { expiry: ReturnType<typeof setTimeout>; checkedAt: number }>();
+  /**
+   * Which sockets currently claim each `(room, user)` pair.
+   *
+   * `user_typing` is a statement about a *user*, but a user has as many sockets
+   * as open tabs, so the claim has to be aggregated before it can be broadcast.
+   * Keyed per socket — which is what this replaced — a second tab sending
+   * `isTyping: false`, or simply closing, retracts a claim the first tab is
+   * still refreshing, and every other member sees the indicator disappear while
+   * the user is still typing.
+   *
+   * Nested maps rather than one map under a composite key: `roomId` and `userId`
+   * are both opaque strings from outside this process, and there is no separator
+   * they cannot both contain.
+   *
+   * Process-local on purpose. Aggregating across instances needs the events
+   * themselves to cross first — `realtime/publisher.ts` is single-process, and
+   * closing that is the event bus's job (#475/#476), not this module's.
+   */
+  const typingRooms = new Map<string, Map<string, Set<string>>>();
+
+  /** Record a socket's claim. True only when it is the user's first in the room. */
+  const addTypingSocket = (roomId: string, userId: string, socketId: string): boolean => {
+    let byUser = typingRooms.get(roomId);
+    if (!byUser) {
+      byUser = new Map();
+      typingRooms.set(roomId, byUser);
+    }
+    let sockets = byUser.get(userId);
+    if (!sockets) {
+      sockets = new Set();
+      byUser.set(userId, sockets);
+    }
+    // Whether the set was empty *before* this socket joined it — not whether it
+    // now holds one. A socket refreshing its own claim leaves the size at one,
+    // so testing the size afterwards reports every keystroke as a fresh claim.
+    const claimed = sockets.size === 0;
+    sockets.add(socketId);
+    return claimed;
+  };
+
+  /**
+   * Drop a socket's claim. True only when it was the user's last in the room.
+   *
+   * Empty containers are deleted rather than left behind: a long-lived process
+   * would otherwise accumulate one entry per room anyone has ever typed in.
+   */
+  const removeTypingSocket = (roomId: string, userId: string, socketId: string): boolean => {
+    const byUser = typingRooms.get(roomId);
+    const sockets = byUser?.get(userId);
+    if (!byUser || !sockets || !sockets.delete(socketId)) return false;
+    if (sockets.size > 0) return false;
+    byUser.delete(userId);
+    if (byUser.size === 0) typingRooms.delete(roomId);
+    return true;
+  };
   // Handshakes whose slot was already reserved by the middleware below, so the
   // connection handler does not count the same session twice. Each reservation
   // is a lease: if the connection never arrives, the timer returns the slot.
@@ -123,18 +183,30 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
     }
     socket.join(`user_${userId}`);
 
+    const typingTimerKey = (roomId: string): string => `${socket.id}:${roomId}`;
+
+    const emitTyping = (roomId: string, isTyping: boolean) => {
+      socket.to(`room_${roomId}`).emit('user_typing', { roomId, userId, isTyping });
+    };
+
+    /**
+     * Retract this socket's claim on a room, telling the room only if it was the
+     * user's last one. The single exit from typing: explicit `isTyping: false`,
+     * the TTL, and disconnect all come through here.
+     */
+    const stopTyping = (roomId: string) => {
+      const key = typingTimerKey(roomId);
+      const claim = typingClaims.get(key);
+      if (claim) clearTimeout(claim.expiry);
+      typingClaims.delete(key);
+      if (removeTypingSocket(roomId, userId, socket.id)) emitTyping(roomId, false);
+    };
+
+    // Over a copy of the keys: `stopTyping` deletes from the map it walks.
     const clearTypingTimers = () => {
-      for (const [key, timer] of typingTimers) {
-        if (key.startsWith(`${socket.id}:`)) {
-          const roomId = key.slice(socket.id.length + 1);
-          clearTimeout(timer);
-          typingTimers.delete(key);
-          socket.to(`room_${roomId}`).emit('user_typing', {
-            roomId,
-            userId,
-            isTyping: false,
-          });
-        }
+      for (const key of [...typingClaims.keys()]) {
+        if (!key.startsWith(`${socket.id}:`)) continue;
+        stopTyping(key.slice(socket.id.length + 1));
       }
     };
 
@@ -209,30 +281,62 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
           throw new ValidationError('Invalid typing payload');
         }
         const { roomId, isTyping } = payload;
-        const member = await deps.roomMemberRepository.findMember(roomId, userId);
-        if (disconnected) return;
-        if (!member || member.role === 'pending') {
-          throw new ForbiddenError('Not a member of this room');
+        const key = typingTimerKey(roomId);
+        const ttl = typingTtlMs();
+        const prior = typingClaims.get(key);
+
+        // Membership is re-checked once per TTL rather than once per keystroke.
+        // The client sends `typing` on every input change, and `findMember` is a
+        // three-table join with a correlated `EXISTS` over `blocks`, so the old
+        // per-event check put that query on every character typed.
+        //
+        // Bounded by the TTL rather than by "this socket has a live claim":
+        // a claim is refreshed by each keystroke, so trusting a live one would
+        // let a member whose access was revoked hold the indicator open for as
+        // long as they keep typing. Revocation drops the socket from the room
+        // through the publisher, and this closes the window behind it.
+        let checkedAt = prior?.checkedAt ?? 0;
+        if (Date.now() - checkedAt >= ttl) {
+          const member = await deps.roomMemberRepository.findMember(roomId, userId);
+          if (disconnected) return;
+          if (!member || member.role === 'pending') {
+            throw new ForbiddenError('Not a member of this room');
+          }
+          checkedAt = Date.now();
         }
 
-        const key = `${socket.id}:${roomId}`;
-        const prior = typingTimers.get(key);
-        if (prior) clearTimeout(prior);
-
-        socket.to(`room_${roomId}`).emit('user_typing', { roomId, userId, isTyping });
-        if (isTyping) {
-          typingTimers.set(key, setTimeout(() => {
-            typingTimers.delete(key);
-            if (disconnected) return;
-            socket.to(`room_${roomId}`).emit('user_typing', {
-              roomId,
-              userId,
-              isTyping: false,
-            });
-          }, typingTtlMs()));
-        } else {
-          typingTimers.delete(key);
+        if (!isTyping) {
+          stopTyping(roomId);
+          return;
         }
+
+        // Re-read rather than reuse `prior`, which was captured before the
+        // membership query: a concurrent event may have armed a newer expiry in
+        // the meantime, and that is the one this replaces.
+        const live = typingClaims.get(key);
+        if (live) clearTimeout(live.expiry);
+        const expiry: ReturnType<typeof setTimeout> = setTimeout(() => {
+          // Two `typing` events can be in flight at once — each awaits the
+          // membership query — and both would arm an expiry. Only the one the
+          // map still holds may retract the claim; a superseded timer firing
+          // would stop a user who is still typing.
+          if (typingClaims.get(key)?.expiry !== expiry) return;
+          typingClaims.delete(key);
+          // Cleared before the disconnect test, never after: a claim left in
+          // the aggregate is one the room can never be told about again.
+          if (removeTypingSocket(roomId, userId, socket.id) && !disconnected) {
+            emitTyping(roomId, false);
+          }
+        }, ttl);
+        // The reservation timer above already does this; an unreffed timer here
+        // would hold `bun test` and a draining container open for a full TTL.
+        expiry.unref?.();
+        typingClaims.set(key, { expiry, checkedAt });
+
+        // Only the edge is broadcast. A second tab joining a claim the room has
+        // already been told about is not news, and re-sending `true` per
+        // keystroke made the indicator a per-keystroke fan-out to every member.
+        if (addTypingSocket(roomId, userId, socket.id)) emitTyping(roomId, true);
       } catch (err) {
         socket.emit('error', mapErrorToApiShape(err));
       }
