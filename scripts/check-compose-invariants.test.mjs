@@ -668,6 +668,31 @@ test("the checked-in contract catches a published port aimed at the wrong contai
   );
 });
 
+test("the checked-in contract catches a rebound secret or a swapped image", needsDocker, () => {
+  // A key-set row cannot see a rebind: TUNNEL_TOKEN bound to ${JWT_SECRET} is
+  // still exactly one key still named TUNNEL_TOKEN. And no row named the
+  // third-party images at all, so the only ingress could become busybox with
+  // ports, restart, command, environment, depends_on and network all intact.
+  const rebound = renderRealModels();
+  // prod renders environment in list form, so the rebind has to be written as
+  // the list entry it really is -- assigning an object property to an array
+  // would be silently dropped by the normalizer and prove nothing.
+  rebound.prod.services.tunnel.environment = ["TUNNEL_TOKEN=${JWT_SECRET}"];
+  assert.ok(
+    evaluateAgainst(checkedInContract(), rebound).some((f) =>
+      /services\.tunnel\.environment\.TUNNEL_TOKEN/.test(f),
+    ),
+    "rebound tunnel token",
+  );
+
+  const swapped = renderRealModels();
+  swapped.prod.services.tunnel.image = "busybox";
+  assert.ok(
+    evaluateAgainst(checkedInContract(), swapped).some((f) => /services\.tunnel\.image/.test(f)),
+    "swapped tunnel image",
+  );
+});
+
 test("the checked-in contract catches prod frontend built from the dev Dockerfile", needsDocker, () => {
   // ./frontend/Dockerfile builds fine, but its CMD is `pnpm dev`, so production
   // would serve from the Next.js development server. ci-frontend.yml builds

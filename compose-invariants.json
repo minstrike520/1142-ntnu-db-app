@@ -355,6 +355,66 @@
     },
     {
       "model": "prod",
+      "path": "services.backend.environment.DATABASE_URL",
+      "expect": "${DATABASE_URL}",
+      "why": "#631: the binding, not just the key name. Rebound to ${JWT_SECRET} the key set is unchanged and every other row passes, but Dockerfile.prod runs migrate:up at start with the JWT secret as its connection string and the container exits. CI never boots docker-compose.prod.yml, so nothing else catches it."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.JWT_SECRET",
+      "expect": "${JWT_SECRET}",
+      "why": "#631: the binding. Bound to a different variable the API signs and verifies tokens with the wrong secret, or with an empty string -- prod uses bare ${VAR}, so a missing value renders empty rather than failing (that fail-fast asymmetry is #632's)."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.CORS_ORIGINS",
+      "expect": "${CORS_ORIGINS}",
+      "why": "#631: the binding. Bound to the wrong variable the allowed-origin list becomes something arbitrary, and under prod's bare ${VAR} an unset value renders empty."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.PORT",
+      "expect": "${PORT}",
+      "why": "#631: the binding, and it must stay the variable the published mapping's target is written against."
+    },
+    {
+      "model": "prod",
+      "path": "services.backend.environment.NODE_ENV",
+      "expect": "${NODE_ENV}",
+      "why": "#631: pins the CURRENT state, which is interpolated rather than the literal `production` release uses. That asymmetry is deliberate drift owned by #632; this row exists so it cannot change to some third thing unnoticed in the meantime, and #632 updates this row when it fixes it."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.environment.NODE_ENV",
+      "expect": "${NODE_ENV}",
+      "why": "#631: same as the backend's -- current state pinned, the interpolated-vs-literal drift is #632's."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.environment.TUNNEL_TOKEN",
+      "expect": "${TUNNEL_TOKEN}",
+      "why": "#631: the binding. The previous round added the key set, which a rebind to ${JWT_SECRET} satisfies exactly -- one key, still named TUNNEL_TOKEN. cloudflared then receives something that is not a tunnel token and the only ingress never comes up."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.image",
+      "expect": "postgres:18-alpine",
+      "why": "#631: pins the CURRENT image. Not digest-pinned, unlike release -- that gap is #632's, and this row makes an unnoticed change to a different image or tag fail in the meantime."
+    },
+    {
+      "model": "prod",
+      "path": "services.redis.image",
+      "expect": "redis:8-alpine",
+      "why": "#631: pins the current image. redis holds derived state only, but a different image can change the persistence and eviction defaults the command deliberately overrides."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.image",
+      "expect": "cloudflare/cloudflared:latest",
+      "why": "#631: the only ingress. Swapped for any other image -- busybox, say -- the ports, restart, command, environment, depends_on and network rows all still pass while `tunnel --no-autoupdate run` cannot execute and production has no way in."
+    },
+    {
+      "model": "prod",
       "path": "networks",
       "expect": {
         "$keys": [
