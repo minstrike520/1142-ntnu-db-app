@@ -80,6 +80,13 @@ import {
   getActiveAccessToken,
   setActiveAccessToken,
   refreshTokensExclusive,
+  getAdminHealth,
+  getAdminMetrics,
+  getAdminLogs,
+  getAdminSlowQueries,
+  type AdminMetricsResponse,
+  type AdminLogEntry,
+  type AdminSlowQuery,
 } from "@/lib/api";
 import {
   createChatSocket,
@@ -280,6 +287,9 @@ interface ChatContextType {
   isAuthenticated: boolean;
   isAuthResolved: boolean;
   isMounted: boolean;
+  adminAccess: AdminAccessState;
+  adminMonitoring: AdminMonitoringState;
+  adminError: AdminError;
   roomsInitialized: boolean;
   selectedFriendForSidebar: Friend | null;
   setSelectedFriendForSidebar: React.Dispatch<React.SetStateAction<Friend | null>>;
@@ -340,7 +350,25 @@ interface ChatContextType {
   refreshSocialData: () => Promise<void>;
   updateRoomSorting: (nextOrder: Record<string, string[]>) => Promise<void>;
   markRoomAsRead: (roomId: string) => void;
+  refreshAdminMonitoring: () => void;
 }
+
+export type AdminAccessState = "checking" | "allowed" | "forbidden" | "error";
+export type AdminError = "access" | "monitoring" | null;
+export interface AdminMonitoringState {
+  metrics: AdminMetricsResponse | null;
+  logs: AdminLogEntry[];
+  slowQueries: AdminSlowQuery[];
+  lastUpdated: number | null;
+}
+
+const emptyAdminMonitoringState: AdminMonitoringState = {
+  metrics: null,
+  logs: [],
+  slowQueries: [],
+  lastUpdated: null,
+};
+export const ADMIN_POLL_INTERVAL_MS = 30_000;
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
@@ -419,6 +447,7 @@ const HANDLER_KEYS = [
   "setUiLanguage",
   "refreshSocialData",
   "updateRoomSorting",
+  "refreshAdminMonitoring",
 ] as const;
 type HandlerKey = (typeof HANDLER_KEYS)[number];
 
@@ -784,6 +813,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | undefined>(undefined);
   const [user, setUser] = useState<User>({ username: "", email: "", avatar: "" });
+  const [adminAccess, setAdminAccess] = useState<AdminAccessState>("checking");
+  const [adminMonitoring, setAdminMonitoring] = useState<AdminMonitoringState>(emptyAdminMonitoringState);
+  const [adminError, setAdminError] = useState<AdminError>(null);
+  const [adminRefreshNonce, setAdminRefreshNonce] = useState(0);
+  const [adminVerifiedToken, setAdminVerifiedToken] = useState<string | null>(null);
+  const [adminVerifiedSessionKey, setAdminVerifiedSessionKey] = useState<string | null>(null);
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -1034,11 +1069,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const customEvent = e as CustomEvent<{ token: string; user: unknown }>;
       setToken(customEvent.detail.token);
     };
+    const handleTokenChanged = () => {
+      setToken(getActiveAccessToken());
+    };
     window.addEventListener('auth:token-expired', handleExpired);
     window.addEventListener('auth:token-refreshed', handleRefreshed);
+    window.addEventListener('auth:token-changed', handleTokenChanged);
     return () => {
       window.removeEventListener('auth:token-expired', handleExpired);
       window.removeEventListener('auth:token-refreshed', handleRefreshed);
+      window.removeEventListener('auth:token-changed', handleTokenChanged);
     };
   }, []);
 
@@ -1150,6 +1190,145 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     roomsRef.current = rooms;
   }, [rooms]);
+
+  // Admin verification and monitoring deliberately live with the session
+  // lifecycle. The page only consumes this state; it must not create a second
+  // token/polling lifecycle of its own.
+  /* eslint-disable react-hooks/set-state-in-effect -- admin state setup after auth */
+  useEffect(() => {
+    if (pathname !== "/admin") {
+      return;
+    }
+    if (!isMounted || !isAuthResolved) return;
+    if (!isAuthenticated || !token) {
+      router.replace("/login?redirect=/admin");
+      return;
+    }
+
+    let cancelled = false;
+    const authToken = token;
+    const sessionKey = currentUserId ?? "anonymous";
+    setAdminAccess("checking");
+    setAdminVerifiedToken(null);
+    setAdminVerifiedSessionKey(null);
+    setAdminMonitoring(emptyAdminMonitoringState);
+    setAdminError(null);
+
+    void getAdminHealth(authToken)
+      .then(() => {
+        if (cancelled) return;
+        setAdminVerifiedToken(authToken);
+        setAdminVerifiedSessionKey(sessionKey);
+        setAdminAccess("allowed");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.status === 401) {
+          clearSession();
+          router.replace("/login?redirect=/admin");
+          return;
+        }
+        if (error instanceof ApiError && error.status === 403) {
+          setAdminAccess("forbidden");
+          return;
+        }
+        console.error("Failed to verify admin access:", error);
+        setAdminError("access");
+        setAdminAccess("error");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserId, isAuthenticated, isAuthResolved, isMounted, pathname, router, token]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    if (
+      pathname !== "/admin" ||
+      adminAccess !== "allowed" ||
+      adminVerifiedToken !== token ||
+      adminVerifiedSessionKey !== (currentUserId ?? "anonymous") ||
+      !isAuthenticated ||
+      !token
+    ) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight = false;
+    const authToken = token;
+
+    const scheduleNextPoll = () => {
+      if (!cancelled) {
+        timer = setTimeout(() => {
+          timer = undefined;
+          void loadMonitoringData();
+        }, ADMIN_POLL_INTERVAL_MS);
+      }
+    };
+
+    const loadMonitoringData = async () => {
+      if (cancelled || inFlight) return;
+      const currentToken = getActiveAccessToken();
+      if (!currentToken || currentToken !== authToken) return;
+
+      inFlight = true;
+      let shouldContinuePolling = true;
+      try {
+        const [metricsResult, logsResult, slowQueriesResult] = await Promise.allSettled([
+          getAdminMetrics(authToken),
+          getAdminLogs(authToken),
+          getAdminSlowQueries(authToken),
+        ]);
+        if (cancelled) return;
+
+        const results = [metricsResult, logsResult, slowQueriesResult];
+        const rejectedResults = results.filter(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        const authorizationError = rejectedResults.find(
+          (result) => result.reason instanceof ApiError && (result.reason.status === 401 || result.reason.status === 403),
+        );
+        if (authorizationError) throw authorizationError.reason;
+        if (rejectedResults[0]) throw rejectedResults[0].reason;
+        if (metricsResult.status !== "fulfilled" || logsResult.status !== "fulfilled" || slowQueriesResult.status !== "fulfilled") {
+          return;
+        }
+
+        setAdminMonitoring({
+          metrics: metricsResult.value,
+          logs: logsResult.value.entries,
+          slowQueries: slowQueriesResult.value.queries,
+          lastUpdated: metricsResult.value.at,
+        });
+        setAdminError(null);
+      } catch (error: unknown) {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.status === 401) {
+          shouldContinuePolling = false;
+          clearSession();
+          router.replace("/login?redirect=/admin");
+          return;
+        }
+        if (error instanceof ApiError && error.status === 403) {
+          shouldContinuePolling = false;
+          setAdminAccess("forbidden");
+          return;
+        }
+        console.error("Failed to load admin monitoring data:", error);
+        setAdminError("monitoring");
+      } finally {
+        inFlight = false;
+        if (shouldContinuePolling) scheduleNextPoll();
+      }
+    };
+
+    void loadMonitoringData();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [adminAccess, adminRefreshNonce, adminVerifiedSessionKey, adminVerifiedToken, currentUserId, isAuthenticated, pathname, router, token]);
 
   useEffect(() => {
     if (!token || !currentUserId) return;
@@ -2711,6 +2890,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const refreshAdminMonitoring = () => {
+    setAdminRefreshNonce((current) => current + 1);
+  };
+
   // -------------------------------------------------------------------------
   // Context value stabilization (hotspot #1, issue #383)
   //
@@ -2765,6 +2948,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setUiLanguage,
     refreshSocialData: handleRefreshSocialData,
     updateRoomSorting,
+    refreshAdminMonitoring,
   };
   type Handlers = typeof handlers;
   // Compile-time exhaustiveness check: every key of `handlers` must appear in
@@ -2803,6 +2987,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       isAuthenticated,
       isAuthResolved,
       isMounted,
+      adminAccess,
+      adminMonitoring,
+      adminError,
       roomsInitialized,
       selectedFriendForSidebar,
       setSelectedFriendForSidebar,
@@ -2832,6 +3019,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       isAuthenticated,
       isAuthResolved,
       isMounted,
+      adminAccess,
+      adminMonitoring,
+      adminError,
       roomsInitialized,
       selectedFriendForSidebar,
       hasUnsavedChanges,

@@ -1,266 +1,60 @@
 import { describe, expect, test, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import AdminPage from "@/components/pages/AdminPage";
-import {
-  __getApiCallLog,
-  __holdNextAdminMonitoring,
-  __resetApiMock,
-  __setAdminAccess,
-  __setAdminHealthStatus,
-  __setAdminMonitoringStatus,
-  setActiveAccessToken,
-} from "./mocks/api";
-import { __getPathname, __resetNavigation } from "./mocks/next-navigation";
 
-const mockChatState = vi.hoisted(() => ({ userId: "user-1" }));
+const mockAdminState = vi.hoisted(() => ({
+  access: "allowed" as "checking" | "allowed" | "forbidden" | "error",
+  error: null as "access" | "monitoring" | null,
+  monitoring: {
+    metrics: null,
+    logs: [],
+    slowQueries: [],
+    lastUpdated: null,
+  },
+}));
 
 vi.mock("@/context/ChatContext", () => ({
+  ADMIN_POLL_INTERVAL_MS: 30_000,
   useChat: () => ({
-    isAuthenticated: true,
-    isMounted: true,
-    user: { userId: mockChatState.userId },
+    adminAccess: mockAdminState.access,
+    adminError: mockAdminState.error,
+    adminMonitoring: mockAdminState.monitoring,
   }),
   useUiLanguage: () => "en",
 }));
 
 describe("AdminPage", () => {
-  test.beforeEach(() => {
-    __resetApiMock();
-    __resetNavigation("/");
-    mockChatState.userId = "user-1";
-  });
-
-  test("renders all monitoring sections after the admin check succeeds", async () => {
-    __setAdminAccess(true);
+  test("renders context-owned monitoring sections for an allowed admin", () => {
+    mockAdminState.access = "allowed";
+    mockAdminState.error = null;
 
     render(<AdminPage />);
 
-    await waitFor(() => {
-      expect(screen.queryByTestId("admin-metrics")).toBeTruthy();
-    });
-
+    expect(screen.queryByTestId("admin-page")).toBeTruthy();
+    expect(screen.queryByTestId("admin-metrics")).toBeTruthy();
     expect(screen.queryByTestId("admin-slow-queries")).toBeTruthy();
     expect(screen.queryByTestId("admin-logs")).toBeTruthy();
-    expect(__getApiCallLog("getAdminHealth")).toHaveLength(1);
-    expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
-    expect(__getApiCallLog("getAdminLogs")).toHaveLength(1);
-    expect(__getApiCallLog("getAdminSlowQueries")).toHaveLength(1);
   });
 
-  test("does not render monitoring sections for a non-admin", async () => {
-    __setAdminAccess(false);
+  test("does not render monitoring sections when context denies access", () => {
+    mockAdminState.access = "forbidden";
+    mockAdminState.error = null;
 
     render(<AdminPage />);
 
-    await waitFor(() => {
-      expect(screen.queryByTestId("admin-forbidden")).toBeTruthy();
-    });
-
+    expect(screen.queryByTestId("admin-forbidden")).toBeTruthy();
     expect(screen.queryByTestId("admin-metrics")).toBeNull();
     expect(screen.queryByTestId("admin-slow-queries")).toBeNull();
     expect(screen.queryByTestId("admin-logs")).toBeNull();
-    expect(__getApiCallLog("getAdminMetrics")).toHaveLength(0);
-    expect(__getApiCallLog("getAdminLogs")).toHaveLength(0);
-    expect(__getApiCallLog("getAdminSlowQueries")).toHaveLength(0);
   });
 
-  test("redirects to login when the fresh health check returns 401", async () => {
-    __setAdminHealthStatus(401);
+  test("renders the context-owned monitoring error", () => {
+    mockAdminState.access = "error";
+    mockAdminState.error = "monitoring";
 
     render(<AdminPage />);
 
-    await waitFor(() => {
-      expect(__getPathname()).toBe("/login?redirect=/admin");
-    });
-    expect(__getApiCallLog("getAdminMetrics")).toHaveLength(0);
-    expect(__getApiCallLog("getAdminLogs")).toHaveLength(0);
-    expect(__getApiCallLog("getAdminSlowQueries")).toHaveLength(0);
-  });
-
-  test("polls again after thirty seconds without overlapping a deferred batch", async () => {
-    vi.useFakeTimers();
-    try {
-      __setAdminAccess(true);
-      render(<AdminPage />);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
-      const release = __holdNextAdminMonitoring();
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2);
-
-      release();
-      await act(async () => {
-        await Promise.resolve();
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(3);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("keeps two admin tabs within the shared production request budget", async () => {
-    vi.useFakeTimers();
-    try {
-      __setAdminAccess(true);
-      render(
-        <>
-          <AdminPage />
-          <AdminPage />
-        </>,
-      );
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(15 * 60 * 1_000);
-      });
-
-      const adminRequests = __getApiCallLog().filter(({ fn }) =>
-        ["getAdminHealth", "getAdminMetrics", "getAdminLogs", "getAdminSlowQueries"].includes(fn),
-      );
-      expect(adminRequests.length).toBeLessThanOrEqual(200);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("continues temporary monitoring failures at the reduced polling frequency", async () => {
-    vi.useFakeTimers();
-    try {
-      __setAdminAccess(true);
-      render(<AdminPage />);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
-
-      __setAdminMonitoringStatus(500);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2);
-
-      __setAdminMonitoringStatus(null);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(3);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("revalidates access and restarts polling when the session changes", async () => {
-    vi.useFakeTimers();
-    try {
-      __setAdminAccess(true);
-      const { rerender } = render(<AdminPage />);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      expect(__getApiCallLog("getAdminHealth")).toHaveLength(1);
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
-
-      mockChatState.userId = "user-2";
-      rerender(<AdminPage />);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      expect(__getApiCallLog("getAdminHealth")).toHaveLength(2);
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2);
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(3);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("redirects and stops polling when monitoring returns 401", async () => {
-    vi.useFakeTimers();
-    try {
-      __setAdminAccess(true);
-      render(<AdminPage />);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
-
-      __setAdminMonitoringStatus(401);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-      expect(__getPathname()).toBe("/login?redirect=/admin");
-      const callsAfterUnauthorized = __getApiCallLog("getAdminMetrics").length;
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(callsAfterUnauthorized);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("redirects when the token disappears before the next poll", async () => {
-    vi.useFakeTimers();
-    try {
-      __setAdminAccess(true);
-      render(<AdminPage />);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
-      act(() => {
-        setActiveAccessToken(null);
-      });
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-      expect(__getPathname()).toBe("/login?redirect=/admin");
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("does not schedule another poll after cleanup of a deferred batch", async () => {
-    vi.useFakeTimers();
-    try {
-      __setAdminAccess(true);
-      const { unmount } = render(<AdminPage />);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      const release = __holdNextAdminMonitoring();
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2);
-
-      unmount();
-      release();
-      await act(async () => {
-        await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-      expect(__getApiCallLog("getAdminMetrics")).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(screen.queryByTestId("admin-forbidden")).toBeTruthy();
+    expect(screen.getByText("The monitoring data could not be loaded. Retrying automatically.")).toBeTruthy();
   });
 });

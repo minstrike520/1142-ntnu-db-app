@@ -183,7 +183,8 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
     "name": "Alex",
     "email": "alex@example.com",
     "bio": "Hello, this is my bio.",
-    "avatarUrl": "https://example.com/avatar.png"
+    "avatarUrl": "https://example.com/avatar.png",
+    "isAdmin": false
   }
   ```
 
@@ -644,7 +645,8 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
     "name": "user123",
     "email": "user@example.com",
     "bio": "Updated bio details",
-    "avatarUrl": null
+    "avatarUrl": null,
+    "isAdmin": false
   }
   ```
 

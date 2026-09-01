@@ -1,41 +1,13 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { useChat } from "@/context/ChatContext";
-import {
-  ApiError,
-  getActiveAccessToken,
-  getAdminHealth,
-  getAdminLogs,
-  getAdminMetrics,
-  getAdminSlowQueries,
-  type AdminLogEntry,
-  type AdminMetricsResponse,
-  type AdminSlowQuery,
-} from "@/lib/api";
+import { ADMIN_POLL_INTERVAL_MS, useChat } from "@/context/ChatContext";
+import type { AdminLogEntry, AdminMetricsResponse, AdminSlowQuery } from "@/lib/api";
 import { useTranslation } from "@/hooks/useTranslation";
-import { useActiveAccessToken } from "@/hooks/useActiveAccessToken";
 import { Button } from "@/components/ui/Button";
 
-const ADMIN_POLL_INTERVAL_MS = 30_000;
 const STATUS_CLASSES = ["1xx", "2xx", "3xx", "4xx", "5xx", "other"] as const;
-type AccessState = "checking" | "allowed" | "forbidden" | "error";
-type VerifiedAccess = { token: string; sessionKey: string };
-
-type MonitoringState = {
-  metrics: AdminMetricsResponse | null;
-  logs: AdminLogEntry[];
-  slowQueries: AdminSlowQuery[];
-  lastUpdated: number | null;
-};
-
-const emptyMonitoringState: MonitoringState = {
-  metrics: null,
-  logs: [],
-  slowQueries: [],
-  lastUpdated: null,
-};
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024) return `${bytes} B`;
@@ -58,157 +30,10 @@ const formatNumber = (value: number): string => value.toLocaleString();
 
 export default function AdminPage() {
   const router = useRouter();
-  const { isAuthenticated, isMounted, user } = useChat();
+  const { adminAccess, adminError, adminMonitoring } = useChat();
   const { t } = useTranslation();
-  const [access, setAccess] = useState<AccessState>("checking");
-  const [verifiedAccess, setVerifiedAccess] = useState<VerifiedAccess | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [monitoring, setMonitoring] = useState<MonitoringState>(emptyMonitoringState);
-  const activeToken = useActiveAccessToken();
-  const sessionKey = user.userId ?? "anonymous";
 
-  useEffect(() => {
-    if (!isMounted) return;
-
-    if (!isAuthenticated || !activeToken) {
-      router.replace("/login?redirect=/admin");
-      return;
-    }
-
-    let cancelled = false;
-
-    void getAdminHealth(activeToken)
-      .then(() => {
-        if (!cancelled) {
-          setVerifiedAccess({ token: activeToken, sessionKey });
-          setAccess("allowed");
-        }
-      })
-      .catch((requestError: unknown) => {
-        if (cancelled) return;
-        if (requestError instanceof ApiError && requestError.status === 403) {
-          setVerifiedAccess(null);
-          setAccess("forbidden");
-          return;
-        }
-        if (requestError instanceof ApiError && requestError.status === 401) {
-          setVerifiedAccess(null);
-          router.replace("/login?redirect=/admin");
-          return;
-        }
-        setVerifiedAccess(null);
-        console.error("Failed to verify admin access:", requestError);
-        setError(t("adminPage.accessError"));
-        setAccess("error");
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeToken, isAuthenticated, isMounted, router, sessionKey, t]);
-
-  useEffect(() => {
-    if (
-      access !== "allowed" ||
-      !activeToken ||
-      verifiedAccess === null ||
-      verifiedAccess.token !== activeToken ||
-      verifiedAccess.sessionKey !== sessionKey
-    ) return;
-
-    let cancelled = false;
-    let timer: number | undefined;
-    let inFlight = false;
-
-    const scheduleNextPoll = () => {
-      if (!cancelled) {
-        timer = window.setTimeout(() => {
-          timer = undefined;
-          void loadMonitoringData();
-        }, ADMIN_POLL_INTERVAL_MS);
-      }
-    };
-
-    const loadMonitoringData = async () => {
-      if (cancelled || inFlight) return;
-
-      const token = getActiveAccessToken();
-      if (!token) {
-        cancelled = true;
-        router.replace("/login?redirect=/admin");
-        return;
-      }
-
-      inFlight = true;
-      let shouldContinuePolling = true;
-      try {
-        const [metricsResult, logsResult, slowQueriesResult] = await Promise.allSettled([
-          getAdminMetrics(token),
-          getAdminLogs(token),
-          getAdminSlowQueries(token),
-        ]);
-        if (cancelled) return;
-        if (getActiveAccessToken() !== token) {
-          shouldContinuePolling = false;
-          return;
-        }
-
-        const results = [metricsResult, logsResult, slowQueriesResult];
-        const rejectedResults = results.filter(
-          (result): result is PromiseRejectedResult => result.status === "rejected",
-        );
-        const authorizationError = rejectedResults.find(
-          (result) => result.reason instanceof ApiError && (result.reason.status === 401 || result.reason.status === 403),
-        );
-        if (authorizationError) throw authorizationError.reason;
-        if (rejectedResults[0]) throw rejectedResults[0].reason;
-
-        if (metricsResult.status !== "fulfilled" || logsResult.status !== "fulfilled" || slowQueriesResult.status !== "fulfilled") {
-          return;
-        }
-        setMonitoring({
-          metrics: metricsResult.value,
-          logs: logsResult.value.entries,
-          slowQueries: slowQueriesResult.value.queries,
-          lastUpdated: metricsResult.value.at,
-        });
-        setError(null);
-      } catch (requestError: unknown) {
-        if (cancelled) return;
-        if (requestError instanceof ApiError && requestError.status === 403) {
-          shouldContinuePolling = false;
-          setAccess("forbidden");
-          return;
-        }
-        if (requestError instanceof ApiError && requestError.status === 401) {
-          shouldContinuePolling = false;
-          setAccess("checking");
-          router.replace("/login?redirect=/admin");
-          return;
-        }
-        console.error("Failed to load admin monitoring data:", requestError);
-        setError(t("adminPage.loadError"));
-      } finally {
-        inFlight = false;
-        if (shouldContinuePolling) scheduleNextPoll();
-      }
-    };
-
-    void loadMonitoringData();
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [access, activeToken, router, sessionKey, t, verifiedAccess]);
-
-  const isVerifiedForCurrentSession =
-    access === "allowed" &&
-    activeToken !== null &&
-    verifiedAccess !== null &&
-    verifiedAccess.token === activeToken &&
-    verifiedAccess.sessionKey === sessionKey;
-
-  if (access === "checking" || (access === "allowed" && !isVerifiedForCurrentSession)) {
+  if (adminAccess === "checking") {
     return (
       <div className="flex h-full items-center justify-center p-6 text-sm text-text-muted" data-testid="admin-loading">
         {t("common.loading")}
@@ -216,16 +41,19 @@ export default function AdminPage() {
     );
   }
 
-  if (access === "forbidden" || access === "error") {
+  if (adminAccess === "forbidden" || adminAccess === "error") {
+    const message = adminAccess === "forbidden"
+      ? t("adminPage.forbiddenDescription")
+      : adminError === "access"
+        ? t("adminPage.accessError")
+        : t("adminPage.loadError");
     return (
       <div className="flex h-full items-center justify-center p-6" data-testid="admin-forbidden">
         <section className="w-full max-w-lg border border-border-primary bg-surface-card p-8 text-center">
           <h1 className="text-xl font-bold text-foreground">
-            {access === "forbidden" ? t("adminPage.forbiddenTitle") : t("adminPage.errorTitle")}
+            {adminAccess === "forbidden" ? t("adminPage.forbiddenTitle") : t("adminPage.errorTitle")}
           </h1>
-          <p className="mt-3 text-sm text-text-muted">
-            {access === "forbidden" ? t("adminPage.forbiddenDescription") : error}
-          </p>
+          <p className="mt-3 text-sm text-text-muted">{message}</p>
           <Button className="mt-6" variant="secondary" onClick={() => router.push("/")}>
             {t("adminPage.backToChat")}
           </Button>
@@ -244,21 +72,21 @@ export default function AdminPage() {
           </div>
           <div className="text-right text-xs text-text-muted">
             <p>{t("adminPage.polling", { seconds: ADMIN_POLL_INTERVAL_MS / 1000 })}</p>
-            {monitoring.lastUpdated !== null && (
-              <p className="mt-1 font-mono">{t("adminPage.lastUpdated", { time: formatTimestamp(monitoring.lastUpdated) })}</p>
+            {adminMonitoring.lastUpdated !== null && (
+              <p className="mt-1 font-mono">{t("adminPage.lastUpdated", { time: formatTimestamp(adminMonitoring.lastUpdated) })}</p>
             )}
           </div>
         </header>
 
-        {error && (
+        {adminError === "monitoring" && (
           <div className="border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-300" role="alert">
-            {error}
+            {t("adminPage.loadError")}
           </div>
         )}
 
-        <MetricsSection metrics={monitoring.metrics} t={t} />
-        <SlowQueriesSection queries={monitoring.slowQueries} t={t} />
-        <LogsSection entries={monitoring.logs} t={t} />
+        <MetricsSection metrics={adminMonitoring.metrics} t={t} />
+        <SlowQueriesSection queries={adminMonitoring.slowQueries} t={t} />
+        <LogsSection entries={adminMonitoring.logs} t={t} />
       </div>
     </main>
   );

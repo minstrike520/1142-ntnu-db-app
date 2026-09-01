@@ -184,7 +184,8 @@ All errors return the following JSON structure:
     "name": "Alex",
     "email": "alex@example.com",
     "bio": "Hello, this is my bio.",
-    "avatarUrl": "https://example.com/avatar.png"
+    "avatarUrl": "https://example.com/avatar.png",
+    "isAdmin": false
   }
   ```
 
@@ -645,7 +646,8 @@ All errors return the following JSON structure:
     "name": "user123",
     "email": "user@example.com",
     "bio": "Updated bio details",
-    "avatarUrl": null
+    "avatarUrl": null,
+    "isAdmin": false
   }
   ```
 
