@@ -278,6 +278,7 @@ interface ChatContextType {
   emergencySettings: EmergencySettings;
   uiLanguage: UiLanguage;
   isAuthenticated: boolean;
+  isAuthResolved: boolean;
   isMounted: boolean;
   roomsInitialized: boolean;
   selectedFriendForSidebar: Friend | null;
@@ -778,6 +779,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const [isMounted, setIsMounted] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthResolved, setIsAuthResolved] = useState(false);
   const [roomsInitialized, setRoomsInitialized] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | undefined>(undefined);
@@ -899,6 +901,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setToken(null);
     setCurrentUserId(undefined);
     setIsAuthenticated(false);
+    setIsAuthResolved(true);
     setRoomsInitialized(false);
     setRooms([]);
     setFolders([]);
@@ -1052,6 +1055,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     /* eslint-disable react-hooks/set-state-in-effect -- post-mount localStorage session hydration */
     if (!isMounted) return;
 
+    const loginPath = pathname === "/admin" ? "/login?redirect=/admin" : "/login";
+
     const savedUser = localStorage.getItem("user");
     const savedTheme = localStorage.getItem("theme");
     const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -1121,6 +1126,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setToken(currentToken);
         setActiveAccessToken(currentToken);
         setIsAuthenticated(true);
+        setIsAuthResolved(true);
         await Promise.all([
           refreshRoomsAndFolders(currentToken, profile.userId),
           refreshSocialData(currentToken, settings, profile.userId),
@@ -1129,7 +1135,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         console.error(error);
         if (!cancelled) {
           clearSession();
-          window.location.replace("/login");
+          window.location.replace(loginPath);
         }
       }
     })();
@@ -2795,6 +2801,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       emergencySettings,
       uiLanguage,
       isAuthenticated,
+      isAuthResolved,
       isMounted,
       roomsInitialized,
       selectedFriendForSidebar,
@@ -2823,6 +2830,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       emergencySettings,
       uiLanguage,
       isAuthenticated,
+      isAuthResolved,
       isMounted,
       roomsInitialized,
       selectedFriendForSidebar,

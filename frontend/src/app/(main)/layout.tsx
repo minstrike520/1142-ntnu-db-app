@@ -8,10 +8,16 @@ import MobileNav from "@/components/layout/MobileNav";
 import { useTranslation } from "@/hooks/useTranslation";
 
 function MainLayoutContent({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isMounted, user } = useChat();
+  const { isAuthenticated, isAuthResolved, isMounted, user } = useChat();
   const { t } = useTranslation();
   const pathname = usePathname();
   const router = useRouter();
+
+  React.useEffect(() => {
+    if (isMounted && isAuthResolved && !isAuthenticated && pathname === "/admin") {
+      router.replace("/login?redirect=/admin");
+    }
+  }, [isAuthenticated, isAuthResolved, isMounted, pathname, router]);
 
   React.useEffect(() => {
     if (isAuthenticated && isMounted) {
