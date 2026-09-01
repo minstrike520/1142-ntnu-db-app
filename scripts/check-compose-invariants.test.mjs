@@ -1271,3 +1271,44 @@ test("the checked-in contract catches a mount or a port added beside the pinned 
     );
   }
 });
+
+test("every top-level service key has a row pinning its value", needsDocker, () => {
+  // One level up from the environment-key audit. A service key-set row is an
+  // exact statement about which keys exist and says nothing about what they
+  // hold -- that is how `redis.tmpfs` sat unpinned while the key-set row saw it
+  // present. A key covered only by its key set is a value nothing checks.
+  const rendered = renderRealModels();
+  const rows = checkedInContract();
+  const unpinned = [];
+  for (const [modelKey, model] of Object.entries(rendered)) {
+    for (const [service, definition] of Object.entries(model.services)) {
+      for (const key of Object.keys(definition)) {
+        const exact = `services.${service}.${key}`;
+        const covered = rows.some(
+          (row) =>
+            row.model === modelKey &&
+            (row.path === exact ||
+              row.path.startsWith(`${exact}.`) ||
+              row.path.startsWith(`${exact}[`) ||
+              row.path === `services.*.${key}` ||
+              row.path.startsWith(`services.*.${key}.`)),
+        );
+        if (!covered) unpinned.push(`${modelKey} ${exact}`);
+      }
+    }
+  }
+  assert.deepEqual(unpinned, [], "service keys whose value nothing pins");
+});
+
+test("the checked-in contract catches redis's ephemeral path being moved", needsDocker, () => {
+  for (const tmpfs of [["/tmp"], ["/data", "/var/lib/extra"], []]) {
+    const rendered = renderRealModels();
+    rendered.prod.services.redis.tmpfs = tmpfs;
+    assert.ok(
+      evaluateAgainst(checkedInContract(), rendered).some((failure) =>
+        /services\.redis\.tmpfs/.test(failure),
+      ),
+      JSON.stringify(tmpfs),
+    );
+  }
+});

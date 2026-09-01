@@ -621,6 +621,14 @@
     },
     {
       "model": "prod",
+      "path": "services.redis.tmpfs",
+      "expect": [
+        "/data"
+      ],
+      "why": "#631: the whole tmpfs list. A tmpfs is a mount that discards every write, so this list is the statement of exactly which path is ephemeral and, just as importantly, that nothing else is. It pairs with the command row above -- persistence is off (`--save \"\" --appendonly no`), so Redis's data directory is deliberately backed by nothing. Found by auditing service key VALUES rather than key sets: the key-set row saw `tmpfs` present and said nothing about where it points."
+    },
+    {
+      "model": "prod",
       "path": "services.tunnel.image",
       "expect": "cloudflare/cloudflared:latest",
       "why": "#631: the only ingress. Swapped for any other image -- busybox, say -- the ports, restart, command, environment, depends_on and network rows all still pass while `tunnel --no-autoupdate run` cannot execute and production has no way in."
