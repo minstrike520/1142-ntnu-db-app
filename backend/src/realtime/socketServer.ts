@@ -291,10 +291,19 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
         // Bounded by the TTL rather than by "this socket has a live claim":
         // a claim is refreshed by each keystroke, so trusting a live one would
         // let a member whose access was revoked hold the indicator open for as
-        // long as they keep typing. Revocation drops the socket from the room
-        // through the publisher, and this closes the window behind it.
+        // long as they keep typing.
+        //
+        // The room subscription bounds it a second time, and that is what makes
+        // revocation take effect at once rather than within a TTL. Revocation
+        // runs `socketsLeave` (`realtime/publisher.ts`), which removes the
+        // socket from the room but does *not* stop it addressing that room:
+        // `socket.to(room)` broadcasts to a room the sender need not be in. So
+        // the subscription is not an authorization by itself — it only says
+        // whether the cached one may still be trusted. Losing it sends this
+        // straight back to the repository, which is authoritative.
         let checkedAt = prior?.checkedAt ?? 0;
-        if (Date.now() - checkedAt >= ttl) {
+        const subscribed = socket.rooms?.has(`room_${roomId}`) === true;
+        if (!subscribed || Date.now() - checkedAt >= ttl) {
           const member = await deps.roomMemberRepository.findMember(roomId, userId);
           if (disconnected) return;
           if (!member || member.role === 'pending') {

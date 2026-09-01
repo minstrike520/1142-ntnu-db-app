@@ -26,6 +26,9 @@ describe('attachSockets', () => {
     socket = {
       id: 'socket-1',
       data: { user: { userId: 'user-1', name: 'Alice' } },
+      // A real Socket.IO socket tracks its rooms, and the typing handler reads
+      // them to decide whether its cached membership check is still good.
+      rooms: new Set(['user_user-1', 'room_room-active']),
       join: mock(),
       leave: mock(),
       emit: mock(),
@@ -158,6 +161,30 @@ describe('attachSockets', () => {
     }
   });
 
+  /**
+   * `socketsLeave` removes the socket from the room but does not stop it
+   * addressing that room, so losing the subscription has to invalidate the
+   * cached membership check immediately rather than one TTL later.
+   */
+  it('stops trusting the membership cache once the socket leaves the room', async () => {
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+    const baseline = roomMemberRepo.findMember.mock.calls.length;
+    roomEmit.mockClear();
+
+    // What room revocation does, through publisher.removeUserFromRoom.
+    socket.rooms.delete('room_room-active');
+    roomMemberRepo.findMember.mockResolvedValue(null);
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+
+    expect(roomMemberRepo.findMember.mock.calls.length - baseline).toBe(1);
+    expect(roomEmit).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('error', {
+      statusCode: 403,
+      message: 'Not a member of this room',
+      code: 'FORBIDDEN',
+    });
+  });
+
   it('rejects a typing stop from a non-member', async () => {
     roomMemberRepo.findMember.mockResolvedValue(null);
 
@@ -207,6 +234,7 @@ describe('attachSockets', () => {
       const frSocket = {
         id: 'socket-fr-1',
         data: { user: { userId: 'user-1', name: 'Alice' } },
+        rooms: new Set(['user_user-1', 'room_room-active']),
         join: mock(),
         leave: mock(),
         emit: mock(),
