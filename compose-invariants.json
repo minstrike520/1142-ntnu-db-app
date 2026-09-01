@@ -63,6 +63,23 @@
     "checks. Both rules are enforced by a test in",
     "scripts/check-compose-invariants.test.mjs rather than by review.",
     "",
+    "A subset check cannot say \"and nothing else\", so it is the wrong tool for a",
+    "list whose contents are fully known. `$contains` and a plain-object `$every`",
+    "name the fields they care about and are blind twice over: to the fields they",
+    "do not name, and to elements added beside the one they matched. Three",
+    "separate holes came from that one habit -- a network attachment carrying",
+    "`aliases`, a mount carrying `volume.subpath`, and a port carrying",
+    "`mode: host`, none of which disturb any field the row did name; plus a",
+    "second network, a second mount and a second port, which are not subset",
+    "violations at all. So services.<svc>.networks, .ports and .volumes are",
+    "compared WHOLE, and a test keeps them that way. Reach for a subset match",
+    "only where the list is genuinely open-ended, which none of these are.",
+    "",
+    "The cost of an exact per-service row is that it cannot cover a service added",
+    "later, which is what a `services.*.` row would have done. Tests pay that",
+    "back: every service must have a networks row, and every rendered ports or",
+    "volumes list must have a row that compares it whole.",
+    "",
     "expect: a literal to deep-equal, or {\"$absent\": true},",
     "{\"$matches\": \"<regex>\"}, {\"$keys\": [...]} for an exact key set,",
     "{\"$every\": {...}} for a non-empty list whose every element carries those",
@@ -167,41 +184,44 @@
     {
       "model": "prod",
       "path": "services.db.ports",
-      "expect": {
-        "$every": {
+      "expect": [
+        {
           "host_ip": "127.0.0.1",
+          "mode": "ingress",
           "protocol": "tcp",
           "published": "5435",
           "target": 5432
         }
-      },
-      "why": "#631: cloudflared is the only ingress (docker-compose.prod.yml:1-9). A database reachable off-host bypasses the tunnel entirely, and this binding is also what makes trusting X-Forwarded-For safe -- see TRUST_PROXY_HOPS below."
+      ],
+      "why": "#631: the WHOLE port list, compared exactly. Same reason as the mount rows: a subset check cannot say \"and nothing else\". `mode` is the field it was blind to -- `mode: host` publishes the container port directly on the host rather than through Compose's ingress path, changing how the binding this row exists to pin is actually made, while host_ip, published and target all still read correctly."
     },
     {
       "model": "prod",
       "path": "services.backend.ports",
-      "expect": {
-        "$every": {
+      "expect": [
+        {
           "host_ip": "127.0.0.1",
+          "mode": "ingress",
           "protocol": "tcp",
           "published": "4005",
           "target": 4000
         }
-      },
-      "why": "#631: same loopback-only ingress rule. Published on 0.0.0.0 the API would be reachable without the tunnel, and TRUST_PROXY_HOPS=1 would then let any caller forge X-Forwarded-For and choose its own rate-limit bucket (#413)."
+      ],
+      "why": "#631: the WHOLE port list, compared exactly. Same reason as the mount rows: a subset check cannot say \"and nothing else\". `mode` is the field it was blind to -- `mode: host` publishes the container port directly on the host rather than through Compose's ingress path, changing how the binding this row exists to pin is actually made, while host_ip, published and target all still read correctly."
     },
     {
       "model": "prod",
       "path": "services.frontend.ports",
-      "expect": {
-        "$every": {
+      "expect": [
+        {
           "host_ip": "127.0.0.1",
+          "mode": "ingress",
           "protocol": "tcp",
           "published": "3005",
           "target": 3000
         }
-      },
-      "why": "#631: same loopback-only ingress rule; the documented local production walkthrough browses http://localhost:3005 and needs nothing wider."
+      ],
+      "why": "#631: the WHOLE port list, compared exactly. Same reason as the mount rows: a subset check cannot say \"and nothing else\". `mode` is the field it was blind to -- `mode: host` publishes the container port directly on the host rather than through Compose's ingress path, changing how the binding this row exists to pin is actually made, while host_ip, published and target all still read correctly."
     },
     {
       "model": "prod",
@@ -654,28 +674,30 @@
     {
       "model": "prod",
       "path": "services.db.volumes",
-      "expect": {
-        "$contains": {
-          "type": "volume",
-          "read_only": false,
+      "expect": [
+        {
           "source": "pgdata",
-          "target": "/var/lib/postgresql"
+          "target": "/var/lib/postgresql",
+          "type": "volume",
+          "volume": {},
+          "read_only": false
         }
-      },
-      "why": "#631: a top-level `pgdata:` declaration only says the volume exists. Deleting the mount, or moving its target off PGDATA, leaves the declaration in place and the database running on the container filesystem -- so every rebuild starts an empty database while the contract still passes. `type` is pinned too: rewritten as a long-syntax `type: bind` with the same source and target, the named volume goes unused and the bind path is resolved relative to wherever the compose file sits, so deploying from another directory silently starts an empty database."
+      ],
+      "why": "#631: the WHOLE mount list, compared exactly. A subset check names the fields it cares about and is blind to the rest, which hides two different edits. Compose's long syntax carries a `volume` block: `volume: {subpath: base}` mounts a SUBDIRECTORY of the volume rather than its root, so a clean deployment fails to mount and an existing pgdata presents `base/` as /var/lib/postgresql -- PostgreSQL finds no data directory and does not start. And an ADDED mount is not a subset violation at all: verified that a second entry mounting /var/run/docker.sock into the backend passed every row. Comparing the list whole is the only form that says \"these mounts and no others\"."
     },
     {
       "model": "prod",
       "path": "services.backend.volumes",
-      "expect": {
-        "$contains": {
-          "type": "volume",
-          "read_only": false,
+      "expect": [
+        {
           "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}",
-          "target": "/app/uploads"
+          "target": "/app/uploads",
+          "type": "volume",
+          "volume": {},
+          "read_only": false
         }
-      },
-      "why": "#631: same gap as pgdata. Without this mount every uploaded attachment lives in the container layer and 404s after the next rebuild, with the app_uploads declaration still present and unused."
+      ],
+      "why": "#631: the WHOLE mount list, compared exactly. A subset check names the fields it cares about and is blind to the rest, which hides two different edits. Compose's long syntax carries a `volume` block: `volume: {subpath: base}` mounts a SUBDIRECTORY of the volume rather than its root, so a clean deployment fails to mount and an existing pgdata presents `base/` as /var/lib/postgresql -- PostgreSQL finds no data directory and does not start. And an ADDED mount is not a subset violation at all: verified that a second entry mounting /var/run/docker.sock into the backend passed every row. Comparing the list whole is the only form that says \"these mounts and no others\"."
     },
     {
       "model": "release",
@@ -894,28 +916,30 @@
     {
       "model": "release",
       "path": "services.backend.ports",
-      "expect": {
-        "$every": {
-          "host_ip": "0.0.0.0",
+      "expect": [
+        {
+          "mode": "ingress",
           "protocol": "tcp",
           "published": "4005",
-          "target": 4000
+          "target": 4000,
+          "host_ip": "0.0.0.0"
         }
-      },
-      "why": "#631: intentionally public, unlike prod's loopback binding -- this bundle has no bundled reverse proxy, so publishing directly is how it is reached. Recorded so the difference reads as a deliberate choice rather than drift, and so pairing it with a non-zero TRUST_PROXY_HOPS fails this contract."
+      ],
+      "why": "#631: the WHOLE port list, compared exactly. Same reason as the mount rows: a subset check cannot say \"and nothing else\". `mode` is the field it was blind to -- `mode: host` publishes the container port directly on the host rather than through Compose's ingress path, changing how the binding this row exists to pin is actually made, while host_ip, published and target all still read correctly."
     },
     {
       "model": "release",
       "path": "services.frontend.ports",
-      "expect": {
-        "$every": {
-          "host_ip": "0.0.0.0",
+      "expect": [
+        {
+          "mode": "ingress",
           "protocol": "tcp",
           "published": "3005",
-          "target": 3000
+          "target": 3000,
+          "host_ip": "0.0.0.0"
         }
-      },
-      "why": "#631: same -- the bundle publishes the frontend directly."
+      ],
+      "why": "#631: the WHOLE port list, compared exactly. Same reason as the mount rows: a subset check cannot say \"and nothing else\". `mode` is the field it was blind to -- `mode: host` publishes the container port directly on the host rather than through Compose's ingress path, changing how the binding this row exists to pin is actually made, while host_ip, published and target all still read correctly."
     },
     {
       "model": "release",
@@ -1210,28 +1234,30 @@
     {
       "model": "release",
       "path": "services.db.volumes",
-      "expect": {
-        "$contains": {
-          "type": "volume",
-          "read_only": false,
+      "expect": [
+        {
           "source": "pgdata",
-          "target": "/var/lib/postgresql"
+          "target": "/var/lib/postgresql",
+          "type": "volume",
+          "volume": {},
+          "read_only": false
         }
-      },
-      "why": "#631: as in prod, the top-level declaration is not the mount, and `type` is pinned so a long-syntax `type: bind` with the same source and target cannot pass in its place. On the bundle this is worse: an upgrade that drops or rebinds the mount discards a real deployment's database rather than a local test one."
+      ],
+      "why": "#631: the WHOLE mount list, compared exactly. A subset check names the fields it cares about and is blind to the rest, which hides two different edits. Compose's long syntax carries a `volume` block: `volume: {subpath: base}` mounts a SUBDIRECTORY of the volume rather than its root, so a clean deployment fails to mount and an existing pgdata presents `base/` as /var/lib/postgresql -- PostgreSQL finds no data directory and does not start. And an ADDED mount is not a subset violation at all: verified that a second entry mounting /var/run/docker.sock into the backend passed every row. Comparing the list whole is the only form that says \"these mounts and no others\"."
     },
     {
       "model": "release",
       "path": "services.backend.volumes",
-      "expect": {
-        "$contains": {
-          "type": "volume",
-          "read_only": false,
+      "expect": [
+        {
           "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}",
-          "target": "/app/uploads"
+          "target": "/app/uploads",
+          "type": "volume",
+          "volume": {},
+          "read_only": false
         }
-      },
-      "why": "#631: as in prod -- without the mount every attachment uploaded to a deployment is lost on the next image bump."
+      ],
+      "why": "#631: the WHOLE mount list, compared exactly. A subset check names the fields it cares about and is blind to the rest, which hides two different edits. Compose's long syntax carries a `volume` block: `volume: {subpath: base}` mounts a SUBDIRECTORY of the volume rather than its root, so a clean deployment fails to mount and an existing pgdata presents `base/` as /var/lib/postgresql -- PostgreSQL finds no data directory and does not start. And an ADDED mount is not a subset violation at all: verified that a second entry mounting /var/run/docker.sock into the backend passed every row. Comparing the list whole is the only form that says \"these mounts and no others\"."
     },
     {
       "model": "prod",

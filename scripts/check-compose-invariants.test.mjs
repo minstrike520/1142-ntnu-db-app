@@ -1185,3 +1185,89 @@ test("every service on both models has a networks row of its own", needsDocker, 
   }
   assert.deepEqual(missing, [], "services whose network attachment nothing pins");
 });
+
+test("a subset row cannot say \"and nothing else\"", () => {
+  // Why the ports and volumes rows compare whole lists instead of using
+  // $contains. The subset form is blind twice over: to fields it does not name,
+  // and to elements added beside the one it matched.
+  const mount = { type: "volume", read_only: false, source: "pgdata", target: "/var/lib/postgresql", volume: {} };
+  const subset = [
+    { model: "prod", path: "services.db.volumes", expect: { $contains: { type: "volume", source: "pgdata", target: "/var/lib/postgresql" } }, why: "#631" },
+  ];
+  const exact = [{ model: "prod", path: "services.db.volumes", expect: [mount], why: "#631" }];
+
+  const withSubpath = baseModel();
+  withSubpath.services.db = { volumes: [{ ...mount, volume: { subpath: "base" } }] };
+  assert.deepEqual(evaluateAgainst(subset, { prod: withSubpath }), [], "the subset row is blind to volume.subpath");
+  assert.equal(evaluateAgainst(exact, { prod: withSubpath }).length, 1);
+
+  const withExtra = baseModel();
+  withExtra.services.db = { volumes: [mount, { type: "bind", read_only: false, source: "/var/run/docker.sock", target: "/var/run/docker.sock" }] };
+  assert.deepEqual(evaluateAgainst(subset, { prod: withExtra }), [], "the subset row is blind to an added mount");
+  assert.equal(evaluateAgainst(exact, { prod: withExtra }).length, 1);
+});
+
+test("every ports and volumes row on both models compares the whole list", needsDocker, () => {
+  // Keeps the decision from being undone one row at a time: these lists are
+  // fully known, so nothing here may go back to a subset match.
+  const rendered = renderRealModels();
+  const rows = checkedInContract();
+  const offenders = [];
+  for (const [modelKey, model] of Object.entries(rendered)) {
+    for (const [service, definition] of Object.entries(model.services)) {
+      for (const kind of ["ports", "volumes"]) {
+        if (definition[kind] === undefined) continue;
+        const path = `services.${service}.${kind}`;
+        const row = rows.find((candidate) => candidate.model === modelKey && candidate.path === path);
+        if (!row) offenders.push(`${modelKey} ${path} (no row)`);
+        else if (!Array.isArray(row.expect)) offenders.push(`${modelKey} ${path} (not compared whole)`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, []);
+});
+
+test("the checked-in contract catches a stateful mount redirected to a subpath", needsDocker, () => {
+  // `volume: {subpath: base}` mounts a subdirectory rather than the volume
+  // root: a clean deployment cannot mount it, and an existing pgdata presents
+  // `base/` as /var/lib/postgresql, so PostgreSQL finds no data directory.
+  for (const [model, service] of [["prod", "db"], ["prod", "backend"], ["release", "db"], ["release", "backend"]]) {
+    const rendered = renderRealModels();
+    rendered[model].services[service].volumes[0].volume = { subpath: "base" };
+    assert.ok(
+      evaluateAgainst(checkedInContract(), rendered).some((failure) =>
+        failure.includes(`services.${service}.volumes`),
+      ),
+      `${model} ${service} subpath`,
+    );
+  }
+});
+
+test("the checked-in contract catches a mount or a port added beside the pinned one", needsDocker, () => {
+  const withSocket = renderRealModels();
+  withSocket.prod.services.backend.volumes.push({
+    type: "bind",
+    source: "/var/run/docker.sock",
+    target: "/var/run/docker.sock",
+  });
+  assert.ok(
+    evaluateAgainst(checkedInContract(), withSocket).some((failure) =>
+      /services\.backend\.volumes/.test(failure),
+    ),
+    "mounting the docker socket is root on the host",
+  );
+
+  // `mode: host` publishes the container port directly rather than through
+  // Compose's ingress path, while host_ip, published and target all still read
+  // exactly as the row expects.
+  for (const [model, service] of [["prod", "backend"], ["prod", "db"], ["release", "backend"]]) {
+    const rendered = renderRealModels();
+    rendered[model].services[service].ports[0].mode = "host";
+    assert.ok(
+      evaluateAgainst(checkedInContract(), rendered).some((failure) =>
+        failure.includes(`services.${service}.ports`),
+      ),
+      `${model} ${service} port mode`,
+    );
+  }
+});
