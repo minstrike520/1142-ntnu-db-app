@@ -422,6 +422,30 @@ test("a service behind a profile is rejected, though `config` still renders it",
   assert.match(failures[0], /"manual"/);
 });
 
+test("a whole-object row catches any key added to it, not just known ones", () => {
+  // Networks and volumes are small, fully-known objects, and several of their
+  // keys break production by their mere presence: `external` stops `up`
+  // creating the resource, `internal` cuts off the only ingress. Enumerating
+  // them one at a time means a new round for every key nobody thought of, so
+  // the object is pinned entire.
+  const contract = [
+    { model: "prod", path: "networks.default", expect: { name: "near-chat_default", internal: false }, why: "#631" },
+  ];
+  const clean = baseModel();
+  clean.networks = { default: { name: "near-chat_default" } };
+  assert.deepEqual(evaluateAgainst(contract, { prod: clean }), []);
+
+  for (const extra of [{ external: true }, { attachable: true }, { enable_ipv6: true }, { driver: "macvlan" }]) {
+    const tampered = baseModel();
+    tampered.networks = { default: { name: "near-chat_default", ...extra } };
+    assert.equal(
+      evaluateAgainst(contract, { prod: tampered }).length,
+      1,
+      `expected ${JSON.stringify(extra)} to fail the whole-object row`,
+    );
+  }
+});
+
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
   // render modes; a row must not pass or fail on that.
@@ -590,6 +614,27 @@ test("the checked-in contract catches a published port aimed at the wrong contai
   );
 });
 
+test("the checked-in contract catches an external network or volume", needsDocker, () => {
+  // `external: true` means `up` does not create the resource: a clean host
+  // fails outright, and a host where another stack owns that name silently
+  // adopts it instead.
+  for (const model of ["prod", "release"]) {
+    const net = renderRealModels();
+    net[model].networks.default.external = true;
+    assert.ok(
+      evaluateAgainst(checkedInContract(), net).some((f) => new RegExp(`${MODELS[model]} networks\\.default`).test(f)),
+      `${model} network`,
+    );
+
+    const vol = renderRealModels();
+    vol[model].volumes.pgdata.external = true;
+    assert.ok(
+      evaluateAgainst(checkedInContract(), vol).some((f) => new RegExp(`${MODELS[model]} volumes\\.pgdata`).test(f)),
+      `${model} volume`,
+    );
+  }
+});
+
 test("the checked-in contract catches a service put behind a profile", needsDocker, () => {
   for (const [model, service] of [["prod", "tunnel"], ["release", "migrate"]]) {
     const rendered = renderRealModels();
@@ -610,18 +655,6 @@ test("the checked-in contract catches migrate losing its own DATABASE_URL", need
     failures.some((failure) => /services\.migrate\.environment\.DATABASE_URL/.test(failure)),
     failures.join("\n"),
   );
-});
-
-test("the checked-in contract catches the default network turned internal", needsDocker, () => {
-  for (const model of ["prod", "release"]) {
-    const rendered = renderRealModels();
-    rendered[model].networks.default.internal = true;
-    const failures = evaluateAgainst(checkedInContract(), rendered);
-    assert.ok(
-      failures.some((failure) => new RegExp(`${MODELS[model]} networks\\.default\\.internal`).test(failure)),
-      `${model}: ${failures.join("\n")}`,
-    );
-  }
 });
 
 test("the checked-in contract catches a read-only stateful mount", needsDocker, () => {
@@ -658,7 +691,7 @@ test("the checked-in contract catches a renamed engine volume", needsDocker, () 
     rendered[model].volumes.pgdata.name = "near-chat-v2-pgdata";
     const failures = evaluateAgainst(checkedInContract(), rendered);
     assert.ok(
-      failures.some((failure) => new RegExp(`${MODELS[model]} volumes\\.pgdata\\.name`).test(failure)),
+      failures.some((failure) => new RegExp(`${MODELS[model]} volumes\\.pgdata`).test(failure)),
       `${model}: ${failures.join("\n")}`,
     );
   }

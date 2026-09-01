@@ -43,37 +43,70 @@
     {
       "model": "prod",
       "path": "services",
-      "expect": { "$keys": ["backend", "db", "frontend", "redis", "tunnel"] },
+      "expect": {
+        "$keys": [
+          "backend",
+          "db",
+          "frontend",
+          "redis",
+          "tunnel"
+        ]
+      },
       "why": "#631: the service set is the frame every other prod row is written against. A service added or renamed without updating this contract would otherwise be governed by nothing."
     },
     {
       "model": "prod",
       "path": "services.db.ports",
-      "expect": { "$every": { "host_ip": "127.0.0.1", "protocol": "tcp", "published": "5435", "target": 5432 } },
+      "expect": {
+        "$every": {
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp",
+          "published": "5435",
+          "target": 5432
+        }
+      },
       "why": "#631: cloudflared is the only ingress (docker-compose.prod.yml:1-9). A database reachable off-host bypasses the tunnel entirely, and this binding is also what makes trusting X-Forwarded-For safe -- see TRUST_PROXY_HOPS below."
     },
     {
       "model": "prod",
       "path": "services.backend.ports",
-      "expect": { "$every": { "host_ip": "127.0.0.1", "protocol": "tcp", "published": "4005", "target": 4000 } },
+      "expect": {
+        "$every": {
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp",
+          "published": "4005",
+          "target": 4000
+        }
+      },
       "why": "#631: same loopback-only ingress rule. Published on 0.0.0.0 the API would be reachable without the tunnel, and TRUST_PROXY_HOPS=1 would then let any caller forge X-Forwarded-For and choose its own rate-limit bucket (#413)."
     },
     {
       "model": "prod",
       "path": "services.frontend.ports",
-      "expect": { "$every": { "host_ip": "127.0.0.1", "protocol": "tcp", "published": "3005", "target": 3000 } },
+      "expect": {
+        "$every": {
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp",
+          "published": "3005",
+          "target": 3000
+        }
+      },
       "why": "#631: same loopback-only ingress rule; the documented local production walkthrough browses http://localhost:3005 and needs nothing wider."
     },
     {
       "model": "prod",
       "path": "services.redis.ports",
-      "expect": { "$absent": true },
+      "expect": {
+        "$absent": true
+      },
       "why": "#631: this Redis has no password, so reachability from the compose network only IS its access control (docker-compose.prod.yml:29-34). Publishing any host port for it is never the right fix."
     },
     {
       "model": "prod",
       "path": "services.tunnel.ports",
-      "expect": { "$absent": true },
+      "expect": {
+        "$absent": true
+      },
       "why": "#631: cloudflared dials out to Cloudflare and accepts nothing inbound; a published port on it would be a second, unauthenticated ingress."
     },
     {
@@ -151,80 +184,128 @@
     {
       "model": "prod",
       "path": "services.*.profiles",
-      "expect": { "$every": [] },
+      "expect": {
+        "$every": []
+      },
       "why": "#631: no service may sit behind a profile. `docker compose config` renders a profiled service exactly as before, so the service-set, network and restart rows all still pass -- but `up` without a matching `--profile` skips it. Verified: `profiles: [manual]` on the tunnel drops it from `config --services`, so the documented production command starts every service except the only ingress, and nothing reaches the site."
     },
     {
       "model": "prod",
       "path": "services.*.networks",
-      "expect": { "$every": ["default"] },
+      "expect": {
+        "$every": [
+          "default"
+        ]
+      },
       "why": "#631: cloudflared reaches frontend and backend over this one compose network rather than any published port (docker-compose.prod.yml:1-9), and backend reaches db and redis the same way. A service moved onto a second network, or given `network_mode` instead, is unreachable from the only ingress -- with every port, restart and image row still green. Written as `*` so a service added later is covered without anyone remembering to add a row."
     },
     {
       "model": "prod",
-      "path": "networks.default.internal",
-      "expect": false,
-      "why": "#631: an internal network is externally isolated, so cloudflared -- the only ingress -- cannot dial out to Cloudflare and the entire site goes offline. The network still exists, is still named `default`, and every service is still attached to it, so the two rows above stay green. Compose emits `internal` only when set, so this is normalized to a boolean like `host_ip` and `read_only`."
-    },
-    {
-      "model": "prod",
       "path": "networks",
-      "expect": { "$keys": ["default"] },
+      "expect": {
+        "$keys": [
+          "default"
+        ]
+      },
       "why": "#631: one network, so the row above means what it says. Declaring a second one is how services start being split across networks that cannot see each other."
     },
     {
       "model": "prod",
-      "path": "volumes.pgdata.name",
-      "expect": "near-chat_pgdata",
-      "why": "#631: catches an explicit `pgdata: { name: ... }` override, which keeps the logical key, mount source, target and type all identical while Compose mounts a brand-new volume and the existing database appears to vanish. NOT authoritative about the `near-chat_` prefix on this model: the checker renders with `-p near-chat`, while a real `docker compose -f docker-compose.prod.yml up -d` derives the project name from the checkout directory, so the same file in a differently-named directory really mounts `<dir>_pgdata`. prod has no `name:` key to pin that, and adding one changes production behavior -- it belongs to #632, not here."
-    },
-    {
-      "model": "prod",
-      "path": "volumes.app_uploads.name",
-      "expect": "near-chat_app_uploads",
-      "why": "#631: same as pgdata on this model, including the same `-p` caveat -- an explicit name override is caught, the project-derived prefix is not. A renamed engine volume leaves every attachment in the old one, which nothing then mounts."
+      "path": "networks.default",
+      "expect": {
+        "name": "near-chat_default",
+        "internal": false
+      },
+      "why": "#631: the default network asserted WHOLE, not key by key. `external: true` alone stops `up` creating it -- on a clean host the deploy fails outright, and where another stack owns a network of that name the services silently join it. `internal: true` cuts cloudflared off from Cloudflare. Rather than enumerate those keys one at a time, and the next one after that, the object is small and fully known, so it is pinned entirely: any key added here has to be added to this row too, with a reason."
     },
     {
       "model": "prod",
       "path": "volumes",
-      "expect": { "$keys": ["app_uploads", "pgdata"] },
+      "expect": {
+        "$keys": [
+          "app_uploads",
+          "pgdata"
+        ]
+      },
       "why": "#631: the two stateful volumes. A renamed volume silently starts an empty one, which for pgdata means an empty database and for app_uploads means every existing attachment 404s."
     },
     {
       "model": "prod",
+      "path": "volumes.pgdata",
+      "expect": {
+        "name": "near-chat_pgdata"
+      },
+      "why": "#631: the pgdata volume asserted WHOLE. `external: true` stops `up` creating it -- a clean host fails, and a host with a same-named volume from another stack silently adopts that one instead. `name` decides which engine volume is mounted at all. Pinned entirely for the same reason as the network above."
+    },
+    {
+      "model": "prod",
+      "path": "volumes.app_uploads",
+      "expect": {
+        "name": "near-chat_app_uploads"
+      },
+      "why": "#631: the app_uploads volume asserted WHOLE. `external: true` stops `up` creating it -- a clean host fails, and a host with a same-named volume from another stack silently adopts that one instead. `name` decides which engine volume is mounted at all. Pinned entirely for the same reason as the network above."
+    },
+    {
+      "model": "prod",
       "path": "services.db.volumes",
-      "expect": { "$contains": { "type": "volume", "read_only": false, "source": "pgdata", "target": "/var/lib/postgresql" } },
+      "expect": {
+        "$contains": {
+          "type": "volume",
+          "read_only": false,
+          "source": "pgdata",
+          "target": "/var/lib/postgresql"
+        }
+      },
       "why": "#631: a top-level `pgdata:` declaration only says the volume exists. Deleting the mount, or moving its target off PGDATA, leaves the declaration in place and the database running on the container filesystem -- so every rebuild starts an empty database while the contract still passes. `type` is pinned too: rewritten as a long-syntax `type: bind` with the same source and target, the named volume goes unused and the bind path is resolved relative to wherever the compose file sits, so deploying from another directory silently starts an empty database."
     },
     {
       "model": "prod",
       "path": "services.backend.volumes",
-      "expect": { "$contains": { "type": "volume", "read_only": false, "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}", "target": "/app/uploads" } },
+      "expect": {
+        "$contains": {
+          "type": "volume",
+          "read_only": false,
+          "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}",
+          "target": "/app/uploads"
+        }
+      },
       "why": "#631: same gap as pgdata. Without this mount every uploaded attachment lives in the container layer and 404s after the next rebuild, with the app_uploads declaration still present and unused."
     },
-
     {
       "model": "release",
       "path": "services",
-      "expect": { "$keys": ["backend", "db", "frontend", "migrate"] },
+      "expect": {
+        "$keys": [
+          "backend",
+          "db",
+          "frontend",
+          "migrate"
+        ]
+      },
       "why": "#631: the service set is the frame every other release row is written against, and `migrate` in particular is what makes the bundle self-applying (#558)."
     },
     {
       "model": "release",
       "path": "services.backend.build",
-      "expect": { "$absent": true },
+      "expect": {
+        "$absent": true
+      },
       "why": "#558: the release bundle ships no source. A `build:` here would make the bundle silently rebuild from whatever happened to be in the extraction directory instead of running the image the release published."
     },
     {
       "model": "release",
       "path": "services.frontend.build",
-      "expect": { "$absent": true },
+      "expect": {
+        "$absent": true
+      },
       "why": "#558: same -- the frontend image is published by the release workflow and must not be rebuilt at deploy time."
     },
     {
       "model": "release",
       "path": "services.db.image",
-      "expect": { "$matches": "^postgres:18-alpine@sha256:[0-9a-f]{64}$" },
+      "expect": {
+        "$matches": "^postgres:18-alpine@sha256:[0-9a-f]{64}$"
+      },
       "why": "#527: digest-pinned so the bundle is reproducible. A floating tag means two deployments of the same release can run different Postgres builds."
     },
     {
@@ -350,19 +431,35 @@
     {
       "model": "release",
       "path": "services.db.ports",
-      "expect": { "$absent": true },
+      "expect": {
+        "$absent": true
+      },
       "why": "#631: unlike prod, the release bundle publishes no database port at all. The backend reaches it over the compose network, and an exposed Postgres on a real deployment host is directly reachable from the internet."
     },
     {
       "model": "release",
       "path": "services.backend.ports",
-      "expect": { "$every": { "host_ip": "0.0.0.0", "protocol": "tcp", "published": "4005", "target": 4000 } },
+      "expect": {
+        "$every": {
+          "host_ip": "0.0.0.0",
+          "protocol": "tcp",
+          "published": "4005",
+          "target": 4000
+        }
+      },
       "why": "#631: intentionally public, unlike prod's loopback binding -- this bundle has no bundled reverse proxy, so publishing directly is how it is reached. Recorded so the difference reads as a deliberate choice rather than drift, and so pairing it with a non-zero TRUST_PROXY_HOPS fails this contract."
     },
     {
       "model": "release",
       "path": "services.frontend.ports",
-      "expect": { "$every": { "host_ip": "0.0.0.0", "protocol": "tcp", "published": "3005", "target": 3000 } },
+      "expect": {
+        "$every": {
+          "host_ip": "0.0.0.0",
+          "protocol": "tcp",
+          "published": "3005",
+          "target": 3000
+        }
+      },
       "why": "#631: same -- the bundle publishes the frontend directly."
     },
     {
@@ -392,55 +489,91 @@
     {
       "model": "release",
       "path": "services.*.profiles",
-      "expect": { "$every": [] },
+      "expect": {
+        "$every": []
+      },
       "why": "#631: same rule. A profiled `migrate` would be skipped by the bundle's own `up`, and the backend would then wait forever on `service_completed_successfully`."
     },
     {
       "model": "release",
       "path": "services.*.networks",
-      "expect": { "$every": ["default"] },
+      "expect": {
+        "$every": [
+          "default"
+        ]
+      },
       "why": "#631: the bundle has no tunnel, but the same connectivity is load-bearing: migrate and backend reach db, and frontend reaches backend, over this one network. A service split onto another network, or given `network_mode`, fails at runtime only -- nothing static catches it otherwise."
     },
     {
       "model": "release",
-      "path": "networks.default.internal",
-      "expect": false,
-      "why": "#631: same isolation. The bundle publishes its ports directly, and an internal network takes that away while every other network row still passes."
-    },
-    {
-      "model": "release",
       "path": "networks",
-      "expect": { "$keys": ["default"] },
+      "expect": {
+        "$keys": [
+          "default"
+        ]
+      },
       "why": "#631: one network, so the row above means what it says -- as in prod."
     },
     {
       "model": "release",
-      "path": "volumes.pgdata.name",
-      "expect": "near-chat_pgdata",
-      "why": "#631: the engine-level volume name, not just the logical key. Worse on the bundle than in prod: an upgrade that renames the engine volume silently starts a real deployment on an empty database while looking like a clean deploy."
-    },
-    {
-      "model": "release",
-      "path": "volumes.app_uploads.name",
-      "expect": "near-chat_app_uploads",
-      "why": "#631: same as pgdata -- a renamed engine volume leaves the attachments in the old one, which nothing then mounts."
+      "path": "networks.default",
+      "expect": {
+        "name": "near-chat_default",
+        "internal": false
+      },
+      "why": "#631: same whole-object rule as prod. The bundle is deployed onto hosts this repo never sees, so a network it does not create itself is the difference between a clean deploy and one that fails or joins a stranger's network."
     },
     {
       "model": "release",
       "path": "volumes",
-      "expect": { "$keys": ["app_uploads", "pgdata"] },
+      "expect": {
+        "$keys": [
+          "app_uploads",
+          "pgdata"
+        ]
+      },
       "why": "#631: the same two stateful volumes as prod. A rename in the bundle silently starts an empty database on an upgrade of an existing deployment."
     },
     {
       "model": "release",
+      "path": "volumes.pgdata",
+      "expect": {
+        "name": "near-chat_pgdata"
+      },
+      "why": "#631: same whole-object rule -- on the bundle, adopting a stranger's pgdata volume or creating a new one is the difference between an upgrade and data loss."
+    },
+    {
+      "model": "release",
+      "path": "volumes.app_uploads",
+      "expect": {
+        "name": "near-chat_app_uploads"
+      },
+      "why": "#631: same whole-object rule -- on the bundle, adopting a stranger's app_uploads volume or creating a new one is the difference between an upgrade and data loss."
+    },
+    {
+      "model": "release",
       "path": "services.db.volumes",
-      "expect": { "$contains": { "type": "volume", "read_only": false, "source": "pgdata", "target": "/var/lib/postgresql" } },
+      "expect": {
+        "$contains": {
+          "type": "volume",
+          "read_only": false,
+          "source": "pgdata",
+          "target": "/var/lib/postgresql"
+        }
+      },
       "why": "#631: as in prod, the top-level declaration is not the mount, and `type` is pinned so a long-syntax `type: bind` with the same source and target cannot pass in its place. On the bundle this is worse: an upgrade that drops or rebinds the mount discards a real deployment's database rather than a local test one."
     },
     {
       "model": "release",
       "path": "services.backend.volumes",
-      "expect": { "$contains": { "type": "volume", "read_only": false, "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}", "target": "/app/uploads" } },
+      "expect": {
+        "$contains": {
+          "type": "volume",
+          "read_only": false,
+          "source": "${UPLOADS_MOUNT_SOURCE:-app_uploads}",
+          "target": "/app/uploads"
+        }
+      },
       "why": "#631: as in prod -- without the mount every attachment uploaded to a deployment is lost on the next image bump."
     }
   ]
