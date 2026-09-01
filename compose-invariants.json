@@ -201,6 +201,70 @@
     },
     {
       "model": "prod",
+      "path": "services.backend.environment",
+      "expect": {
+        "$keys": [
+          "ATTACHMENT_ALLOWED_EXTENSIONS",
+          "ATTACHMENT_ALLOWED_MIME_TYPES",
+          "ATTACHMENT_MAX_BYTES",
+          "ATTACHMENT_TYPE_RESTRICTION_ENABLED",
+          "CI",
+          "CORS_ORIGINS",
+          "DATABASE_URL",
+          "INSTANCE_ID",
+          "JWT_EXPIRES_IN",
+          "JWT_SECRET",
+          "LOG_LEVEL",
+          "MAX_SESSIONS_PER_USER",
+          "NODE_ENV",
+          "PORT",
+          "PRESENCE_GRACE_MS",
+          "PRESENCE_TTL_MS",
+          "RATE_LIMIT_DISABLED",
+          "REDIS_URL",
+          "TRUST_PROXY_HOPS",
+          "TYPING_TTL_MS"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "prod",
+      "path": "services.db.environment",
+      "expect": {
+        "$keys": [
+          "POSTGRES_DB",
+          "POSTGRES_PASSWORD",
+          "POSTGRES_USER"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "prod",
+      "path": "services.frontend.environment",
+      "expect": {
+        "$keys": [
+          "ALLOWED_DEV_ORIGINS",
+          "CI",
+          "NEXT_PUBLIC_API_URL",
+          "NODE_ENV"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "prod",
+      "path": "services.tunnel.environment",
+      "expect": {
+        "$keys": [
+          "TUNNEL_TOKEN"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "prod",
       "path": "networks",
       "expect": {
         "$keys": [
@@ -503,6 +567,68 @@
         ]
       },
       "why": "#631: the bundle has no tunnel, but the same connectivity is load-bearing: migrate and backend reach db, and frontend reaches backend, over this one network. A service split onto another network, or given `network_mode`, fails at runtime only -- nothing static catches it otherwise."
+    },
+    {
+      "model": "release",
+      "path": "services.backend.environment",
+      "expect": {
+        "$keys": [
+          "ATTACHMENT_ALLOWED_EXTENSIONS",
+          "ATTACHMENT_ALLOWED_MIME_TYPES",
+          "ATTACHMENT_MAX_BYTES",
+          "ATTACHMENT_TYPE_RESTRICTION_ENABLED",
+          "CORS_ORIGINS",
+          "DATABASE_URL",
+          "INSTANCE_ID",
+          "JWT_EXPIRES_IN",
+          "JWT_SECRET",
+          "MAX_SESSIONS_PER_USER",
+          "NODE_ENV",
+          "PORT",
+          "PRESENCE_GRACE_MS",
+          "PRESENCE_TTL_MS",
+          "RATE_LIMIT_DISABLED",
+          "REDIS_URL",
+          "TRUST_PROXY_HOPS",
+          "TYPING_TTL_MS"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "release",
+      "path": "services.db.environment",
+      "expect": {
+        "$keys": [
+          "POSTGRES_DB",
+          "POSTGRES_PASSWORD",
+          "POSTGRES_USER"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "release",
+      "path": "services.frontend.environment",
+      "expect": {
+        "$keys": [
+          "ALLOWED_DEV_ORIGINS",
+          "NEXT_PUBLIC_API_URL",
+          "NODE_ENV"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
+    },
+    {
+      "model": "release",
+      "path": "services.migrate.environment",
+      "expect": {
+        "$keys": [
+          "DATABASE_URL",
+          "NODE_ENV"
+        ]
+      },
+      "why": "#631: the environment KEY SET, asserted structurally. Values are pinned only where they are load-bearing (credentials, literals, cross-references), because most of these are `${VAR:-default}` pass-throughs whose defaults legitimately change. But a key that disappears, appears or is renamed is never routine: deleting prod's TUNNEL_TOKEN leaves cloudflared with no token, and it is the only ingress. That failure is invisible to every value row, because there is no value left to check."
     },
     {
       "model": "release",

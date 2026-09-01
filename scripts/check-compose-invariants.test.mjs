@@ -446,6 +446,34 @@ test("a whole-object row catches any key added to it, not just known ones", () =
   }
 });
 
+test("the environment key set is structural; values are pinned only where load-bearing", () => {
+  // Most of these are ${VAR:-default} pass-throughs whose defaults legitimately
+  // change, so pinning every value would fail on ordinary product changes. But a
+  // key appearing, disappearing or being renamed is never routine -- and a
+  // deleted key is invisible to every value row, because no value is left to
+  // check. Deleting prod's TUNNEL_TOKEN leaves the only ingress with no token.
+  const contract = [
+    { model: "prod", path: "services.tunnel.environment", expect: { $keys: ["TUNNEL_TOKEN"] }, why: "#631" },
+  ];
+  const present = baseModel();
+  present.services.tunnel = { environment: ["TUNNEL_TOKEN=${TUNNEL_TOKEN}"] };
+  assert.deepEqual(evaluateAgainst(contract, { prod: present }), []);
+
+  const dropped = baseModel();
+  dropped.services.tunnel = {};
+  assert.equal(evaluateAgainst(contract, { prod: dropped }).length, 1);
+
+  // Renamed: still one key, still bound to the same variable, still wrong.
+  const renamed = baseModel();
+  renamed.services.tunnel = { environment: ["CF_TOKEN=${TUNNEL_TOKEN}"] };
+  assert.equal(evaluateAgainst(contract, { prod: renamed }).length, 1);
+
+  // An added key is drift too -- this is what catches a stray debug switch.
+  const added = baseModel();
+  added.services.tunnel = { environment: ["TUNNEL_TOKEN=${TUNNEL_TOKEN}", "DEBUG_BACKDOOR=1"] };
+  assert.equal(evaluateAgainst(contract, { prod: added }).length, 1);
+});
+
 test("compares objects independently of Compose's key order", () => {
   // Compose does not promise a stable key order and already varies it between
   // render modes; a row must not pass or fail on that.
@@ -611,6 +639,27 @@ test("the checked-in contract catches a published port aimed at the wrong contai
   assert.ok(
     failures.some((failure) => /docker-compose\.release\.yml services\.frontend\.ports/.test(failure)),
     failures.join("\n"),
+  );
+});
+
+test("the checked-in contract catches environment key drift on either model", needsDocker, () => {
+  // The reported case, plus one nobody reported: an added key.
+  const dropped = renderRealModels();
+  delete dropped.prod.services.tunnel.environment;
+  assert.ok(
+    evaluateAgainst(checkedInContract(), dropped).some((f) =>
+      /docker-compose\.prod\.yml services\.tunnel\.environment/.test(f),
+    ),
+    "prod tunnel TUNNEL_TOKEN dropped",
+  );
+
+  const added = renderRealModels();
+  added.release.services.backend.environment.DEBUG_BACKDOOR = "1";
+  assert.ok(
+    evaluateAgainst(checkedInContract(), added).some((f) =>
+      /docker-compose\.release\.yml services\.backend\.environment/.test(f),
+    ),
+    "release backend gained a key",
   );
 });
 
