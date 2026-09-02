@@ -1,24 +1,6 @@
 /**
  * Schema migration runner built on Bun.SQL.
- *
- * Replaces the `node-pg-migrate` CLI, which was the last piece of the backend
- * that required a Node runtime and the only reason `pg` was still a dependency.
- * All migrations under `migrations/` are plain SQL, so none of node-pg-migrate's
- * JavaScript `pgm` builder API needs reimplementing — this runner only has to
- * order the files, split each one into its up/down halves, and keep the version
- * table in sync.
- *
- * Bookkeeping is deliberately byte-compatible with node-pg-migrate v9: same
- * `pgmigrations` table shape, same recorded names, same ordering rules, same
- * advisory lock id and the same all-or-nothing transaction. An existing
- * database migrated by the old CLI must see this runner as a no-op, and vice
- * versa — anything else would re-run or skip migrations on deployed stacks.
- *
- * The database a migration alters is an explicit input, not something picked up
- * from the ambient environment: `--database-url` names it in the command
- * itself, and a target outside `LOCAL_DATABASE_HOSTS` has to be confirmed
- * before anything is opened or locked. `DATABASE_URL` still works as a
- * fallback, so the compose and CI flows are unchanged.
+ * Compatible with node-pg-migrate table format (`pgmigrations`).
  *
  * Usage:
  *   bun src/models/migrate.ts up [--database-url=<url>] [--yes]
@@ -31,39 +13,24 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describeDatabaseTarget } from "../utils/describeDatabaseTarget";
 
-// This runner has to live under src/, not scripts/: Dockerfile.prod's runner
-// stage copies only `backend/src` and `backend/migrations`, and its CMD runs
-// `migrate:up` before the app. src/ is also what eslint and tsc are scoped to.
-//
-// Resolved from `__dirname`, not cwd, so the command works from anywhere. In
-// the production image that is /app/src/models -> /app/migrations.
-// `__dirname` rather than `import.meta`: tsconfig.json compiles with "module":
-// "commonjs", which rejects import.meta at typecheck time. Bun provides both.
+// Migration files location relative to compiled script.
 const MIGRATIONS_DIR = path.resolve(__dirname, "../../migrations");
 const MIGRATIONS_TABLE = '"public"."pgmigrations"';
 
-// node-pg-migrate's own default lock id. Keeping it means a deployment that
-// still runs the old CLI somewhere cannot migrate concurrently with this one.
+// Advisory lock ID to ensure only one migration runs at a time.
 const ADVISORY_LOCK_ID = 7241865325823964;
 
-// The node-pg-migrate SQL template, plus the trailing newline that 15 of the 16
-// existing migrations already carry — the upstream template omits it, which
-// leaves a "\ No newline at end of file" marker on every future diff.
+// Default SQL migration template with Up and Down sections.
 const MIGRATION_TEMPLATE = "-- Up Migration\n\n-- Down Migration\n";
 
 export interface MigrationFile {
-  /** Basename without extension — this is what lands in `pgmigrations.name`. */
+  /** Migration name without .sql extension. */
   name: string;
   fileName: string;
   filePath: string;
 }
 
-/**
- * Numeric value of everything before the first non-digit, mirroring
- * node-pg-migrate. A 17-digit prefix is a UTC timestamp rather than a plain
- * number; `create` below never emits one, but a hand-written file may, and
- * ordering has to agree with the old CLI either way.
- */
+/** Extracts the numeric or timestamp prefix from a migration filename. */
 export function getNumericPrefix(fileName: string): number {
   const prefix = /^(\d+)/.exec(fileName)?.[0] ?? "";
   const value = Number(prefix);
@@ -88,13 +55,7 @@ export function getNumericPrefix(fileName: string): number {
   return value;
 }
 
-/**
- * Order migrations by numeric prefix, falling back to a locale comparison when
- * two files share one. `migrations/` really does contain such a pair
- * (`2026053000000_create-friendships-and-blocks` and
- * `2026053000000_emergency_contacts`), so the tie-break is load-bearing: the
- * options below are exactly what node-pg-migrate passes to `localeCompare`.
- */
+/** Sorts migration files by numeric prefix, breaking ties alphabetically. */
 export function compareMigrationFileNames(a: string, b: string): number {
   return (
     getNumericPrefix(a) - getNumericPrefix(b) ||
@@ -111,12 +72,7 @@ function migrationCommentIndex(content: string, direction: "up" | "down"): numbe
   return content.search(new RegExp(`^\\s*--[\\s-]*${direction}\\s+migration`, "im"));
 }
 
-/**
- * Split a migration file on its `-- Up migration` / `-- Down migration`
- * markers. The marker comment stays attached to the SQL it introduces, matching
- * node-pg-migrate; a file with no down section is up-only and cannot be rolled
- * back.
- */
+/** Splits migration SQL content into Up and Down sections. */
 export function splitMigrationSql(content: string): { up: string; down: string | null } {
   const upStart = migrationCommentIndex(content, "up");
   const downStart = migrationCommentIndex(content, "down");
@@ -130,11 +86,7 @@ export function splitMigrationSql(content: string): { up: string; down: string |
   };
 }
 
-/**
- * Reject a migrations directory that has grown a file ordered *before* one
- * already applied — usually a branch merged out of order. Applying it would
- * leave the database in a state no single sequence of migrations produces.
- */
+/** Verifies that pending migrations have not been inserted before already applied migrations. */
 export function assertMigrationOrder(appliedNames: string[], fileNames: string[]): void {
   const shared = Math.min(appliedNames.length, fileNames.length);
 
@@ -219,11 +171,7 @@ export function parseMigrateArgs(argv: string[]): MigrateArgs {
   return { action: positionals[0], argument: positionals[1], databaseUrl, assumeYes };
 }
 
-/**
- * Hosts a migration may target without confirmation: the operator's own
- * machine, and the two compose service names, which resolve only inside a
- * compose network. Nothing here can name a deployed database.
- */
+/** Database hosts permitted without interactive confirmation. */
 export const LOCAL_DATABASE_HOSTS: readonly string[] = [
   "localhost",
   "127.0.0.1",
@@ -236,19 +184,13 @@ export function isLocalDatabaseTarget(connectionString: string): boolean {
   try {
     const { hostname } = new URL(connectionString);
     if (!hostname) return false;
-
-    // `new URL` keeps an IPv6 literal bracketed; the list above holds bare hosts.
     return LOCAL_DATABASE_HOSTS.includes(hostname.replace(/^\[|\]$/g, "").toLowerCase());
   } catch {
-    // An unparsable target is not demonstrably local, so it needs confirming.
     return false;
   }
 }
 
-/**
- * The target for this run: the flag first, `DATABASE_URL` only as a fallback so
- * the existing Docker and CI invocations keep working untouched.
- */
+/** Resolves migration target database URL from CLI flag or environment. */
 export function resolveDatabaseUrl(
   flagValue: string | undefined,
   source: NodeJS.ProcessEnv = process.env,
@@ -274,11 +216,7 @@ async function readConfirmation(): Promise<string> {
   return "";
 }
 
-/**
- * Stand between the operator and a database that is not theirs. Typing the
- * database name rather than `y` is deliberate: a yes/no prompt can be answered
- * without having read which target was printed.
- */
+/** Prompts for confirmation when targeting a non-local database without --yes. */
 async function confirmTarget(databaseUrl: string, assumeYes: boolean): Promise<void> {
   if (assumeYes || isLocalDatabaseTarget(databaseUrl)) {
     return;
@@ -302,12 +240,7 @@ async function confirmTarget(databaseUrl: string, assumeYes: boolean): Promise<v
   }
 }
 
-/**
- * Run `handler` against a single pinned connection holding the migration
- * advisory lock. The lock is session-scoped, so it and the migrations must
- * share one connection — a pooled client could hand the work to a different
- * session than the one that took the lock.
- */
+/** Runs migration handler inside a reserved connection holding an advisory lock. */
 async function withLockedConnection<T>(
   databaseUrl: string,
   handler: (connection: SQL) => Promise<T>,
@@ -337,9 +270,6 @@ async function withLockedConnection<T>(
   }
 }
 
-// Same DDL node-pg-migrate emits. It additionally repaired a missing PRIMARY KEY
-// on a pre-existing table, which only mattered for tables created by versions
-// old enough to omit it; anything the v9 CLI created already has one.
 async function ensureMigrationsTable(connection: SQL): Promise<void> {
   await connection.unsafe(
     `CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (id SERIAL PRIMARY KEY, name varchar(255) NOT NULL, run_on timestamp NOT NULL)`,
@@ -371,11 +301,7 @@ async function readMigrationSql(
   return down;
 }
 
-/**
- * Apply `migrations` inside one transaction. node-pg-migrate defaults to
- * `--single-transaction`, so a failure half way through a batch rolls the whole
- * batch back rather than leaving the schema partly migrated.
- */
+/** Applies a batch of migrations within a single transaction. */
 async function applyMigrations(
   connection: SQL,
   migrations: MigrationFile[],
@@ -388,9 +314,6 @@ async function applyMigrations(
       console.log(`### MIGRATION ${migration.name} (${direction.toUpperCase()}) ###`);
       await connection.unsafe(await readMigrationSql(migration, direction));
 
-      // NOW() is the transaction timestamp, so every row in a batch shares one
-      // `run_on` and `ORDER BY run_on, id` stays in application order. A
-      // client-side timestamp here would quietly break that ordering.
       await connection.unsafe(
         direction === "up"
           ? `INSERT INTO ${MIGRATIONS_TABLE} (name, run_on) VALUES ($1, NOW())`
@@ -402,8 +325,6 @@ async function applyMigrations(
     await connection.unsafe("COMMIT");
   } catch (error) {
     console.warn("> Rolling back attempted migration ...");
-    // Never let a failing ROLLBACK replace the migration error that caused it —
-    // that error is the one the operator needs to see.
     await connection
       .unsafe("ROLLBACK")
       .catch((rollbackError: Error) => console.warn(`> Rollback failed: ${rollbackError.message}`));
@@ -445,14 +366,12 @@ async function migrateDown(count: number, databaseUrl: string): Promise<void> {
 
     const migrations = await loadMigrationFiles();
     const appliedNames = await getAppliedNames(connection);
-    // Checked for `down` too, matching node-pg-migrate: its runner validates the
-    // order before it branches on direction.
     assertMigrationOrder(
       appliedNames,
       migrations.map((migration) => migration.name),
     );
 
-    // Newest first: rolling back has to undo migrations in reverse order.
+    // Rollback migrations in reverse order (newest first).
     const toRun = appliedNames.slice(-count).reverse();
     const missing = toRun.filter((name) => !migrations.some((migration) => migration.name === name));
 
@@ -482,13 +401,7 @@ async function migrateDown(count: number, databaseUrl: string): Promise<void> {
 async function createMigration(name: string): Promise<void> {
   await mkdir(MIGRATIONS_DIR, { recursive: true });
 
-  // node-pg-migrate used a bare `Date.now()`, which is a latent outage here: the
-  // existing prefixes are hand-written pseudo-dates (`2026053000000`), not epoch
-  // milliseconds, and real epoch ms does not overtake them until 2034. A bare
-  // timestamp therefore sorts *before* 14 applied migrations, and the next
-  // `migrate:up` aborts on the order check — including the one in
-  // Dockerfile.prod's CMD, which would leave the container unable to start.
-  // Stay monotonic against whatever is already on disk instead.
+  // Generate monotonically increasing prefix to guarantee ordering.
   const existing = await loadMigrationFiles();
   const highestPrefix = existing.reduce(
     (highest, migration) => Math.max(highest, getNumericPrefix(migration.fileName)),

@@ -3,32 +3,11 @@ import { DEFAULT_ACCESS_TOKEN_TTL_SECONDS, parseDurationSeconds } from '../utils
 import { parsePositiveInt } from '../utils/parsePositiveInt';
 
 /**
- * The single place this process interprets its environment.
+ * Centralized environment configuration and validation.
  *
- * Before this module the same variable was read, coerced and defaulted at
- * whichever call site happened to need it, so `TRUST_PROXY`'s meaning lived in
- * `clientIp.ts`, the rate-limit windows in `securityMiddleware.ts`, the cookie
- * lifetime in two files that had to agree, and nothing anywhere listed what the
- * backend actually reads. Everything now lands here: one declaration per
- * variable, one place to change a default, and one typed shape (`Env`) for the
- * rest of the code to consume.
- *
- * Two deliberate properties:
- *
- * - **`env()` re-reads `process.env` on every call.** The values are not cached.
- *   That keeps the lazy semantics every existing caller (and its tests) was
- *   written against, and the parse is a handful of string operations — far
- *   below the cost of the request that triggers it.
- * - **`env()` never throws.** An unusable value falls back to its default,
- *   exactly as the scattered parsers did. Surfacing those is the job of
- *   `assertStartupEnv()`, which the server entrypoint calls once so a
- *   misconfigured deployment is reported at boot instead of at the first
- *   request that happens to touch the setting.
- *
- * Parsing is hand-written rather than Zod-based: these are flat strings whose
- * accepted forms are inherited (`Number()`-style ints, `15m` durations, the
- * legacy `TRUST_PROXY` boolean), so a schema would only wrap the same bespoke
- * functions. Zod stays where it validates real request shapes.
+ * Re-reads process.env dynamically on each `env()` call. Unusable values
+ * fall back to defaults, while `assertStartupEnv()` validates configuration
+ * at boot and throws if fatal variables are missing.
  */
 
 /** Re-exported so every default is reachable from one place. */
@@ -42,7 +21,7 @@ export const DEFAULT_CORS_ORIGINS = [
   'http://localhost:5173',
 ] as const;
 
-/** Stand-in secret for non-production runs, so a fresh checkout boots. */
+/** Stand-in secret for non-production runs so local development boots easily. */
 export const DEV_JWT_SECRET = 'default-dev-secret';
 
 export const DEFAULT_REFRESH_TTL_DAYS = 14;
@@ -78,34 +57,13 @@ export const DEFAULT_TYPING_TTL_MS = 3_000;
 export const DEFAULT_SESSION_RESERVATION_TTL_MS = 10_000;
 export const DEFAULT_PRESENCE_GRACE_MS = 3_000;
 
-/**
- * How long a presence lease survives in Redis without a refresh.
- *
- * This is the bound on how long a crashed instance can leave a user showing as
- * online: nothing runs on a dead process to release its leases, so only the
- * expiry does it. Long enough that a brief Redis outage or a paused container
- * does not flap a connected user offline, short enough that a crash converges
- * well inside a person's patience. `DEFAULT_PRESENCE_REFRESH_DIVISOR` decides
- * how many refreshes fit in that window.
- */
+/** Presence lease TTL in Redis before an unrefreshed session is considered offline. */
 export const DEFAULT_PRESENCE_TTL_MS = 30_000;
 
-/**
- * How many heartbeats fit inside one lease.
- *
- * Three, so two consecutive refreshes can be lost — to a blip, a GC pause, a
- * Redis failover — before a live connection is wrongly reported offline.
- */
+/** Number of refresh heartbeats within one lease TTL window. */
 export const DEFAULT_PRESENCE_REFRESH_DIVISOR = 3;
 
-/**
- * pino's severities plus `silent`.
- *
- * Declared here rather than imported from `utils/logger` so the dependency runs
- * one way: the logger reads its configuration from this module, not the other
- * way round. `pino` itself contributes only the type, which erases at compile
- * time.
- */
+/** Log level names accepted by Pino, including 'silent'. */
 export type LogLevel = LevelWithSilent;
 
 export const LOG_LEVELS: readonly LogLevel[] = [
@@ -121,78 +79,34 @@ export const LOG_LEVELS: readonly LogLevel[] = [
 export const DEFAULT_LOG_LEVEL: LogLevel = 'info';
 
 export interface Env {
-  /** Raw `NODE_ENV`; `undefined` when unset, which is not the same as development. */
+  /** Raw `NODE_ENV`; undefined when unset. */
   nodeEnv: string | undefined;
   isProduction: boolean;
   isDevelopment: boolean;
   isTest: boolean;
 
-  /**
-   * Handed to `server.listen` unchanged.
-   *
-   * Left as `string | number` because that is what `PORT || 4000` has always
-   * produced: a non-numeric `PORT` reaches `listen` as a string, which Node
-   * treats as a pipe path. Coercing it here would change how such a value
-   * behaves, so it is only reported by `assertStartupEnv()`.
-   */
+  /** Listen port or socket/pipe path passed to server.listen. */
   port: string | number;
   corsOrigins: string[];
 
-  /**
-   * The database this process should connect to, or `undefined` when none is
-   * configured. `DATABASE_URL_TEST` wins only under the test runner — the
-   * regular compose stack also defines it, pointing at a host that only
-   * `docker-compose.test.yml` starts.
-   */
+  /** PostgreSQL connection string. Prefers DATABASE_URL_TEST under test environment. */
   databaseUrl: string | undefined;
 
-  /**
-   * Where this process reaches Redis, or `undefined` when none is configured.
-   *
-   * `undefined` is a supported deployment, not an error: Redis holds only
-   * derived state (presence leases, typing TTLs, realtime fan-out), so its
-   * absence costs cross-instance realtime and nothing else. Making it required
-   * would turn a derived-state store into a boot dependency for every REST
-   * route, which is why `envProblems` never reports it as fatal.
-   *
-   * Both `redis://` and `rediss://` are expected — the latter for a managed
-   * Redis, per the note in docker-compose.prod.yml. The host is resolved
-   * *inside* the container, so it is the Compose service name (`redis:6379`),
-   * never the host-side mapping (`localhost:6385`); .env.example calls out the
-   * same trap for `db`.
-   */
+  /** Redis connection URL, or undefined if running in single-node mode without Redis. */
   redisUrl: string | undefined;
 
-  /**
-   * A name for this process, or `undefined` to have one generated.
-   *
-   * Presence leases are held per instance rather than per socket — every
-   * process is one row in a user's lease hash — so this is the identity another
-   * instance sees. Left unset it is generated once by `bootstrap/config.ts`,
-   * which is the only correct place for it: `env()` re-reads `process.env` on
-   * every call, so a random default computed *here* would be a different value
-   * on every read.
-   *
-   * Worth setting where the orchestrator already has a stable per-replica name
-   * (a StatefulSet ordinal, a Compose service instance): a restarted process
-   * that reclaims its old name replaces its own stale lease rather than adding
-   * a second one that has to wait out the TTL.
-   */
+  /** Unique identifier for this process instance in presence leases. */
   instanceId: string | undefined;
 
-  /** Raw `JWT_SECRET`, empty treated as unset. The production rule lives in `assertStartupEnv`/`utils/jwt`. */
+  /** Raw `JWT_SECRET`, empty treated as unset. Required in production. */
   jwtSecret: string | undefined;
   accessTokenTtlSeconds: number;
   refreshTokenTtlMs: number;
   refreshCookieMaxAgeMs: number;
-  /** Cookies go out `Secure` everywhere except local development and tests. */
+  /** Secure flag for auth cookies; enabled everywhere except local dev and test. */
   secureCookies: boolean;
 
-  /**
-   * How many proxies we operate sit between the client and this process, which
-   * is what decides how far from the right of `X-Forwarded-For` a trustworthy
-   * address can be read. See `utils/clientIp`.
-   */
+  /** Number of trusted reverse proxy hops for client IP extraction. */
   trustedProxyHops: number;
 
   rateLimit: {
@@ -201,35 +115,19 @@ export interface Env {
     auth: { windowMs: number; limit: number };
   };
 
-  /**
-   * Severity handed to pino.
-   *
-   * An unrecognised `LOG_LEVEL` falls back rather than reaching pino, which
-   * throws on an unknown level — and `utils/logger` builds its logger at import
-   * time, so a typo in a deployment's environment would otherwise be a boot
-   * crash. `assertStartupEnv()` reports the ignored value.
-   */
+  /** Severity level for logging. Defaults to 'info', or 'silent' in tests. */
   logLevel: LogLevel;
 
   realtime: {
-    /** Concurrent Socket.IO sessions one user may hold. */
+    /** Max concurrent Socket.IO sessions allowed per user. */
     maxSessionsPerUser: number;
-    /** How long a typing indicator survives without a refresh. */
+    /** Lifetime of typing indicators without a refresh. */
     typingTtlMs: number;
-    /**
-     * How long a handshake may hold its reserved session slot before the slot
-     * is assumed abandoned. See `realtime/socketServer`.
-     */
+    /** Handshake reservation timeout before slot is considered abandoned. */
     sessionReservationTtlMs: number;
-    /**
-     * Reconnect grace period before a disconnect is broadcast as offline.
-     * Defaults to 0 under the test runner so suites leave no timers behind.
-     */
+    /** Reconnect grace period before broadcasting user offline. */
     presenceGraceMs: number;
-    /**
-     * How long this instance's presence lease survives in Redis unrefreshed.
-     * Bounds how long a crashed instance keeps a user showing as online.
-     */
+    /** Redis presence lease duration. */
     presenceTtlMs: number;
   };
 
@@ -241,13 +139,13 @@ export interface Env {
   };
 }
 
-/** A variable that is missing when required, or set to something unusable. */
+/** Represents a missing or invalid environment variable. */
 export interface EnvProblem {
   name: string;
   message: string;
-  /** The offending value, present only for settings that cannot hold a secret. */
+  /** Offending value (omitted for secrets). */
   value?: string;
-  /** Fatal problems stop startup; the rest fall back to a default and are reported. */
+  /** If true, prevents server startup. */
   fatal: boolean;
 }
 
@@ -259,11 +157,8 @@ export class EnvConfigError extends Error {
 }
 
 // --- value parsers -----------------------------------------------------------
-//
-// Each returns `undefined` for "unusable", which the readers below turn into
-// either a fallback (in `env()`) or a reported problem (in `envProblems()`).
 
-/** `Number()`-based, matching what `parsePositiveInt` accepted before. */
+/** Parses positive integers; returns undefined if invalid or non-positive. */
 const asPositiveInt = (raw: string): number | undefined => {
   const parsed = parsePositiveInt(raw, Number.NaN);
   return Number.isNaN(parsed) ? undefined : parsed;
@@ -274,7 +169,7 @@ const asNonNegativeInt = (raw: string): number | undefined => {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
 };
 
-/** Finite and positive, but not necessarily whole: these are millisecond delays. */
+/** Parses positive floating point millisecond delays. */
 const asPositiveNumber = (raw: string): number | undefined => {
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
@@ -286,8 +181,6 @@ const asNonNegativeNumber = (raw: string): number | undefined => {
 };
 
 const asDurationSeconds = (raw: string): number | undefined => {
-  // A sentinel no real duration can produce, so "fell back" is distinguishable
-  // from "parsed to the same number as the default".
   const parsed = parseDurationSeconds(raw, -1);
   return parsed === -1 ? undefined : parsed;
 };
@@ -310,7 +203,7 @@ const asList = (raw: string): string[] =>
     .map((item) => item.trim())
     .filter(Boolean);
 
-/** A list that must have at least one entry to count as configured. */
+/** Parses comma-separated list, requiring at least one item. */
 const asNonEmptyList = (raw: string): string[] | undefined => {
   const items = asList(raw);
   return items.length > 0 ? items : undefined;
@@ -320,12 +213,7 @@ const asNonEmptyList = (raw: string): string[] | undefined => {
 
 type Parser<T> = (raw: string) => T | undefined;
 
-/**
- * Read one variable, falling back when it is unset or unusable.
- *
- * `problems` is optional so the same table drives both `env()` (which ignores
- * bad values) and `envProblems()` (which collects them).
- */
+/** Reads one variable, falling back to default when unset or invalid. */
 const read = <T>(
   source: NodeJS.ProcessEnv,
   name: string,
@@ -334,9 +222,6 @@ const read = <T>(
   problems?: EnvProblem[],
 ): T => {
   const raw = source[name];
-  // Blank counts as unset, not as unusable. Compose passes a variable that is
-  // absent from `.env` through as an empty string, and warning about every one
-  // of those would bury the values that really were mistyped.
   if (raw === undefined || raw.trim() === '') return fallback;
 
   const parsed = parse(raw);
@@ -351,14 +236,7 @@ const read = <T>(
   return fallback;
 };
 
-/**
- * Resolve the trusted hop count from the current and legacy settings.
- *
- * `TRUST_PROXY_HOPS` wins whenever it is set to anything at all — including a
- * malformed value, which resolves to zero rather than quietly falling through
- * to `TRUST_PROXY`. A misconfiguration must never end up granting more trust
- * than the operator asked for.
- */
+/** Resolves trusted proxy hop count (prefers TRUST_PROXY_HOPS over legacy TRUST_PROXY). */
 const readTrustedProxyHops = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): number => {
   const configured = (source.TRUST_PROXY_HOPS ?? '').trim();
 
@@ -378,20 +256,7 @@ const readTrustedProxyHops = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]
   return (source.TRUST_PROXY ?? '').trim().toLowerCase() === 'true' ? 1 : 0;
 };
 
-/**
- * The URL schemes Bun's Redis client accepts, in the order it lists them.
- *
- * Taken from the client itself rather than from the Redis URI convention: on
- * the pinned Bun 1.3.14, constructing a `RedisClient` with an unsupported
- * scheme throws `Expected url protocol to be one of redis, valkey, rediss,
- * valkeys, redis+tls, redis+unix, redis+tls+unix`. The Valkey pair matters —
- * a managed Valkey endpoint hands out `valkey://` or `valkeys://`, and a
- * scheme missing here is not a connection error but a silent single-node
- * fallback, which is the hardest kind of misconfiguration to notice.
- *
- * Note the asymmetry, which is Bun's and not ours: there are no `valkey+unix`
- * forms. A Valkey reached over a unix socket uses the `redis+unix` scheme.
- */
+/** Redis connection URL protocols accepted by Bun's RedisClient. */
 export const REDIS_URL_PROTOCOLS = [
   'redis:',
   'valkey:',
@@ -402,21 +267,7 @@ export const REDIS_URL_PROTOCOLS = [
   'redis+tls+unix:',
 ] as const;
 
-/**
- * Resolve `REDIS_URL`, reporting an unusable value without ever echoing it.
- *
- * Bespoke rather than a `read()` call for two reasons. The generic message
- * would render as "falling back to the default (undefined)", which reads as a
- * bug; and `read()` attaches the offending value to the problem, while a Redis
- * URL is one of the settings `EnvProblem.value` is explicitly documented not to
- * carry — `rediss://default:<password>@host` puts the credential in the
- * userinfo, and problems are printed to the startup log.
- *
- * An unrecognised scheme resolves to "no Redis" rather than being passed
- * through: handing a nonsense URL to the client would produce a connection that
- * can only ever fail, and a warned-about degraded mode is easier to diagnose
- * than a reconnect loop.
- */
+/** Resolves REDIS_URL without echoing credentials in error messages. */
 const readRedisUrl = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): string | undefined => {
   const configured = (source.REDIS_URL ?? '').trim();
   if (!configured) return undefined;
@@ -453,10 +304,7 @@ const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
     isTest,
 
     port: source.PORT || DEFAULT_PORT,
-    // Not read through `read`: here a blank value is not "unset" but "allow no
-    // origin at all", which is what an operator gets today by leaving
-    // CORS_ORIGINS out of `.env` (Compose passes it through as an empty
-    // string). Falling back to the localhost defaults would quietly widen it.
+    // Blank means allow no origin (differs from unset which uses localhost defaults).
     corsOrigins:
       source.CORS_ORIGINS === undefined ? [...DEFAULT_CORS_ORIGINS] : asList(source.CORS_ORIGINS),
 
@@ -486,14 +334,10 @@ const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
 
     trustedProxyHops: readTrustedProxyHops(source, problems),
 
-    // `bun test` output stays readable by default; an explicit LOG_LEVEL still
-    // wins under the test runner.
+    // Silent by default in tests to keep test output clean.
     logLevel: read(source, 'LOG_LEVEL', asLogLevel, isTest ? 'silent' : DEFAULT_LOG_LEVEL, problems),
 
     rateLimit: {
-      // Exact match, unlike the other booleans: this is the historical spelling
-      // and widening it would silently disable limiting for values (`TRUE`,
-      // `yes`) that do nothing today.
       disabled: isTest || source.RATE_LIMIT_DISABLED === 'true',
       global: {
         windowMs: read(
@@ -539,9 +383,7 @@ const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
         DEFAULT_SESSION_RESERVATION_TTL_MS,
         problems,
       ),
-      // Unit tests default to immediate transitions so they do not leave timers
-      // behind; production keeps the reconnect grace period unless explicitly
-      // configured otherwise.
+      // Set to 0 in tests so tests do not leave lingering timers.
       presenceGraceMs: read(
         source,
         'PRESENCE_GRACE_MS',
@@ -591,23 +433,14 @@ const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
   };
 };
 
-/**
- * The current environment, typed.
- *
- * Re-derived per call, so a caller always sees the live `process.env`. Pass an
- * explicit source to interpret an environment other than this process's.
- */
+/** Returns current environment configuration, parsed dynamically from process.env. */
 export const env = (source: NodeJS.ProcessEnv = process.env): Env => readAll(source);
 
-/**
- * Everything wrong with an environment: values that will be ignored, and
- * required settings that are missing for the environment they run in.
- */
+/** Collects missing or unusable environment settings. */
 export const envProblems = (source: NodeJS.ProcessEnv = process.env): EnvProblem[] => {
   const problems: EnvProblem[] = [];
   const config = readAll(source, problems);
 
-  // Advisory rather than coerced, for the reason on `Env['port']`.
   if (source.PORT?.trim() && asPositiveInt(source.PORT) === undefined) {
     problems.push({
       name: 'PORT',
@@ -617,8 +450,7 @@ export const envProblems = (source: NodeJS.ProcessEnv = process.env): EnvProblem
     });
   }
 
-  // A test run deliberately has no database: the unit-test CI job runs without
-  // one, and suites that need it set DATABASE_URL_TEST.
+  // Database URL is required outside unit tests.
   if (!config.databaseUrl && !config.isTest) {
     problems.push({
       name: 'DATABASE_URL',
@@ -643,15 +475,7 @@ const formatProblem = (problem: EnvProblem): string =>
     ? `  - ${problem.name} ${problem.message}`
     : `  - ${problem.name}=${JSON.stringify(problem.value)} ${problem.message}`;
 
-/**
- * Fail fast on a misconfigured process.
- *
- * Called once by the server entrypoint. Non-fatal problems are warned about so
- * an ignored value is visible in the startup log rather than discovered when a
- * limit or lifetime turns out to be the default; a fatal one throws, because
- * the alternatives are signing tokens with a published key or serving requests
- * that all fail at the first query.
- */
+/** Validates startup configuration; logs warnings for fallbacks and throws on fatal errors. */
 export const assertStartupEnv = (source: NodeJS.ProcessEnv = process.env): void => {
   const problems = envProblems(source);
   if (problems.length === 0) return;

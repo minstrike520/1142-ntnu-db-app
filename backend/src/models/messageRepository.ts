@@ -394,9 +394,7 @@ export class MessageRepository implements IMessageRepository {
       }
 
       if (data.commandId && data.senderId) {
-        // Create, edit, and recall share one idempotency namespace. Serialize
-        // the lookup with the other durable commands so a key reused across
-        // operations becomes a stable conflict rather than a raw 23505.
+        // Shared idempotency namespace across create, edit, and recall operations.
         await tx`
           SELECT pg_advisory_xact_lock(hashtextextended(${`${data.senderId}:${data.commandId}`}, 0))
         `;
@@ -425,10 +423,7 @@ export class MessageRepository implements IMessageRepository {
         }
       }
 
-      // Everything that can be validated without the global counter is done
-      // before it is touched. Claiming the attachments here takes only the
-      // per-attachment row locks and leaves the rows pinned for the write
-      // below, so the counter's critical section does not have to pay for it.
+      // Claim unassigned attachments with row-level locks before incrementing the counter.
       const uniqueAttachmentIds = data.attachmentIds ? [...new Set(data.attachmentIds)] : [];
       let attachmentSnapshot: AttachmentSnapshotRow[] = [];
       if (uniqueAttachmentIds.length > 0) {
@@ -448,14 +443,7 @@ export class MessageRepository implements IMessageRepository {
       }
       const uniqueMentions = data.mentions ? [...new Set(data.mentions)].sort() : [];
 
-      // One statement holds the counter row lock, and it is the last write of
-      // the transaction. Postgres keeps a row lock until commit, so the only
-      // way to stop every message, membership and role write in the process
-      // from serializing behind this row is to keep the window between taking
-      // the lock and committing as small as a single round trip. The change
-      // snapshot is therefore built from values already known here rather than
-      // by re-reading the rows the sibling CTEs have just written — a CTE
-      // cannot see its siblings' output.
+      // Atomic message insert and change log entry; minimizes counter row lock hold time.
       const pgMentionIds = `{${uniqueMentions.join(',')}}`;
       const pgClaimedAttachmentIds = `{${attachmentSnapshot.map((row) => row.attachment_id).join(',')}}`;
       const attachmentsJson = JSON.stringify(attachmentSnapshot.map((row) => ({
@@ -558,9 +546,7 @@ export class MessageRepository implements IMessageRepository {
     let responseChangeSequence: number | undefined;
     await this.sql.begin(async (tx) => {
       if (commandId && actorId) {
-        // Serialize the same actor/key even when concurrent requests target
-        // different messages; the unique receipt index then remains a clean
-        // idempotency result instead of surfacing a raw 23505 error.
+        // Serialize idempotency checks to avoid unique index conflicts.
         await tx`
           SELECT pg_advisory_xact_lock(hashtextextended(${`${actorId}:${commandId}`}, 0))
         `;
@@ -611,9 +597,7 @@ export class MessageRepository implements IMessageRepository {
         }
       }
 
-      // Lock the message before checking the receipt. A concurrent retry of
-      // the same command must observe the first transaction's receipt after
-      // waiting for that lock, rather than failing on the unique index.
+      // Check for previously recorded idempotency receipts for this command.
       if (commandId && actorId) {
         const prior = await tx<{ message_id: string; change_type: string; change_sequence: number | string | null }[]>`
           SELECT message_id, change_type, change_sequence
@@ -631,9 +615,6 @@ export class MessageRepository implements IMessageRepository {
         if (prior.length > 0) {
           if (prior[0].message_id !== messageId) throw new ConflictError('Idempotency-Key was already used for another message');
           if (prior[0].change_type !== 'recalled') throw new ConflictError('Idempotency-Key was already used for another operation');
-          // A no-op receipt for a message recalled before the durability
-          // migration has no change row to project from; fall back to the
-          // current message state, exactly as the first response did.
           responseChangeSequence = prior[0].change_sequence === null
             ? undefined
             : Number(prior[0].change_sequence);
@@ -646,15 +627,7 @@ export class MessageRepository implements IMessageRepository {
         throw new ConflictError('Message revision is stale');
       }
       if (current[0].is_recalled) {
-        // A durable retry (or a second recall command) is a no-op and must not
-        // publish a fresh event when no new Message Change was committed.
-        //
-        // It still consumed the key, though. Without a receipt the caller could
-        // hand the same Idempotency-Key to a create or an edit afterwards and
-        // have it accepted, because the cross-operation checks read receipts
-        // out of `message_changes` and a no-op writes none. Record it in the
-        // side table the lookup above also reads, pointing at the recall this
-        // command converged on.
+        // Record receipt in side table if message was already recalled, then exit without emitting changes.
         if (commandId && actorId) {
           await tx`
             INSERT INTO message_command_receipts (
@@ -675,9 +648,7 @@ export class MessageRepository implements IMessageRepository {
         return;
       }
 
-      // One statement, and the last write of the transaction: the counter row
-      // lock is what serializes every durable write in the process, so it is
-      // taken as late as possible and released at the commit that follows.
+      // Atomic recall update and sequence increment.
       const next = await tx<{ change_sequence: number | string }[]>`
         WITH seq AS (
           UPDATE realtime_counters
@@ -781,8 +752,7 @@ export class MessageRepository implements IMessageRepository {
         if (rows[0].sender_id !== actorId) throw new ForbiddenError('Only the original sender can edit this message');
       }
 
-      // See markRecalled: the row lock serializes concurrent retries so the
-      // second request can return the already-recorded canonical change.
+      // Check for previously recorded idempotency receipts.
       if (commandId && actorId) {
         const prior = await tx<{ message_id: string; change_type: string; change_sequence: number | string | null }[]>`
           SELECT message_id, change_type, change_sequence
@@ -813,9 +783,7 @@ export class MessageRepository implements IMessageRepository {
         throw new ValidationError('Cannot edit a recalled message');
       }
 
-      // The mention set is rewritten before the counter is touched. These rows
-      // do not depend on the new sequence, and anything executed while the
-      // counter row is locked blocks every other durable write in the process.
+      // Update mentions before acquiring counter lock.
       await tx`DELETE FROM message_mentions WHERE message_id = ${messageId}`;
       const uniqueMentions = mentions ? [...new Set(mentions)] : [];
       if (uniqueMentions.length > 0) {
@@ -827,9 +795,7 @@ export class MessageRepository implements IMessageRepository {
         `;
       }
 
-      // Allocating the sequence, applying the edit and recording the snapshot
-      // is one statement and the last write of the transaction, so the counter
-      // row lock is released a single round trip later at commit.
+      // Update message content and record edit snapshot atomically.
       const next = await tx<{ change_sequence: number | string }[]>`
         WITH seq AS (
           UPDATE realtime_counters

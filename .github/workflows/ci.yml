@@ -1,34 +1,17 @@
 name: CI
 
-# The filename (ci.yml) and the display name (CI) are both load-bearing:
-# release-stack.yml looks this workflow up by filename, release-please.yml
-# triggers off `workflows: ['CI']`. Neither may change.
+# Workflow file and display name are referenced by release workflows; keep unchanged.
 
 on:
   push:
     branches: [main]
-    # Every main commit needs a completed run so release-please.yml can safely
-    # act on that exact commit. The detect job below still skips expensive
-    # lanes when only documentation or metadata changed.
   pull_request:
-    # Deliberately no `branches` filter and no paths-ignore. `required-checks`
-    # is the single required status check, and a workflow skipped by a branch
-    # or path filter never reports at all — the check would sit Pending
-    # forever and the PR could never merge. This includes PRs based on a
-    # non-main branch (e.g. a fix stacked on another open PR's branch): the
-    # `detect` job's `BASE_REF == "main"` check below already anticipated
-    # this and degrades run-build/security to false for those, it was just
-    # unreachable while this filter blocked the event entirely. Jobs skipped
-    # by an `if` inside a workflow do report, so letting detect skip every
-    # lane is the only safe way to make docs-only (or non-main-based) PRs
-    # cheap without leaving required-checks Pending.
+    # No branch/path filters so required-checks status check always reports on PRs.
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
-  # Only supersede in-flight PR runs. Cancelling on main would leave a main
-  # commit without a successful run, which is exactly what release-please.yml
-  # waits on via workflow_run.
+  # Cancel in-flight PR runs, but preserve main branch runs for release-please.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -39,10 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # dorny/paths-filter resolves a pull request's changed files through the
-      # REST API. With an explicit top-level `permissions` block, anything not
-      # listed is dropped, so this has to be granted or path detection fails on
-      # every PR.
       pull-requests: read
     outputs:
       frontend-required: ${{ steps.plan.outputs.frontend-required }}
@@ -53,10 +32,7 @@ jobs:
       run-build: ${{ steps.plan.outputs.run-build }}
     steps:
       - uses: actions/checkout@v7
-      # This repo is a single-root-lockfile pnpm workspace. Running
-      # `pnpm install` from inside frontend/ or backend/ silently creates a
-      # nested lockfile, which is how the root lockfile drifted out of sync
-      # with frontend/package.json in the first place (issue #420).
+      # Ensure only the root pnpm-lock.yaml exists in the workspace.
       - name: Reject nested lockfiles
         run: |
           nested="$(git ls-files '*/pnpm-lock.yaml' '*/bun.lock')"
@@ -68,30 +44,8 @@ jobs:
       - uses: dorny/paths-filter@v4
         id: filter
         with:
-          # Default 'some' quantifier silently ignores '!'-prefixed patterns
-          # (a file matches if it matches ANY listed pattern, negated ones
-          # included as just another alternative) -- it does NOT subtract
-          # them. That turned the CLAUDE.md exclusions below into a false
-          # match: any file outside 'frontend/**/CLAUDE.md' satisfies the
-          # negated pattern taken alone, so unrelated changes (e.g. under
-          # .claude/) were matching both frontend and backend. This makes a
-          # match require a positive pattern AND no negated pattern.
+          # Match positive patterns while respecting excluded files (e.g. CLAUDE.md).
           predicate-quantifier: some-with-excludes
-          # The root workspace files are load-bearing for BOTH packages now that
-          # every job installs from the single root lockfile. Without them here,
-          # a PR touching only pnpm-lock.yaml, the `overrides` block, or the root
-          # package.json would output false for both filters and skip lint,
-          # typecheck, tests, builds and security-scan, allowing the downstream
-          # release workflow to publish a dependency or CVE-override change
-          # without any package-level verification.
-          #
-          # There is deliberately no separate `database` filter: the database
-          # lane is backend's integration verification and reuses the backend
-          # filter. Two near-identical path lists would only drift apart.
-          # CLAUDE.md files are AI-agent orientation docs, not source: they carry
-          # no runtime behavior, so touching only them shouldn't require a full
-          # lint/typecheck/test/build lane. Negated after the broad glob so
-          # code changes anywhere else under frontend/backend are unaffected.
           filters: |
             frontend:
               - 'frontend/**'
@@ -149,19 +103,7 @@ jobs:
           security_required=false
           run_build=false
 
-          # The browser lane exercises the same frontend the frontend lane
-          # lints, typechecks and unit-tests, so it follows that decision rather
-          # than carrying a fifth near-identical path list that would drift.
-          # This mirrors how the database lane follows backend.
-          #
-          # It follows the BACKEND decision too, which the frontend-only version
-          # of this rule did not. ci-browser.yml gained a full-stack job (issue
-          # #544) that drives a real Bun backend and a real PostgreSQL, so a
-          # backend-only or migration-only change can now break the browser lane
-          # while touching nothing under frontend/. Without this second
-          # condition that change would skip the lane, and `required-checks`
-          # accepts a skip for a lane marked not-required — the regression would
-          # reach main with the gate green.
+          # Browser lane runs if frontend or backend changes (fullstack tests exercise both).
           if [[ "$EVENT_NAME" == "workflow_dispatch" || "$FRONTEND_CHANGED" == "true" ]]; then
             frontend_required=true
           fi
@@ -172,24 +114,16 @@ jobs:
             browser_required=true
           fi
 
-          # The database lane verifies the same code the backend lane builds, so
-          # it follows the backend decision rather than a filter of its own.
+          # Database lane verifies backend integration against PostgreSQL.
           if [[ "$EVENT_NAME" == "workflow_dispatch" || "$BACKEND_CHANGED" == "true" ]]; then
             backend_required=true
             database_required=true
           fi
 
-          # Preserves the pre-refactor guard on builds and the security scan.
-          # It is not "main only": it covers pushes to main, PRs based on main,
-          # and workflow_dispatch while on main, but not a dispatch from a
-          # feature branch.
+          # Run build and security audit on main branch commits and PRs targeting main.
           if [[ "$REF" == "refs/heads/main" || "$BASE_REF" == "main" ]]; then
             run_build=true
 
-            # frontend/backend are kept here on purpose. The scan has always run
-            # on any frontend or backend source change; narrowing it to the
-            # dependency-only `security` filter would quietly shrink coverage.
-            # That filter is purely additive (it adds .cve-lite/**).
             if [[ "$EVENT_NAME" == "workflow_dispatch" || \
                   "$FRONTEND_CHANGED" == "true" || \
                   "$BACKEND_CHANGED" == "true" || \
@@ -210,8 +144,6 @@ jobs:
   frontend:
     needs: detect
     if: needs.detect.outputs.frontend-required == 'true'
-    # Job outputs are always strings, but run-build is declared `type: boolean`.
-    # fromJSON does the conversion; passing the raw string is a type error.
     uses: ./.github/workflows/ci-frontend.yml
     with:
       run-build: ${{ fromJSON(needs.detect.outputs.run-build) }}
@@ -236,17 +168,12 @@ jobs:
   security:
     needs: detect
     if: needs.detect.outputs.security-required == 'true'
-    # A job-level permissions block replaces the top-level one rather than
-    # adding to it, so contents:read has to be repeated or checkout fails. A
-    # called workflow cannot grant itself anything the caller withheld.
     permissions:
       contents: read
       security-events: write
     uses: ./.github/workflows/ci-security.yml
 
-  # The single required status check. Branch protection and release-stack.yml
-  # both key off this one name, so internal jobs can be renamed, split or added
-  # without touching either.
+  # Canonical status check required by branch protection and release workflows.
   required-checks:
     name: required-checks
     if: always()
@@ -275,17 +202,8 @@ jobs:
             failed=true
           }
 
-          # A lane that was supposed to run must succeed. Accepting `skipped`
-          # unconditionally would let a mistyped output name or a broken `if`
-          # silently drop a whole lane and still go green. `cancelled` and
-          # `failure` are never acceptable for either kind of lane.
+          # Enforces that required lanes succeeded, and non-required lanes either succeeded or were skipped.
           check_lane() { # name, result, required
-            # The required flag has to be literally true or false. If a lane's
-            # `detect` output is missing from the `outputs:` block or misspelled
-            # there, the expression yields an empty string: the lane's `if`
-            # evaluates false and it is skipped, and an empty flag would then
-            # take the not-required branch and accept that skip. `set -u` cannot
-            # catch it because the variable is defined in `env:`, just empty.
             if [[ "$3" != "true" && "$3" != "false" ]]; then
               fail "$1 required-flag is '$3'; expected true or false (missing or misspelled detect output)"
               return
@@ -306,8 +224,6 @@ jobs:
           check_lane browser "$BROWSER_RESULT" "$BROWSER_REQUIRED"
           check_lane security "$SECURITY_RESULT" "$SECURITY_REQUIRED"
 
-          # Written before exiting, not after: a gate that fails is exactly when
-          # the full picture is most useful.
           {
             echo "| Lane | Required | Result |"
             echo "| --- | --- | --- |"
