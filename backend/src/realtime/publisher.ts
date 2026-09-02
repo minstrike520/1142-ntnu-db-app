@@ -105,13 +105,21 @@ export const createRealtimePublisher = (): RealtimePublisher => {
       // force flag. It is still useful in a bounded operational log, without
       // logging message contents, tokens, or credentials.
       console.info('Realtime sessions disconnected', { userId, reason });
+      // Deliberately cluster-wide: revoking a user's access has to end the
+      // sessions they hold on every instance, not only this one.
       io.in(`user_${userId}`).disconnectSockets(true);
     },
 
     shutdown(reason) {
       if (!io) return;
       console.info('Realtime server shutting down', { reason });
-      io.disconnectSockets(true);
+      // `local` is what keeps this process's shutdown from being the whole
+      // cluster's. This runs on SIGTERM, and with a cross-instance adapter
+      // installed an unqualified `disconnectSockets` publishes the request to
+      // every other instance too — so a rolling restart, which stops one
+      // container at a time, would drop every client on every node instead of
+      // just the ones this process is about to stop serving.
+      io.local.disconnectSockets(true);
     },
   };
 };

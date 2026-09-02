@@ -394,6 +394,44 @@ describe('redis cluster adapter', () => {
     });
   });
 
+  describe('shutdown is this instance only', () => {
+    // `publisher.shutdown` runs on SIGTERM. Before the adapter existed every
+    // disconnect was local by construction; now the distinction has to be made
+    // deliberately, and getting it wrong turns a rolling restart -- one
+    // container stopped at a time -- into a cluster-wide disconnect.
+    it('does not ask other instances to disconnect', async () => {
+      const fake = createFakeRedis();
+      const alpha = createNode(fake.redis, 'alpha');
+      const beta = createNode(fake.redis, 'beta');
+      await settle();
+      const onAlpha = seatSocket(alpha, 'socket-a', []);
+      const onBeta = seatSocket(beta, 'socket-b', []);
+
+      alpha.local.disconnectSockets(true);
+      await settle();
+
+      expect(onAlpha.disconnected).toBe(true);
+      expect(onBeta.disconnected).toBe(false);
+      // Nothing on the wire at all: the frame is never published.
+      expect(fake.published).toEqual([]);
+    });
+
+    it('still revokes one user everywhere, which is a different intent', async () => {
+      const fake = createFakeRedis();
+      const alpha = createNode(fake.redis, 'alpha');
+      const beta = createNode(fake.redis, 'beta');
+      await settle();
+      const revoked = seatSocket(beta, 'socket-b', ['user_9']);
+      const bystander = seatSocket(beta, 'socket-c', ['user_8']);
+
+      alpha.in('user_9').disconnectSockets(true);
+      await settle();
+
+      expect(revoked.disconnected).toBe(true);
+      expect(bystander.disconnected).toBe(false);
+    });
+  });
+
   it('subscribes to the channel on init and releases it on close', async () => {
     const fake = createFakeRedis();
     const io = createNode(fake.redis, 'alpha');
