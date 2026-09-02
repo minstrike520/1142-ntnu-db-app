@@ -3,6 +3,7 @@
 import React from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { ChatProvider, useChat } from "@/context/ChatContext";
+import { RoomWorkspaceProvider } from "@/context/RoomWorkspaceContext";
 import Sidebar from "@/components/layout/Sidebar";
 import MobileNav from "@/components/layout/MobileNav";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -60,10 +61,31 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * RoomWorkspaceProvider sits inside the layout (not the route) so per-room
+ * drafts outlive navigating to /friends, /settings or /emergency (issue #539).
+ *
+ * Keying it by user identity drops those drafts the moment the session ends.
+ * Logging out clears the session and re-renders this subtree with the signed-out
+ * branch below, but the provider itself only unmounts once the redirect to
+ * /login lands — without the key, a slow or failed redirect would leave one
+ * user's drafts alive for the next.
+ */
+function SessionScopedWorkspace({ children }: { children: React.ReactNode }) {
+  const { user, isAuthenticated } = useChat();
+  return (
+    <RoomWorkspaceProvider key={isAuthenticated ? user.userId ?? "anonymous" : "signed-out"}>
+      {children}
+    </RoomWorkspaceProvider>
+  );
+}
+
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   return (
     <ChatProvider>
-      <MainLayoutContent>{children}</MainLayoutContent>
+      <SessionScopedWorkspace>
+        <MainLayoutContent>{children}</MainLayoutContent>
+      </SessionScopedWorkspace>
     </ChatProvider>
   );
 }

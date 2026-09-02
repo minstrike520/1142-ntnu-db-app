@@ -3,6 +3,7 @@
 import React from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useChat } from "@/context/ChatContext";
+import { useLastViewedRoomId } from "@/context/RoomWorkspaceContext";
 import { useTranslation } from "@/hooks/useTranslation";
 import MessageDetailIcon from "@iconify-react/boxicons/message-detail";
 import GroupIcon from "@iconify-react/boxicons/group";
@@ -26,17 +27,20 @@ type NavItem = {
 export default function MobileNav() {
   const router = useRouter();
   const pathname = usePathname();
-  const { friendRequests, setSelectedFriendForSidebar, handleLogout } = useChat();
+  const { friendRequests, rooms, setSelectedFriendForSidebar, handleLogout } = useChat();
+  const lastViewedRoomId = useLastViewedRoomId();
   const { t } = useTranslation();
 
   const pendingIncoming =
     friendRequests?.filter((request) => request.direction === "incoming").length || 0;
+  const lastChat = rooms.find((room) => room.id === lastViewedRoomId);
+  const chatPath = lastChat ? `/chat/${lastChat.id}` : rooms[0] ? `/chat/${rooms[0].id}` : "/";
 
   const items: NavItem[] = [
     {
       label: t("rail.chats"),
       active: pathname === "/" || pathname.startsWith("/chat"),
-      onClick: () => router.push("/"),
+      onClick: () => router.push(chatPath),
       icon: <MessageDetailIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
     {

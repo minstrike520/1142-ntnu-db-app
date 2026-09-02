@@ -61,6 +61,8 @@ export const __failNextListMessages = (): void => {
 
 let activeAccessToken: string | null = TEST_TOKEN;
 let settingsState: UserSettings = { ...mySettings };
+let attachmentUploadGate: Promise<void> | null = null;
+let releaseAttachmentUpload: (() => void) | null = null;
 
 /** Recorded mutation calls, for asserting handler behaviour in tests. */
 const apiCallLog: Array<{ fn: string; args: unknown[] }> = [];
@@ -71,11 +73,26 @@ export const __getApiCallLog = (fn?: string): Array<{ fn: string; args: unknown[
 export const __resetApiMock = (): void => {
   activeAccessToken = TEST_TOKEN;
   settingsState = { ...mySettings };
+  releaseAttachmentUpload?.();
+  attachmentUploadGate = null;
+  releaseAttachmentUpload = null;
   apiCallLog.length = 0;
   conflictingMessageIds.clear();
   failNextListMessages = false;
   failMarkRoomRead = false;
   syncGate = null;
+};
+
+export const __holdNextAttachmentUpload = (): (() => void) => {
+  if (attachmentUploadGate) throw new Error("attachment upload is already held");
+  attachmentUploadGate = new Promise<void>((resolve) => {
+    releaseAttachmentUpload = resolve;
+  });
+  return () => {
+    releaseAttachmentUpload?.();
+    attachmentUploadGate = null;
+    releaseAttachmentUpload = null;
+  };
 };
 
 export const getApiBaseUrl = (): string => "http://mock-api.test";
@@ -347,9 +364,14 @@ export const updateFolderRooms = async (
   apiCallLog.push({ fn: "updateFolderRooms", args: [folderId, roomIds] });
 };
 
-export const uploadAttachment = async (): Promise<{ attachmentId: string }> => ({
-  attachmentId: "att-1",
-});
+export const uploadAttachment = async (
+  _token: string,
+  file: File,
+): Promise<{ attachmentId: string }> => {
+  apiCallLog.push({ fn: "uploadAttachment", args: [file.name] });
+  if (attachmentUploadGate) await attachmentUploadGate;
+  return { attachmentId: "att-1" };
+};
 
 export const attachmentDownloadUrl = (fileUrl: string): string =>
   `http://mock-api.test${fileUrl}`;
