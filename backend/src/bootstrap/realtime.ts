@@ -52,10 +52,16 @@ export const createRealtime = ({
   //
   // Passed as a constructor option rather than through `io.adapter(...)`, which
   // would build the default adapter first and then re-init every namespace.
-  const { redisUrl } = env();
+  const { redisUrl, realtime } = env();
   const io = new Server<ClientToServerEvents, ServerToClientEvents>(
     redisUrl
-      ? { adapter: createRedisAdapter({ redis, instanceId: config.instanceId }) }
+      ? {
+          adapter: createRedisAdapter({
+            redis,
+            instanceId: config.instanceId,
+            clusterId: realtime.clusterId,
+          }),
+        }
       : {},
   ) as ChatServer;
 

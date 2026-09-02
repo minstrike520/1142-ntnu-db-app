@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { Server } from 'socket.io';
 import { createRedisManager, type RedisManager } from '../../../src/utils/redis';
-import { createRedisAdapter, REALTIME_CHANNEL } from '../../../src/realtime/redisAdapter';
+import {
+  createRedisAdapter,
+  realtimeChannel,
+  REALTIME_CHANNEL,
+} from '../../../src/realtime/redisAdapter';
 
 /**
  * The one thing the unit tier cannot honestly claim: that two backend
@@ -111,6 +115,42 @@ describe('redis cluster adapter against a real Redis', () => {
     // the time it lands alpha has had every chance to double-deliver.
     await eventually(() => onBeta.length > 0);
     expect(onAlpha).toHaveLength(1);
+  });
+
+  it('keeps a differently-scoped deployment out, even on another logical database', async () => {
+    // The hazard a fake cannot show: Redis pub/sub ignores the database
+    // number, so `/0` and `/1` of one server are the same channel space. Only
+    // the channel name separates two deployments.
+    const otherDbUrl = new URL(url);
+    otherDbUrl.pathname = '/1';
+    const stagingRedis = createRedisManager({ url: otherDbUrl.toString() });
+    await stagingRedis.connect();
+    const staging = new Server({
+      adapter: createRedisAdapter({
+        redis: stagingRedis,
+        instanceId: `${run}-staging`,
+        clusterId: `${run}-staging`,
+      }),
+    });
+    await eventually(() =>
+      stagingRedis.status.subscribedChannels.includes(realtimeChannel(`${run}-staging`)),
+    );
+
+    try {
+      const onStaging = seatSocket(staging, `${run}-s1`, [room('isolated')]);
+      const onBeta = seatSocket(beta, `${run}-b4`, [room('isolated')]);
+
+      alpha
+        .to(room('isolated'))
+        .emit('user_typing', { roomId: room('isolated'), userId: 'u3', isTyping: true });
+
+      // Beta arriving proves the frame really went through Redis, so staging
+      // has had its chance to receive it and demonstrably did not.
+      await eventually(() => onBeta.length > 0);
+      expect(onStaging).toEqual([]);
+    } finally {
+      await stagingRedis.close();
+    }
   });
 
   it('carries a room subscription change to the other instance', async () => {

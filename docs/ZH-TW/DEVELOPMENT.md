@@ -151,6 +151,14 @@ room subscription 變更與強制斷線都會送到其他 instance（#475）。�
 most once —— Redis pub/sub 不保留 backlog，instance 失聯期間錯過的事件不會補
 送，客戶端仍以 Sync Cursor 復原。
 
+多個 deployment 共用同一台 Redis 時，必須為每個 deployment 設定不同的
+`REALTIME_CLUSTER_ID`。pub/sub 不受 logical database 隔離 —— 在 `/1` 上
+SUBSCRIBE 會收到 `/0` PUBLISH 的訊息 —— 因此把 `REDIS_URL` 換成不同的 database
+**並不能**分開兩套環境，只有 channel 名稱可以。若未設定，兩邊共用
+`near-chat-ws` 而被併成同一個 Socket.IO cluster；又因為 `db:seed` 給每個環境
+相同的 user 與 room ID，一邊的房間事件、成員變更與強制斷線會真的落到另一邊的
+socket 上。
+
 目前**尚未**共享的是 `user_status` 推播：`realtime/presence.ts` 只在好友於發出
 端 instance 上持有 socket 時才送出，因此連在另一個 instance 上的好友要等到下一
 次 `GET /friends` 才會看到狀態變化。補上這段是 #476。每位使用者的 session 上限

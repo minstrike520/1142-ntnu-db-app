@@ -2,7 +2,11 @@ import { describe, it, expect } from 'bun:test';
 import pino from 'pino';
 import { Server } from 'socket.io';
 import { MessageType } from 'socket.io-adapter';
-import { createRedisAdapter, REALTIME_CHANNEL } from '../../../src/realtime/redisAdapter';
+import {
+  createRedisAdapter,
+  realtimeChannel,
+  REALTIME_CHANNEL,
+} from '../../../src/realtime/redisAdapter';
 import type { RedisManager, RedisMessageHandler, RedisOutcome } from '../../../src/utils/redis';
 
 /**
@@ -66,8 +70,12 @@ const createFakeRedis = () => {
 
 const silent = pino({ level: 'silent' });
 
-const createNode = (redis: RedisManager, instanceId: string, logger = silent): Server =>
-  new Server({ adapter: createRedisAdapter({ redis, instanceId, logger }) });
+const createNode = (
+  redis: RedisManager,
+  instanceId: string,
+  logger = silent,
+  clusterId?: string,
+): Server => new Server({ adapter: createRedisAdapter({ redis, instanceId, clusterId, logger }) });
 
 /** Flush the microtask queue, so an awaited publish/dispatch chain completes. */
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -337,6 +345,53 @@ describe('redis cluster adapter', () => {
     for (const line of lines) {
       expect(JSON.stringify(line.details)).not.toContain('not json');
     }
+  });
+
+  describe('deployment isolation', () => {
+    it('uses the bare channel by default and a scoped one when a cluster is named', () => {
+      expect(realtimeChannel()).toBe(REALTIME_CHANNEL);
+      expect(realtimeChannel('')).toBe(REALTIME_CHANNEL);
+      expect(realtimeChannel('   ')).toBe(REALTIME_CHANNEL);
+      expect(realtimeChannel('staging')).toBe(`${REALTIME_CHANNEL}:staging`);
+      expect(realtimeChannel(' staging ')).toBe(`${REALTIME_CHANNEL}:staging`);
+    });
+
+    it('keeps two deployments sharing one Redis from reaching each other', async () => {
+      // Redis pub/sub is not scoped by the logical database, so a shared server
+      // is a shared channel; `seed.ts` also gives every seeded deployment the
+      // same room ids, which is when that actually delivers to real sockets.
+      const fake = createFakeRedis();
+      const prod = createNode(fake.redis, 'prod-a', silent, 'production');
+      const staging = createNode(fake.redis, 'staging-a', silent, 'staging');
+      const shared = createNode(fake.redis, 'unscoped-a');
+      await settle();
+
+      const onProd = seatSocket(prod, 'socket-p', ['room_1']);
+      const onStaging = seatSocket(staging, 'socket-s', ['room_1']);
+      const onShared = seatSocket(shared, 'socket-u', ['room_1']);
+
+      staging.to('room_1').emit('user_typing', { roomId: 'room_1', userId: 'u1', isTyping: true });
+      await settle();
+
+      // Staging's own audience is served; the other deployments are not.
+      expect(onStaging.received).toHaveLength(1);
+      expect(onProd.received).toEqual([]);
+      expect(onShared.received).toEqual([]);
+      expect(fake.published.at(-1)?.channel).toBe(`${REALTIME_CHANNEL}:staging`);
+    });
+
+    it('still reaches a second instance of the same deployment', async () => {
+      const fake = createFakeRedis();
+      const alpha = createNode(fake.redis, 'alpha', silent, 'production');
+      const beta = createNode(fake.redis, 'beta', silent, 'production');
+      await settle();
+      const onBeta = seatSocket(beta, 'socket-b', ['room_1']);
+
+      alpha.to('room_1').emit('user_typing', { roomId: 'room_1', userId: 'u1', isTyping: true });
+      await settle();
+
+      expect(onBeta.received).toHaveLength(1);
+    });
   });
 
   it('subscribes to the channel on init and releases it on close', async () => {

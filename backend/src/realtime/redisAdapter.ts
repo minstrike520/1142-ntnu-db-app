@@ -18,6 +18,29 @@ import { logger as defaultLogger } from '../utils/logger';
 export const REALTIME_CHANNEL = 'near-chat-ws';
 
 /**
+ * The channel for one deployment, isolated from another sharing the Redis.
+ *
+ * Redis pub/sub is **not** scoped by the logical database: a `SUBSCRIBE` on
+ * `/1` receives what was published on `/0` of the same server. So two
+ * deployments that share a Redis — a staging stack beside production, or two
+ * dev stacks — land in one Socket.IO cluster on the bare channel. Their server
+ * ids differ and both namespaces are `/`, so each treats the other's frames as
+ * a legitimate peer's, and `backend/src/models/seed.ts` hands every seeded
+ * deployment the *same* user and room ids, which is exactly when a room name
+ * from one environment addresses real sockets in another.
+ *
+ * `REALTIME_CLUSTER_ID` is what separates them. It is left unset by default so
+ * the channel stays the `near-chat-ws` this contract names, which is the right
+ * default for the documented deployment — one stack, its own `redis` service —
+ * and it must be set, to a different value per deployment, by anyone pointing
+ * two of them at one Redis.
+ */
+export const realtimeChannel = (clusterId?: string): string => {
+  const scope = clusterId?.trim();
+  return scope ? `${REALTIME_CHANNEL}:${scope}` : REALTIME_CHANNEL;
+};
+
+/**
  * Cross-instance realtime fan-out, as a Socket.IO cluster adapter.
  *
  * Every `io.to(...).emit(...)`, `socketsJoin`, `socketsLeave` and
@@ -48,6 +71,8 @@ export interface RedisAdapterDeps {
   redis: RedisManager;
   /** This process's identity, the same one that names its presence leases. */
   instanceId: string;
+  /** Names this deployment's cluster; see `realtimeChannel`. */
+  clusterId?: string;
   logger?: pino.Logger;
 }
 
@@ -95,27 +120,32 @@ const isClusterFrame = (value: unknown): value is ClusterFrame => {
 class RedisClusterAdapter extends ClusterAdapter {
   readonly #redis: RedisManager;
   readonly #instanceId: string;
+  readonly #channel: string;
   readonly #logger: pino.Logger;
   #listener: RedisMessageHandler | undefined;
   /** Frames dropped before reaching the base class, logged once then counted. */
   #rejected = 0;
 
-  constructor(nsp: Namespace, { redis, instanceId, logger = defaultLogger }: RedisAdapterDeps) {
+  constructor(
+    nsp: Namespace,
+    { redis, instanceId, clusterId, logger = defaultLogger }: RedisAdapterDeps,
+  ) {
     super(nsp);
     this.#redis = redis;
     this.#instanceId = instanceId;
+    this.#channel = realtimeChannel(clusterId);
     this.#logger = logger;
   }
 
   override async init(): Promise<void> {
     const listener: RedisMessageHandler = (message) => this.#receive(message);
     this.#listener = listener;
-    const result = await this.#redis.subscribe(REALTIME_CHANNEL, listener);
+    const result = await this.#redis.subscribe(this.#channel, listener);
     if (!result.ok) {
       // Not fatal, and not retried here: the manager's watchdog owns
       // reconnection and replays this channel once Redis answers again.
       this.#logger.warn(
-        { channel: REALTIME_CHANNEL, error: result.error.message, instanceId: this.#instanceId },
+        { channel: this.#channel, error: result.error.message, instanceId: this.#instanceId },
         'Realtime cluster adapter could not subscribe yet; fan-out stays local until Redis is reachable',
       );
       return;
@@ -125,7 +155,12 @@ class RedisClusterAdapter extends ClusterAdapter {
     // separate on purpose: `uid` is Socket.IO's, minted per adapter, while
     // `instanceId` is this process's and also names its presence leases.
     this.#logger.info(
-      { channel: REALTIME_CHANNEL, instanceId: this.#instanceId, adapterUid: this.uid, nsp: this.nsp.name },
+      {
+        channel: this.#channel,
+        instanceId: this.#instanceId,
+        adapterUid: this.uid,
+        nsp: this.nsp.name,
+      },
       'Realtime cluster adapter subscribed',
     );
   }
@@ -134,7 +169,7 @@ class RedisClusterAdapter extends ClusterAdapter {
     const listener = this.#listener;
     if (!listener) return;
     this.#listener = undefined;
-    await this.#redis.unsubscribe(REALTIME_CHANNEL, listener);
+    await this.#redis.unsubscribe(this.#channel, listener);
   }
 
   /**
@@ -163,7 +198,7 @@ class RedisClusterAdapter extends ClusterAdapter {
   }
 
   async #send(frame: ClusterMessage | ClusterResponse): Promise<void> {
-    const result = await this.#redis.publish(REALTIME_CHANNEL, JSON.stringify(frame));
+    const result = await this.#redis.publish(this.#channel, JSON.stringify(frame));
     if (result.ok) return;
     // Thrown rather than swallowed: `ClusterAdapter` already catches around
     // every call site — `broadcast` falls through to local delivery, `publish`
@@ -212,7 +247,7 @@ class RedisClusterAdapter extends ClusterAdapter {
   #reject(reason: string): void {
     this.#rejected += 1;
     // Never the frame body: these carry message content.
-    const details = { channel: REALTIME_CHANNEL, reason, rejected: this.#rejected };
+    const details = { channel: this.#channel, reason, rejected: this.#rejected };
     if (this.#rejected === 1) {
       this.#logger.warn(details, 'Dropped a realtime cluster frame');
     } else {

@@ -168,6 +168,15 @@ disconnects all carry to the other instances (#475). Delivery is at most once �
 Redis pub/sub keeps no backlog, so what an instance missed while unreachable is
 gone, and clients recover through their Sync Cursor.
 
+Point two deployments at one Redis and set `REALTIME_CLUSTER_ID` differently on
+each. Pub/sub is not scoped by the logical database — a `SUBSCRIBE` on `/1`
+receives what `/0` published — so distinct `REDIS_URL` databases do *not*
+separate them, and the channel name is the only thing that does. Left unset they
+share `near-chat-ws` and become one Socket.IO cluster; since `db:seed` gives
+every seeded environment the same user and room ids, one side's room events,
+membership changes and forced disconnects then land on the other side's
+sockets.
+
 What is *not* shared yet is the `user_status` push: `realtime/presence.ts` still
 emits it only when the friend holds a socket on the emitting instance, so a
 friend connected elsewhere sees the change on their next `GET /friends` rather

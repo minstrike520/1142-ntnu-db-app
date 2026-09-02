@@ -129,6 +129,15 @@ export interface Env {
     presenceGraceMs: number;
     /** Redis presence lease duration. */
     presenceTtlMs: number;
+    /**
+     * Names the cluster this process belongs to, isolating its realtime
+     * channel from another deployment's on a shared Redis.
+     *
+     * Undefined means the bare channel. Redis pub/sub is not scoped by the
+     * logical database, so two deployments pointed at the same server share a
+     * channel even on different `/0` and `/1` databases.
+     */
+    clusterId: string | undefined;
   };
 
   attachments: {
@@ -398,6 +407,7 @@ const readAll = (source: NodeJS.ProcessEnv, problems?: EnvProblem[]): Env => {
         DEFAULT_PRESENCE_TTL_MS,
         problems,
       ),
+      clusterId: source.REALTIME_CLUSTER_ID?.trim() || undefined,
     },
 
     attachments: {
