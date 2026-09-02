@@ -259,6 +259,7 @@ export const myProfile: MyProfile = {
   email: "me@example.com",
   bio: "",
   lastActivity: new Date(BASE_TIME),
+  isAdmin: false,
 };
 
 export const mySettings: UserSettings = {

@@ -176,6 +176,7 @@ All errors return the following JSON structure:
   | `email` | String | Email address |
   | `bio` | String \| null | Biography |
   | `avatarUrl` | String \| null | User avatar URL |
+  | `isAdmin` | Boolean | Whether the current user may display admin navigation; protected admin routes still re-check authorization |
 - **Example**:
   ```json
   {
@@ -183,7 +184,8 @@ All errors return the following JSON structure:
     "name": "Alex",
     "email": "alex@example.com",
     "bio": "Hello, this is my bio.",
-    "avatarUrl": "https://example.com/avatar.png"
+    "avatarUrl": "https://example.com/avatar.png",
+    "isAdmin": false
   }
   ```
 
@@ -594,7 +596,8 @@ All errors return the following JSON structure:
     "name": "user123",
     "email": "user@example.com",
     "bio": "I am a new user.",
-    "avatarUrl": null
+    "avatarUrl": null,
+    "isAdmin": false
   }
   ```
 
@@ -643,7 +646,8 @@ All errors return the following JSON structure:
     "name": "user123",
     "email": "user@example.com",
     "bio": "Updated bio details",
-    "avatarUrl": null
+    "avatarUrl": null,
+    "isAdmin": false
   }
   ```
 

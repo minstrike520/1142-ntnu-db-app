@@ -34,6 +34,7 @@ describe('User E2E', () => {
     expect(res.status).toBe(200);
     expect(res.body.userId).toBe(userId);
     expect(res.body.name).toBe('User');
+    expect(res.body.isAdmin).toBe(false);
   });
 
   it('should fail without token', async () => {
