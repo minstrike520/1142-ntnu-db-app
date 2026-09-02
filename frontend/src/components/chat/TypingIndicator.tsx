@@ -1,3 +1,5 @@
+"use client";
+
 import React from "react";
 import { useTypingUsers } from "@/context/ChatContext";
 

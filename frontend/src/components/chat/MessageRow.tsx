@@ -1,3 +1,5 @@
+"use client";
+
 import React from "react";
 import { ChatBubble } from "@/components/ui/ChatBubble";
 import { useTranslation } from "@/hooks/useTranslation";
