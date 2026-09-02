@@ -173,6 +173,70 @@ describe('Socket.IO ephemeral events E2E', () => {
     }
   });
 
+  /**
+   * Two sockets for one user is the ordinary case — one browser tab each — and
+   * `user_typing` speaks about the user, not the socket. These two pin that one
+   * tab can neither cancel nor duplicate the other's claim.
+   */
+  const openTypingPair = async () => {
+    const tabA = await connectClient('user-1');
+    const tabB = await connectClient('user-1');
+    const observer = await connectClient('user-2');
+
+    await waitForExpect(() => {
+      const members = ioServer.sockets.adapter.rooms.get('room_room-1');
+      expect(members?.has(observer.id!)).toBe(true);
+      expect(members?.has(tabA.id!)).toBe(true);
+      expect(members?.has(tabB.id!)).toBe(true);
+    });
+
+    const seen: Parameters<ServerToClientEvents['user_typing']>[0][] = [];
+    observer.on('user_typing', (payload) => seen.push(payload));
+    return { tabA, tabB, seen };
+  };
+
+  it('keeps a user typing when another of their sessions stops', async () => {
+    const { tabA, tabB, seen } = await openTypingPair();
+
+    tabA.emit('typing', { roomId: 'room-1', isTyping: true });
+    await waitForExpect(() => {
+      expect(seen).toEqual([{ roomId: 'room-1', userId: 'user-1', isTyping: true }]);
+    });
+
+    // The idle tab retracting a claim it never made must not stop the user.
+    tabB.emit('typing', { roomId: 'room-1', isTyping: false });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(seen).toEqual([{ roomId: 'room-1', userId: 'user-1', isTyping: true }]);
+
+    tabA.emit('typing', { roomId: 'room-1', isTyping: false });
+    await waitForExpect(() => {
+      expect(seen).toEqual([
+        { roomId: 'room-1', userId: 'user-1', isTyping: true },
+        { roomId: 'room-1', userId: 'user-1', isTyping: false },
+      ]);
+    });
+  });
+
+  it('keeps a user typing when one of two typing sessions disconnects', async () => {
+    const { tabA, tabB, seen } = await openTypingPair();
+
+    tabA.emit('typing', { roomId: 'room-1', isTyping: true });
+    await waitForExpect(() => expect(seen).toHaveLength(1));
+
+    tabB.emit('typing', { roomId: 'room-1', isTyping: true });
+    await waitForExpect(() => expect(seen).toHaveLength(2));
+
+    // Losing one of the two sessions must not retract the user's claim.
+    tabB.disconnect();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(seen.every((event) => event.isTyping)).toBe(true);
+
+    tabA.emit('typing', { roomId: 'room-1', isTyping: false });
+    await waitForExpect(() => {
+      expect(seen.at(-1)).toEqual({ roomId: 'room-1', userId: 'user-1', isTyping: false });
+    });
+  });
+
   it('enforces the per-user session limit', async () => {
     process.env.MAX_SESSIONS_PER_USER = '1';
     // This server was created with the default limit; rebuild it with the test limit.

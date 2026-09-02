@@ -26,6 +26,9 @@ describe('attachSockets', () => {
     socket = {
       id: 'socket-1',
       data: { user: { userId: 'user-1', name: 'Alice' } },
+      // A real Socket.IO socket tracks its rooms, and the typing handler reads
+      // them to decide whether its cached membership check is still good.
+      rooms: new Set(['user_user-1', 'room_room-active']),
       join: mock(),
       leave: mock(),
       emit: mock(),
@@ -95,6 +98,112 @@ describe('attachSockets', () => {
     });
   });
 
+  it('refreshes typing without re-checking membership', async () => {
+    // Let the connection's own subscription restore settle first: it calls
+    // findMember once per active room, and that call is not what this pins.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const membershipChecks = () => roomMemberRepo.findMember.mock.calls.length;
+    const baseline = membershipChecks();
+
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+
+    expect(membershipChecks() - baseline).toBe(1);
+  });
+
+  /**
+   * The client arms its own removal timer only when it receives `true`
+   * (`frontend/src/context/ChatContext.tsx:1593-1607`), so every refresh has to
+   * reach the room. Collapsing these into a single edge event makes the
+   * indicator vanish after one client timeout while the user is still typing.
+   */
+  it('re-broadcasts every typing refresh, which is the client heartbeat', async () => {
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+
+    expect(roomEmit).toHaveBeenCalledTimes(3);
+    expect(roomEmit).toHaveBeenLastCalledWith('user_typing', {
+      roomId: 'room-active',
+      userId: 'user-1',
+      isTyping: true,
+    });
+  });
+
+  it('re-checks membership once per TTL even while a claim is refreshed', async () => {
+    const previous = process.env.TYPING_TTL_MS;
+    process.env.TYPING_TTL_MS = '10';
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const membershipChecks = () => roomMemberRepo.findMember.mock.calls.length;
+      const baseline = membershipChecks();
+
+      await handlers.typing({ roomId: 'room-active', isTyping: true });
+      await handlers.typing({ roomId: 'room-active', isTyping: true });
+      expect(membershipChecks() - baseline).toBe(1);
+
+      // Access is revoked while the user keeps typing. The claim is refreshed
+      // continuously, so only the TTL bound forces the re-check that stops them.
+      roomMemberRepo.findMember.mockResolvedValue(null);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await handlers.typing({ roomId: 'room-active', isTyping: true });
+
+      expect(membershipChecks() - baseline).toBe(2);
+      expect(socket.emit).toHaveBeenCalledWith('error', {
+        statusCode: 403,
+        message: 'Not a member of this room',
+        code: 'FORBIDDEN',
+      });
+    } finally {
+      if (previous === undefined) delete process.env.TYPING_TTL_MS;
+      else process.env.TYPING_TTL_MS = previous;
+    }
+  });
+
+  /**
+   * `socketsLeave` removes the socket from the room but does not stop it
+   * addressing that room, so losing the subscription has to invalidate the
+   * cached membership check immediately rather than one TTL later.
+   */
+  it('stops trusting the membership cache once the socket leaves the room', async () => {
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+    const baseline = roomMemberRepo.findMember.mock.calls.length;
+    roomEmit.mockClear();
+
+    // What room revocation does, through publisher.removeUserFromRoom.
+    socket.rooms.delete('room_room-active');
+    roomMemberRepo.findMember.mockResolvedValue(null);
+    await handlers.typing({ roomId: 'room-active', isTyping: true });
+
+    expect(roomMemberRepo.findMember.mock.calls.length - baseline).toBe(1);
+    expect(roomEmit).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('error', {
+      statusCode: 403,
+      message: 'Not a member of this room',
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('rejects a typing stop from a non-member', async () => {
+    roomMemberRepo.findMember.mockResolvedValue(null);
+
+    await handlers.typing({ roomId: 'room-hidden', isTyping: false });
+
+    expect(roomEmit).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('error', {
+      statusCode: 403,
+      message: 'Not a member of this room',
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('does not broadcast a stop for a room this socket never claimed', async () => {
+    await handlers.typing({ roomId: 'room-active', isTyping: false });
+
+    expect(roomEmit).not.toHaveBeenCalled();
+  });
+
   it('expires typing automatically at the server TTL', async () => {
     const previous = process.env.TYPING_TTL_MS;
     process.env.TYPING_TTL_MS = '10';
@@ -125,6 +234,7 @@ describe('attachSockets', () => {
       const frSocket = {
         id: 'socket-fr-1',
         data: { user: { userId: 'user-1', name: 'Alice' } },
+        rooms: new Set(['user_user-1', 'room_room-active']),
         join: mock(),
         leave: mock(),
         emit: mock(),
