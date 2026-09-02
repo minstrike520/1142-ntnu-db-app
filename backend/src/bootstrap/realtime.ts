@@ -7,11 +7,15 @@ import type { ChatServer } from '../realtime/authSocket';
 import { attachSocketAuth } from '../realtime/authSocket';
 import { attachSockets } from '../realtime/socketServer';
 import type { RealtimePublisher } from '../realtime/publisher';
+import { createRedisAdapter } from '../realtime/redisAdapter';
+import type { RedisManager } from '../utils/redis';
+import { env } from '../config/env';
 
 export interface CreateRealtimeDeps {
   config: AppConfig;
   repositories: Repositories;
   publisher: RealtimePublisher;
+  redis: RedisManager;
 }
 
 export interface RealtimeRuntime {
@@ -27,6 +31,7 @@ export const createRealtime = ({
   config,
   repositories,
   publisher,
+  redis,
 }: CreateRealtimeDeps): RealtimeRuntime => {
   // CORS must be configured on the engine, not on the Socket.IO server: once
   // `io.bind(engine)` is used, Socket.IO never sees the raw handshake request,
@@ -40,7 +45,19 @@ export const createRealtime = ({
     maxHttpBufferSize: 1_000_000,
     cors: { origin: config.corsOrigins, credentials: true },
   });
-  const io = new Server<ClientToServerEvents, ServerToClientEvents>() as ChatServer;
+  // No `REDIS_URL` means no cluster adapter at all, mirroring the choice
+  // `bootstrap/presence.ts` makes for presence: a deployment that has opted out
+  // of Redis keeps exactly the single-node realtime it had before Redis
+  // existed, with the in-memory adapter and no subscription to supervise.
+  //
+  // Passed as a constructor option rather than through `io.adapter(...)`, which
+  // would build the default adapter first and then re-init every namespace.
+  const { redisUrl } = env();
+  const io = new Server<ClientToServerEvents, ServerToClientEvents>(
+    redisUrl
+      ? { adapter: createRedisAdapter({ redis, instanceId: config.instanceId }) }
+      : {},
+  ) as ChatServer;
 
   io.bind(engine);
   publisher.bind(io);

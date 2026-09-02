@@ -21,7 +21,7 @@ const redis = createRedis();
 const publisher = createRealtimePublisher();
 const services = createServices({ repositories, publisher });
 const honoApp = createHttpApp({ services, config });
-const realtime = createRealtime({ config, repositories, publisher });
+const realtime = createRealtime({ config, repositories, publisher, redis });
 const server = createBunRuntimeServer({ app: honoApp, engine: realtime.engine });
 const io = realtime.io;
 

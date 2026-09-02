@@ -161,12 +161,19 @@ name to reuse. Per-field TTLs need **Redis 7.4 or newer** — against an older
 server the write fails, the backend logs the requirement once, and presence
 falls back to this instance only.
 
-What is *not* shared yet is the `user_status` push: `io.to()` reaches only the
-sockets held by the emitting process, so a friend connected to a different
-instance sees the change on their next `GET /friends` rather than over the
-socket. Closing that is the Redis event bus in #475/#476. The per-user session
-limit, global rate limits and cross-node change fan-out also remain
-per-instance, so a replica count above one is not yet a supported deployment.
+Event fan-out is shared as well, whenever `REDIS_URL` is set:
+`realtime/redisAdapter.ts` installs a Socket.IO cluster adapter over the
+`near-chat-ws` channel, so `io.to()`, room subscription changes and forced
+disconnects all carry to the other instances (#475). Delivery is at most once —
+Redis pub/sub keeps no backlog, so what an instance missed while unreachable is
+gone, and clients recover through their Sync Cursor.
+
+What is *not* shared yet is the `user_status` push: `realtime/presence.ts` still
+emits it only when the friend holds a socket on the emitting instance, so a
+friend connected elsewhere sees the change on their next `GET /friends` rather
+than over the socket. Closing that is #476. The per-user session limit and
+global rate limits also remain per-instance, so a replica count above one is not
+yet a supported deployment.
 
 ### Production Ingress & Proxy Trust
 

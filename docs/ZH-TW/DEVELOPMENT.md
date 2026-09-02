@@ -145,11 +145,17 @@ container 就會在 lease 尚未交還時被 SIGKILL，外觀上與「instance �
 **Redis 7.4 以上** —— 對更舊的伺服器寫入會失敗，後端會記錄一次版本需求，
 presence 則退回只看本機。
 
-目前**尚未**共享的是 `user_status` 推播：`io.to()` 只會送到發出端行程自己持有
-的 socket，因此連在另一個 instance 上的好友要等到下一次 `GET /friends` 才會看
-到狀態變化。補上這段是 #475／#476 的 Redis event bus。每位使用者的 session 上
-限、全域限流與跨節點 change fan-out 同樣仍是 per-instance，所以把 replica 數量
-調到大於 1 目前還不是受支援的部署方式。
+只要設定了 `REDIS_URL`，事件 fan-out 同樣是共享的：`realtime/redisAdapter.ts`
+會在 `near-chat-ws` channel 上掛載 Socket.IO cluster adapter，因此 `io.to()`、
+room subscription 變更與強制斷線都會送到其他 instance（#475）。投遞語意是 at
+most once —— Redis pub/sub 不保留 backlog，instance 失聯期間錯過的事件不會補
+送，客戶端仍以 Sync Cursor 復原。
+
+目前**尚未**共享的是 `user_status` 推播：`realtime/presence.ts` 只在好友於發出
+端 instance 上持有 socket 時才送出，因此連在另一個 instance 上的好友要等到下一
+次 `GET /friends` 才會看到狀態變化。補上這段是 #476。每位使用者的 session 上限
+與全域限流同樣仍是 per-instance，所以把 replica 數量調到大於 1 目前還不是受支
+援的部署方式。
 
 ### 正式環境入口拓撲與代理信任
 
