@@ -2,6 +2,10 @@ name: CI Backend
 
 on:
   workflow_call:
+    outputs:
+      coverage_summary:
+        description: Machine-readable unit test coverage summary
+        value: ${{ jobs.unit.outputs.coverage_summary }}
     inputs:
       run-build:
         description: Run the TypeScript production build job
@@ -28,6 +32,8 @@ jobs:
       - run: pnpm --filter near-chat-backend lint
 
   unit:
+    outputs:
+      coverage_summary: ${{ steps.coverage.outputs.coverage_summary }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -35,7 +41,33 @@ jobs:
         with:
           package: near-chat-backend
           bun: 'true'
-      - run: pnpm --filter near-chat-backend test:unit
+      - name: Run unit tests with coverage
+        id: unit-tests
+        run: pnpm --filter near-chat-backend test:coverage --coverage-reporter=lcov
+
+      - name: Collect coverage summary
+        id: coverage
+        if: always()
+        env:
+          TEST_OUTCOME: ${{ steps.unit-tests.outcome }}
+        run: |
+          set -uo pipefail
+
+          summary="$(node scripts/coverage-summary.mjs lcov backend/coverage/lcov.info || true)"
+          if [[ -z "$summary" ]]; then
+            summary='{"status":"error","error":"coverage parser produced no output"}'
+          fi
+          echo "coverage_summary=$summary" >> "$GITHUB_OUTPUT"
+
+          # A test failure remains attributable to the test step. If tests passed,
+          # however, a missing or malformed coverage report must fail this job
+          # rather than silently becoming a fabricated 0% value.
+          if ! jq -e '.status == "success"' <<<"$summary" >/dev/null; then
+            if [[ "$TEST_OUTCOME" == "success" ]]; then
+              echo "::error::unit tests passed but coverage collection failed"
+              exit 1
+            fi
+          fi
 
   build:
     if: inputs.run-build

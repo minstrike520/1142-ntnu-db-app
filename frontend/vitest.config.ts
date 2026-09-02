@@ -68,6 +68,11 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["tests/setup.ts"],
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    coverage: {
+      provider: "v8",
+      reporter: ["json-summary"],
+      reportsDirectory: "./coverage",
+    },
     testTimeout: 30000,
     hookTimeout: 30000,
     // Serial execution keeps profiler numbers comparable between runs and

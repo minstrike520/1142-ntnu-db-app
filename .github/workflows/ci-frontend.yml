@@ -2,6 +2,10 @@ name: CI Frontend
 
 on:
   workflow_call:
+    outputs:
+      coverage_summary:
+        description: Machine-readable unit test coverage summary
+        value: ${{ jobs.coverage.outputs.coverage_summary }}
     inputs:
       run-build:
         description: Run the Next.js production build job
@@ -22,6 +26,7 @@ jobs:
         with:
           package: near-chat
       - run: pnpm test:node-engine
+      - run: node --test scripts/coverage-summary.test.mjs
       - run: pnpm check:node-engine
 
   lint:
@@ -73,6 +78,8 @@ jobs:
         # Keep this literal at the minimum version derived by the node-engine
         # guard. The other legs intentionally float to the newest releases of
         # the supported Node 22 and Node 24 lines.
+        # Coverage is generated once by the separate canonical Node 22 job below,
+        # not by every compatibility leg.
         node-version: ['22', '22.22.2', '24']
     steps:
       - uses: actions/checkout@v7
@@ -81,6 +88,42 @@ jobs:
           package: near-chat-frontend
           node-version: ${{ matrix.node-version }}
       - run: pnpm --filter near-chat-frontend test
+
+  coverage:
+    runs-on: ubuntu-latest
+    outputs:
+      coverage_summary: ${{ steps.coverage.outputs.coverage_summary }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-workspace
+        with:
+          package: near-chat-frontend
+          # Node 22 is the canonical runtime for the non-matrix CI jobs and
+          # therefore the single source of frontend coverage.
+          node-version: '22'
+      - name: Run unit tests with coverage
+        id: unit-tests
+        run: pnpm --filter near-chat-frontend test --coverage
+      - name: Collect coverage summary
+        id: coverage
+        if: always()
+        env:
+          TEST_OUTCOME: ${{ steps.unit-tests.outcome }}
+        run: |
+          set -uo pipefail
+
+          summary="$(node scripts/coverage-summary.mjs vitest frontend/coverage/coverage-summary.json || true)"
+          if [[ -z "$summary" ]]; then
+            summary='{"status":"error","error":"coverage parser produced no output"}'
+          fi
+          echo "coverage_summary=$summary" >> "$GITHUB_OUTPUT"
+
+          if ! jq -e '.status == "success"' <<<"$summary" >/dev/null; then
+            if [[ "$TEST_OUTCOME" == "success" ]]; then
+              echo "::error::unit tests passed but coverage collection failed"
+              exit 1
+            fi
+          fi
 
   build:
     if: inputs.run-build
