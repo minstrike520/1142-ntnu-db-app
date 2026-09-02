@@ -23,7 +23,7 @@ jobs:
   publish:
     name: 驗證版本、發布完整 Stack 與建立 Release
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       actions: read
       contents: write
@@ -32,7 +32,7 @@ jobs:
       id-token: write
     steps:
       - name: 取出完整版本歷史
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           fetch-tags: true
