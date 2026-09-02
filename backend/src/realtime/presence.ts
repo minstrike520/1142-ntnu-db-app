@@ -8,22 +8,14 @@ interface FriendPresenceDeps {
   getFriends(userId: string): Promise<{ friend: { userId: string } }[]>;
 }
 
-/**
- * Ceiling on how long releasing leases may hold up a shutdown.
- *
- * Matched to `DEFAULT_CLOSE_TIMEOUT_MS` in `utils/redis.ts`, which bounds the
- * step that runs immediately after: a deployment must not be held open by an
- * unreachable Redis, and an unreleased lease costs at most `presenceTtlMs` of
- * one user showing online.
- */
+/** Max time allowed for releasing presence leases during shutdown. */
 export const DEFAULT_PRESENCE_STOP_TIMEOUT_MS = 2_000;
 
-/** Resolve when the work does or when the deadline passes, whichever is first. */
+/** Races a promise against a timeout deadline. */
 const withDeadline = async (work: Promise<unknown>, ms: number): Promise<void> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, ms);
-    // Never let the deadline itself be the reason the process stays alive.
     timer.unref?.();
   });
   try {
@@ -36,19 +28,8 @@ const withDeadline = async (work: Promise<unknown>, ms: number): Promise<void> =
 export type PresenceStatus = 'online' | 'offline';
 
 /**
- * A presence answer that can admit it does not know.
- *
- * `unknown` is only ever produced by a Redis this instance could not reach
- * while some other instance might still hold a lease — never by a deployment
- * running without Redis, where one process seeing no connection *is* the whole
- * truth.
- *
- * It exists because collapsing it to `offline` is safe for a display and unsafe
- * for a decision. `utils/inactivityJob.ts` acts on offline by escalating to
- * `checkInactivity`, which past the warning threshold notifies a user's
- * emergency contacts — a one-shot, recorded delivery that no later tick undoes.
- * Alerting someone's contacts because Redis blinked is not a degradation anyone
- * would accept, and a skipped hourly tick costs nothing.
+ * Presence state with tri-state support.
+ * 'unknown' is returned when Redis is unreachable, preventing false offline escalations.
  */
 export type PresenceState = PresenceStatus | 'unknown';
 
@@ -65,53 +46,31 @@ export interface PresenceTracker {
     socketId: string,
     friendRepo: FriendPresenceDeps,
   ): Promise<void>;
-  /**
-   * Whether the user has a live connection anywhere.
-   *
-   * Asynchronous because the answer can live on another instance. This
-   * instance's own connections are still answered from memory without a round
-   * trip — they are the part of the answer it is authoritative for.
-   */
+  /** Returns true if user has an active connection locally or in Redis. */
   isUserOnline(userId: string): Promise<boolean>;
-  /**
-   * The same question as `isUserOnline`, without collapsing "Redis did not
-   * answer" into "offline". See `PresenceState`.
-   */
+  /** Returns 'online', 'offline', or 'unknown' if Redis cannot be reached. */
   presenceOf(userId: string): Promise<PresenceState>;
-  /**
-   * The subset of these users who are online, in one round trip.
-   *
-   * For the list endpoints, which ask about a whole page at once. Unreachable
-   * Redis answers with whatever this instance can see, which is the same
-   * degradation `isUserOnline` makes and is correct for a display.
-   */
+  /** Returns the subset of user IDs currently online in a single check. */
   onlineAmong(userIds: string[]): Promise<Set<string>>;
   getOnlineUsers(): Promise<string[]>;
-  /** Drop this instance's state and release the leases it is holding. */
+  /** Clears local presence state and releases held leases. */
   clearPresence(): Promise<void>;
-  /** Release every lease and stop the heartbeat. Idempotent. */
+  /** Releases held leases and stops heartbeat. Idempotent. */
   stop(): Promise<void>;
 }
 
 export interface CreatePresenceTrackerOptions {
-  /** Absent means single-node: presence is whatever this process can see. */
+  /** Optional distributed presence store; absent runs in single-node mode. */
   store?: PresenceStore;
-  /** Read per call, so a test can change `PRESENCE_GRACE_MS` between cases. */
+  /** Reconnect grace period in milliseconds before broadcasting offline. */
   graceMs?: () => number;
-  /** Lease lifetime; also sets the heartbeat period. */
+  /** Lease TTL and heartbeat period. */
   ttlMs?: number;
-  /** How many heartbeats fit in one lease. */
+  /** Number of heartbeats within one lease TTL window. */
   refreshDivisor?: number;
-  /**
-   * Ceiling on how long `stop()` may spend handing leases back.
-   *
-   * Shutdown must terminate whatever Redis is doing, the same bounded-fallback
-   * shape `utils/redis.ts` uses for `close()`. Leases that miss this window are
-   * not lost work — they expire on their own within `ttlMs`.
-   */
+  /** Max time allowed for releasing leases during stop(). */
   stopTimeoutMs?: number;
   logger?: pino.Logger;
-  /** Injected so tests drive the heartbeat instead of waiting for it. */
   setIntervalFn?: (handler: () => void, ms: number) => ReturnType<typeof setInterval> | number;
   clearIntervalFn?: (handle: ReturnType<typeof setInterval> | number) => void;
 }
@@ -156,17 +115,7 @@ export const createPresenceTracker = ({
   const isLocallyOnline = (userId: string): boolean =>
     localSocketCount(userId) > 0 || pendingDisconnects.has(userId);
 
-  /**
-   * Tell a user's friends that their status changed.
-   *
-   * The per-friend check is deliberately the *local* one. `io.to()` reaches
-   * only sockets held by this process — the publisher is single-process, by
-   * design and by its own doc comment — so a friend connected elsewhere cannot
-   * be reached from here whatever Redis says, and asking Redis about each
-   * friend would buy a round trip per friend per connect and change nothing.
-   * Delivering `user_status` across instances is the event bus's job (#475),
-   * not this module's.
-   */
+  /** Broadcasts online/offline status transition to online friends. */
   const broadcastStatus = async (
     io: ChatServer,
     userId: string,
@@ -185,25 +134,13 @@ export const createPresenceTracker = ({
     }
   };
 
-  /**
-   * Re-take every lease this instance is holding.
-   *
-   * The window where this could resurrect a user who left mid-refresh is closed
-   * by issue order rather than by a lock: the membership check and the `hold`
-   * for every user are issued in one synchronous burst, before control returns
-   * to the event loop, so a disconnect that arrives afterwards always issues its
-   * `release` *behind* them on the same command connection. Redis applies them
-   * in that order, so the last word belongs to the disconnect. Introducing an
-   * `await` inside this loop would break that and re-open the window.
-   */
+  /** Refreshes presence leases in Redis for all currently held users. */
   const refreshLeases = async (): Promise<void> => {
     if (!store || stopped) return;
     const users = heldUsers();
     if (users.length === 0) return;
     await Promise.all(
       users.map((userId) => {
-        // A user whose grace period ended between building the list and getting
-        // here no longer wants a lease; re-taking one would resurrect them.
         if (!isLocallyOnline(userId)) return Promise.resolve();
         return store.hold(userId, localSocketCount(userId));
       }),
@@ -211,9 +148,6 @@ export const createPresenceTracker = ({
   };
 
   const startHeartbeat = (): void => {
-    // No lease to refresh without a store, and no timer either: importing this
-    // module must not leave the test runner or the E2E suite holding the loop
-    // open.
     if (!store || heartbeat !== undefined) return;
     const period = Math.max(1, Math.floor(ttlMs / Math.max(1, refreshDivisor)));
     heartbeat = setIntervalFn(() => {
@@ -224,7 +158,7 @@ export const createPresenceTracker = ({
     (heartbeat as { unref?: () => void }).unref?.();
   };
 
-  /** The user has no connection here any more: drop the lease and settle the edge. */
+  /** Drops local presence and releases the Redis lease for a disconnected user. */
   const releaseUser = async (
     io: ChatServer,
     userId: string,
@@ -239,21 +173,12 @@ export const createPresenceTracker = ({
     }
 
     const result = await store.release(userId);
-    // A failed release means the lease is still out there and will expire on its
-    // own. Announcing offline anyway is the right call: this instance knows the
-    // user has no connection here, and falling silent would leave the friends it
-    // *can* reach showing a stale online.
     const goneEverywhere = !result.ok || result.value === 0;
     if (goneEverywhere) await broadcastStatus(io, userId, 'offline', friendRepo);
   };
 
   const presenceOf = async (userId: string): Promise<PresenceState> => {
-    // Answered from memory when this instance holds the connection: it is the
-    // half of the answer this process is authoritative for, and no round trip
-    // can improve on it.
     if (isLocallyOnline(userId)) return 'online';
-    // Without a store this process *is* the deployment, so seeing nothing is
-    // knowing they are offline rather than failing to find out.
     if (!store) return 'offline';
     const result = await store.isOnline(userId);
     if (!result.ok) return 'unknown';
@@ -288,10 +213,6 @@ export const createPresenceTracker = ({
 
       startHeartbeat();
       const result = await store.hold(userId, sockets.size);
-      // `0` holders before this call is the definition of "first connection
-      // anywhere", so it covers the second tab, the second instance and the
-      // reconnect inside the grace period without any of them being a special
-      // case: in all three this instance's own lease was already out.
       const firstAnywhere = result.ok
         ? result.value === 0
         : wasLocallyOffline && !wasGracefullyReconnecting;
@@ -303,10 +224,6 @@ export const createPresenceTracker = ({
       if (!sockets || !sockets.has(socketId)) return;
 
       sockets.delete(socketId);
-      // Other tabs are still open here, so the lease stays exactly as it is. Its
-      // stored connection count is a hint the heartbeat refreshes, not a live
-      // counter — nobody reads it to decide anything, and spending a round trip
-      // on every tab close to keep it exact would be paying for a diagnostic.
       if (sockets.size > 0) return;
 
       const delay = graceMs();
@@ -315,8 +232,7 @@ export const createPresenceTracker = ({
         return;
       }
 
-      // Keep the user online during the grace period. A reconnect cancels this
-      // timer and restores the session without an offline transition.
+      // Delay offline broadcast during the reconnect grace period.
       const prior = pendingDisconnects.get(userId);
       if (prior) clearTimeout(prior);
       const timer = setTimeout(() => {
@@ -346,8 +262,6 @@ export const createPresenceTracker = ({
       if (!store || unresolved.length === 0) return online;
 
       const result = await store.areOnline(unresolved);
-      // A Redis this instance cannot reach makes it single-node again, which is
-      // the same answer it would give with no Redis configured at all.
       if (result.ok) for (const userId of result.value) online.add(userId);
       return online;
     },
@@ -373,11 +287,6 @@ export const createPresenceTracker = ({
         clearIntervalFn(heartbeat);
         heartbeat = undefined;
       }
-      // Release rather than let the leases expire. Shutdown is the one case
-      // where this process knows for certain that its users are gone, and
-      // `index.ts` keeps Redis open through the drain precisely so this write
-      // still lands. A grace timer is cancelled outright: a process that is
-      // going away is not a reconnect anyone should wait for.
       for (const timer of pendingDisconnects.values()) clearTimeout(timer);
       const users = heldUsers();
       pendingDisconnects.clear();
@@ -391,19 +300,7 @@ export const createPresenceTracker = ({
   };
 };
 
-/**
- * The process-wide tracker.
- *
- * Presence is genuinely one thing per process, and every caller reaches it
- * through these bindings rather than through an import of a mutable instance,
- * so `configurePresence` can replace it once the composition root knows whether
- * there is a Redis to share it through. Until then — and in the E2E suite,
- * which imports the app without ever calling `connect()` — it runs local-only,
- * which is exactly the behaviour this module had before Redis existed.
- *
- * Tests build their own with `createPresenceTracker` and inject it; nothing
- * here needs `mock.module`.
- */
+/** Default process-wide presence tracker singleton. */
 let current: PresenceTracker = createPresenceTracker();
 
 export const configurePresence = (options: CreatePresenceTrackerOptions): PresenceTracker => {

@@ -7,52 +7,27 @@ import {
   type SlowQueryStore,
 } from '../utils/slowQueryStore';
 
-// Re-exported from its home next to the buffer it describes, so the existing
-// callers and tests that import it from here keep working.
+// Re-exported slow query threshold constant.
 export { DEFAULT_SLOW_QUERY_THRESHOLD_MS };
 
-/**
- * Ceiling on a retained query skeleton, in characters.
- *
- * The record count alone does not bound memory — one enormous generated
- * statement would sit in the ring until 100 more push it out — and the text is
- * only ever read by a human scanning for the shape of a slow query, which the
- * first few hundred characters already give.
- */
+/** Max character length retained for a slow query skeleton in the store. */
 export const MAX_QUERY_TEXT_CHARS = 500;
 
 export interface InstrumentSqlOptions {
   logger?: Logger;
   store?: SlowQueryStore;
   thresholdMs?: number;
-  /** Monotonic clock in milliseconds. Overridable so tests can assert exact durations. */
+  /** Monotonic clock in milliseconds. Overridable for testing. */
   now?: () => number;
 }
 
-/**
- * A tagged-template call, as opposed to one of Bun.SQL's helper calls.
- *
- * This matters because `` sql`SELECT 1` `` and `sql('users')` both return a
- * `Query` object, so the return value cannot tell them apart. The first is a
- * statement to time; the second builds an identifier/values fragment that gets
- * interpolated into another query and never executes on its own. Timing a
- * fragment would report a duration for something that never ran, so the
- * distinction is drawn where it is unambiguous: only a tagged template receives
- * a strings array carrying `raw`.
- */
+/** Checks whether invocation is a tagged-template literal call (sql\`...\`). */
 const isTaggedTemplateCall = (args: unknown[]): args is [TemplateStringsArray, ...unknown[]] => {
   const [first] = args;
   return Array.isArray(first) && Array.isArray((first as { raw?: unknown }).raw);
 };
 
-/**
- * The query's shape with every interpolated value replaced by `?`.
- *
- * Built from the template's static strings, which is what makes this safe by
- * construction rather than by filtering: the bound values are in the *other*
- * half of the tagged-template arguments and are never touched here, so no
- * password, token or email address can reach the buffer this text lands in.
- */
+/** Replaces bound parameter placeholders with '?' to create a safe query skeleton. */
 export const describeQuery = (strings: readonly string[]): string => {
   const skeleton = strings.join(' ? ').replace(/\s+/g, ' ').trim();
   return skeleton.length > MAX_QUERY_TEXT_CHARS
@@ -60,33 +35,7 @@ export const describeQuery = (strings: readonly string[]): string => {
     : skeleton;
 };
 
-/**
- * Wrap a Bun.SQL client so every statement it runs is timed.
- *
- * ## Why a proxy over the callable, and not per-repository timing
- *
- * The two candidate interception points were the repositories (add timing to
- * each of the eight `*Repository` classes) and the client itself. The client
- * wins on coverage that does not decay: a repository added next month is timed
- * without anyone remembering to instrument it, and the ~200 call sites stay
- * untouched. `Bun.SQL` is a callable object, so an `apply` trap sees every
- * `` sql`...` `` invocation from one place.
- *
- * ## Why timing starts on `then`, not when the template is invoked
- *
- * A `Query` is lazy: `` sql`SELECT 1` `` builds it, and execution begins only
- * when it is awaited (verified against a live PostgreSQL — `query.active` stays
- * false until then). Starting the clock in the `apply` trap would therefore
- * charge a query for however long the caller sat on it before awaiting. The
- * clock starts in the `then` trap instead, which is the moment execution
- * actually begins.
- *
- * `then` is also the *only* method intercepted, deliberately. Every call site in
- * this codebase plain-awaits its query, so `then` covers all real traffic, and
- * anything else — `.execute()`, `.values()`, `.raw()`, `.cancel()` — falls
- * through to Bun untouched. The failure mode of that choice is a query that goes
- * unmeasured, never a query that breaks.
- */
+/** Wraps a Bun.SQL client with proxies to record execution durations of slow queries. */
 export const instrumentSql = (sql: SQL, options: InstrumentSqlOptions = {}): SQL => {
   const {
     logger = defaultLogger,
@@ -97,16 +46,11 @@ export const instrumentSql = (sql: SQL, options: InstrumentSqlOptions = {}): SQL
 
   const record = (query: string, durationMs: number): void => {
     if (durationMs <= thresholdMs) return;
-    // This runs inside the caller's `await`; a throw here would turn a
-    // successful query into a failed request, so monitoring must never be able
-    // to fail the thing it monitors.
     try {
-      // Buffered before it is logged: the buffer is what the admin panel reads,
-      // so if only one of the two can happen it should be that one.
       store.push({ query, durationMs, at: Date.now() });
       logger.warn({ query, durationMs, thresholdMs }, 'slow query');
     } catch {
-      // Losing one slow-query record is strictly better than losing the query.
+      // Suppress logging/buffering errors so database operations are never interrupted.
     }
   };
 
@@ -170,11 +114,7 @@ export const instrumentSql = (sql: SQL, options: InstrumentSqlOptions = {}): SQL
       const value = Reflect.get(target, prop, receiver);
       if (typeof value !== 'function') return value;
 
-      // Statements inside a transaction run on the handle `begin` hands the
-      // callback, not on this client, so without this they would be the one part
-      // of the data layer that goes unmeasured — and transactions are where the
-      // multi-statement, lock-holding work lives. The handle is itself callable,
-      // so the same wrapper applies to it.
+      // Wrap transaction blocks so statements executed inside them are also timed.
       if (prop === 'begin' || prop === 'transaction') {
         return (...args: unknown[]) =>
           value.apply(
@@ -188,16 +128,7 @@ export const instrumentSql = (sql: SQL, options: InstrumentSqlOptions = {}): SQL
           );
       }
 
-      // `unsafe` is a real query path, not an escape hatch nobody uses:
-      // `UserRepository.update()` builds its SET list dynamically and runs the
-      // profile/settings write through it, so leaving it out would silently
-      // exclude a user-facing write from the monitoring. (Migrations do not come
-      // through here at all — `migrate.ts` constructs its own unwrapped client.)
-      //
-      // Recording its text is as safe as the tagged-template path for the same
-      // structural reason: `unsafe(text, values)` keeps the bound values in a
-      // separate argument this code never reads, and every call site in this
-      // repository passes `$n` placeholders rather than interpolated literals.
+      // Intercept unsafe raw queries to measure dynamic SQL executions.
       if (prop === 'unsafe') {
         return (...args: unknown[]) => {
           const query = value.apply(target, args);
@@ -210,7 +141,7 @@ export const instrumentSql = (sql: SQL, options: InstrumentSqlOptions = {}): SQL
         };
       }
 
-      // Everything else — `close`, `reserve`, `file` — passes straight through.
+      // Pass all other properties/methods through to the underlying Bun.SQL client.
       return value.bind(target);
     },
   });

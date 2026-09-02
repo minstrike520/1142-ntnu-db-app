@@ -14,13 +14,13 @@ permissions:
   contents: read
 
 jobs:
-  # backend's `lint` script is `eslint src && tsc --noEmit`, so it already
-  # covers typechecking — there is deliberately no separate typecheck job here,
-  # unlike the frontend lane.
+  # Runs eslint and TypeScript type checking.
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-workspace
         with:
           package: near-chat-backend
@@ -31,6 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-workspace
         with:
           package: near-chat-backend
@@ -42,24 +44,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-workspace
         with:
           package: near-chat-backend
           bun: 'true'
       - run: pnpm --filter near-chat-backend build
 
-  # The release deploy path had never been executed anywhere: release-stack.yml
-  # only copies docker-compose.release.yml into the bundle, so nothing ever
-  # started it, and the compose commands drifted away from the image they run
-  # until neither could have booted (issue #558). The unit tier now checks that
-  # contract statically; this job is the one place the two are actually run
-  # together. It is also the only CI coverage of Dockerfile.prod building at all.
-  #
-  # Deliberately a job in this lane rather than a new top-level workflow: ci.yml
-  # calls this file as a reusable workflow, so the `backend` result it feeds into
-  # `required-checks` already covers every job here. A new lane would need its own
-  # detect output, gate entry and branch-protection change to be enforced at all.
-  # Gated on run-build like the job above, so docs-only PRs still skip it.
+  # Verifies release compose setup and graceful shutdown on the production Docker image.
   release-compose:
     name: release compose boots on the production image
     if: inputs.run-build
@@ -67,26 +60,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Only needed to run backend/scripts/smoke.ts from the runner below —
-      # the compose stack itself is unaffected by this.
       - uses: ./.github/actions/setup-workspace
         with:
           package: near-chat-backend
           bun: 'true'
 
-      # ~2-4 min cold. Left uncached on purpose: a stale layer cache is exactly
-      # what would hide a runtime/layout drift from this job.
+      # Build production backend image without layer caching to detect drift.
       - name: Build the production backend image
         run: docker build -f backend/Dockerfile.prod -t near-chat-backend:ci .
 
+      # Temporary environment configuration for release compose stack.
       - name: Write a throwaway release env file
         run: |
           set -euo pipefail
-          # Compose interpolates the whole file, so every `${VAR:?}` needs a value
-          # even though only db, migrate and backend are started here. Written to
-          # RUNNER_TEMP rather than the workspace so no .env can be swept into an
-          # artifact, and passed with --env-file, which replaces the default
-          # ./.env discovery entirely.
           cat > "$RUNNER_TEMP/release.env" <<'EOF'
           BACKEND_IMAGE=near-chat-backend:ci
           FRONTEND_IMAGE=frontend-is-not-started-in-this-job
@@ -101,17 +87,12 @@ jobs:
       - name: Start db, migrate and backend from the release compose
         run: |
           set -euo pipefail
-          # No `--wait`: it does not cope with a service that is meant to exit.
-          # `service_completed_successfully` already holds the backend until the
-          # migration finishes, and a failed migration makes `up` itself exit
-          # non-zero, which covers the "migrate must succeed" criterion directly.
           docker compose --env-file "$RUNNER_TEMP/release.env" \
             -f docker-compose.release.yml up -d db migrate backend
 
       - name: Assert the migrate service exited cleanly
         run: |
           set -euo pipefail
-          # `ps` without -a hides containers that have already exited.
           container="$(docker compose --env-file "$RUNNER_TEMP/release.env" \
             -f docker-compose.release.yml ps -aq migrate)"
           exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$container")"
@@ -122,18 +103,10 @@ jobs:
       # #586 nothing here — or anywhere — ran the image's *own* CMD. That is the
       # command docker-compose.prod.yml inherits, and it left dash at PID 1,
       # where the kernel discards SIGTERM: `docker stop` was a no-op that ended
-      # in SIGKILL with the drain never entered. Both argv forms are probed,
-      # because the reasoning that says the release form is safe is the same
-      # reasoning about a shell layer that produced the bug.
-      #
-      # Runs after the migrate assertion above, so the schema is already at head
-      # and each probe's own `migrate:up` is the no-op that step 'Assert
-      # re-applying the bundle is a no-op' proves it to be.
+      # Verify that SIGTERM initiates graceful drain rather than abrupt termination.
       - name: Assert SIGTERM drains the backend instead of SIGKILLing it
         run: |
           set -euo pipefail
-          # Derived rather than hardcoded to the compose project name, so a
-          # project rename does not silently detach the probe from the database.
           net="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' \
             "$(docker compose --env-file "$RUNNER_TEMP/release.env" \
               -f docker-compose.release.yml ps -q db)")"
@@ -141,17 +114,12 @@ jobs:
           probe () {
             local name="$1"; shift
             echo "::group::SIGTERM probe: ${name} [$*]"
-            # Publishes no port: 4005 belongs to the compose backend. Not --rm,
-            # because the exit code has to survive the container.
             docker run -d --name "$name" --network "$net" \
               -e DATABASE_URL=postgresql://near:near@db:5432/near_chat \
               -e JWT_SECRET=ci-only-value-not-a-real-secret \
               -e CORS_ORIGINS=http://localhost:3005 \
               near-chat-backend:ci "$@" >/dev/null
 
-            # Signalling early would prove nothing: SIGTERM is legitimately
-            # ignored while migrations run and while the module body evaluates,
-            # before src/index.ts installs the handler.
             local ready=0
             for _ in $(seq 60); do
               if docker logs "$name" 2>&1 | grep -q 'successfully listening'; then ready=1; break; fi
@@ -164,9 +132,6 @@ jobs:
               return 1
             fi
 
-            # -t 30 matches stop_grace_period. Docker's 10s default is roughly
-            # the drain's own worst case, which would make a slow drain and a
-            # container that ignores the signal entirely indistinguishable.
             local start=$SECONDS
             docker stop -t 30 "$name" >/dev/null
             local elapsed=$(( SECONDS - start ))
@@ -176,9 +141,6 @@ jobs:
             echo "exit code ${code} after ${elapsed}s"
             echo "::endgroup::"
 
-            # 'Realtime server shutting down' is logged by publisher.shutdown(),
-            # the first step of the drain, so it separates "the signal never
-            # arrived" from "the drain ran but did not finish in time".
             local drained=0
             grep -q 'Realtime server shutting down' <<<"$logs" && drained=1
 
@@ -186,7 +148,7 @@ jobs:
               if [[ "$drained" == 1 ]]; then
                 echo "::error::${name} entered its drain but exited ${code}: the drain outlived stop_grace_period"
               elif [[ "$code" == 137 ]]; then
-                echo "::error::${name} exited 137: SIGTERM never reached the application and it was SIGKILLed. A shell left at PID 1 ignores the signal — check for 'exec' in backend/Dockerfile.prod's CMD (issue #586)."
+                echo "::error::${name} exited 137: SIGTERM never reached the application and it was SIGKILLed."
               else
                 echo "::error::${name} exited ${code}: a shell or init took SIGTERM and the application never saw it"
               fi
@@ -194,25 +156,19 @@ jobs:
               return 1
             fi
 
-            # Exit 0 on its own only says the process stopped; the marker is what
-            # proves the handler is what stopped it.
             if [[ "$drained" != 1 ]]; then
               echo "::error::${name} exited 0 without logging its shutdown, so the drain did not run"
               tail -50 <<<"$logs"
               return 1
             fi
 
-            # With no clients connected the drain is sub-second. This only catches
-            # one that quietly waits out a timeout instead of exiting.
             if (( elapsed > 20 )); then
               echo "::error::${name} took ${elapsed}s to stop; the drain is not exiting on its own"
               return 1
             fi
           }
 
-          # No command override: the image's own CMD, the one prod inherits.
           probe sigterm-probe-image-cmd
-          # The argv docker-compose.release.yml pins.
           probe sigterm-probe-release-cmd bun src/index.ts
 
       - name: Remove the SIGTERM probe containers
@@ -222,11 +178,6 @@ jobs:
       - name: Assert the backend serves HTTP
         run: |
           set -euo pipefail
-          # No healthcheck on this compose service. Probes an unmatched path
-          # rather than /api/v1/health so the response carrying the security
-          # headers proves the Hono middleware chain ran, not merely that
-          # something is holding the port. The status itself is deliberately
-          # not asserted: an unmatched path is a 404 by design.
           for attempt in {1..30}; do
             if curl -sS --max-time 5 -o /dev/null -D "$RUNNER_TEMP/probe.headers" \
               http://localhost:4005/api/v1/ci-startup-probe 2>/dev/null \
@@ -240,10 +191,7 @@ jobs:
           echo "::error::backend did not serve an HTTP response on :4005 within 30s"
           exit 1
 
-      # Covers the remaining issue #536 acceptance criteria not exercised
-      # above: connect, reliable send, sync-cursor repair and over-limit
-      # handling against the real production image, then the same checks
-      # again after a graceful restart to prove recovery holds.
+      # Run realtime smoke test suite against running container.
       - name: Run the realtime smoke suite against the production image
         env:
           SMOKE_API_URL: http://localhost:4005
@@ -275,11 +223,10 @@ jobs:
           SMOKE_STATE_FILE: ${{ runner.temp }}/smoke-state.json
         run: cd backend && bun run smoke
 
+      # Verify idempotency of migration and compose setup on upgrade.
       - name: Assert re-applying the bundle is a no-op
         run: |
           set -euo pipefail
-          # Re-running `up -d` is the ordinary way to apply an upgraded bundle, so
-          # migrate:up has to stay idempotent against an already-migrated schema.
           docker compose --env-file "$RUNNER_TEMP/release.env" \
             -f docker-compose.release.yml up -d db migrate backend
 
@@ -295,12 +242,7 @@ jobs:
           docker compose --env-file "$RUNNER_TEMP/release.env" \
             -f docker-compose.release.yml down -v --remove-orphans
 
-  # Mirrors release-compose above, but against the development image
-  # (docker-compose.yml, backend/Dockerfile) rather than the production one.
-  # Issue #536 requires both images to build and pass the same realtime smoke
-  # suite, and a bug specific to the dev Dockerfile or dev compose wiring
-  # (e.g. the bind-mounted node_modules setup) would not show up in
-  # release-compose at all.
+  # Verifies that development compose stack boots and passes the realtime smoke suite.
   dev-compose-smoke:
     name: dev compose boots on the development image
     if: inputs.run-build
@@ -316,9 +258,6 @@ jobs:
       - name: Write a throwaway dev env file
         run: |
           set -euo pipefail
-          # docker-compose.yml runs `pnpm run migrate:up && pnpm run dev` as its
-          # own command, so migration happens as part of `up` here, unlike the
-          # release compose's separate `migrate` service.
           cat > "$RUNNER_TEMP/dev.env" <<'EOF'
           NODE_ENV=development
           POSTGRES_USER=near
@@ -332,22 +271,12 @@ jobs:
           RATE_LIMIT_DISABLED=false
           EOF
 
-      # `--wait` here is deliberate rather than incidental: it is the command
-      # docs/DEVELOPMENT.md tells developers to run, and it only means anything
-      # because the backend service defines a healthcheck. Running it in CI is
-      # what keeps that healthcheck honest — if it ever stops reporting
-      # readiness correctly, this step fails instead of developers silently
-      # getting a connection refused right after `up --wait` returns.
       - name: Build and start db, redis and backend from the dev compose
         run: |
           set -euo pipefail
           docker compose --env-file "$RUNNER_TEMP/dev.env" \
             -f docker-compose.yml up -d --build --wait --wait-timeout 300 db redis backend
 
-      # Not redundant with `--wait` above: the healthcheck probes 127.0.0.1
-      # from inside the container, so it says nothing about the published
-      # port. This asserts the backend is reachable the way the smoke suite
-      # and a developer's browser actually reach it.
       - name: Assert the backend is reachable on the published port
         run: |
           set -euo pipefail

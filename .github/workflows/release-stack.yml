@@ -1,8 +1,7 @@
 name: 發布完整 Near Chat Stack
 
 on:
-  # Release Please 使用 GitHub App token 推送版本 tag，該 push 會直接
-  # 觸發本 workflow。workflow_dispatch 保留作為人工復原入口。
+  # Triggered by tag push from Release Please, or manual dispatch.
   push:
     tags:
       - 'v*'
@@ -60,18 +59,14 @@ jobs:
           tag_ref="refs/tags/${GITHUB_REF_NAME}"
           git fetch --force origin "${tag_ref}:${tag_ref}"
 
-          # Tag 型別不設限；`^{}` 對 lightweight 與 annotated tag 都會 peel 到 commit，
-          # 所以下面這段檢查對兩者等效，不需要再多一道 object type 判斷。
+          # Ensure tag points to the current workflow commit.
           peeled_sha="$(git rev-parse "${tag_ref}^{}")"
           if [[ "$(git cat-file -t "$peeled_sha")" != "commit" || "$peeled_sha" != "$GITHUB_SHA" ]]; then
             echo "Tag peeled commit 必須等於 workflow commit：tag=$peeled_sha workflow=$GITHUB_SHA" >&2
             exit 1
           fi
 
-          # 要求 tag commit 在 main 的歷史上，而非等於當下的 main HEAD。版本 tag
-          # push 觸發本 workflow 後，若有其他 PR 合併進 main，嚴格相等的檢查會把
-          # 一個完全正常的發布擋掉。ancestor 檢查一樣能保證被發布的 commit 真的
-          # 在 main 上，且不會被 force-push 出去的分支冒充。
+          # Ensure tagged commit is on main branch history.
           git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
           main_sha="$(git rev-parse refs/remotes/origin/main)"
           if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
@@ -79,8 +74,7 @@ jobs:
             exit 1
           fi
 
-          # Release Please 只會在這個 exact main commit 的 CI 成功後建立 tag，
-          # 因此只接受 tag commit 本身的 CI，不接受父 commit fallback。
+          # Verify that CI passed on this exact commit.
           runs="$(gh api --method GET \
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
@@ -106,14 +100,7 @@ jobs:
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs" \
             -f per_page=100)"
-          # 只驗證 ci.yml 的 aggregate gate，不再硬編碼各條 lane 的 job 名稱。gate 內部
-          # 已經逐條判斷「該跑的 lane 必須 success、不該跑的才可以 skipped」，因此原本
-          # 在這裡接受 skipped 的理由（paths-filter 會跳過未變更的一側）已由 gate 吸收。
-          # 這裡改為只接受 success：gate 帶 `if: always()` 一定會執行，skipped 代表異常。
-          #
-          # 注意這不是「只看 gate」：上面查 run_id 時已經要求該 exact commit 的 run 整體
-          # conclusion 為 success，兩道檢查是且的關係。日後若加入未納入 gate 的 job 而它
-          # 失敗，run 的 conclusion 仍會是 failure，發布一樣會被擋下。
+          # Verify the aggregate required-checks gate succeeded.
           required='required-checks'
           if ! jq -e --arg required "$required" '
             any(.jobs[]; .name == $required and .conclusion == "success")
@@ -135,8 +122,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Release Please 建立 tag 後才建立 GitHub Release。Tag push 可能讓本 workflow
-          # 先抵達，因此等待同一個 commit 的 Release Please run，避免競相建立 Release。
+          # Wait for concurrent Release Please run to finish creating the GitHub release.
           runs="$(gh api --method GET \
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
@@ -181,9 +167,7 @@ jobs:
           release_json="$RUNNER_TEMP/existing-stack-release.json"
           release_error="$RUNNER_TEMP/existing-stack-release.error"
 
-          # Release 本身通常由 Release Please 建立，本
-          # workflow 只負責補上映像、provenance 與部署 bundle。因此「Release 是否
-          # 存在」已不等於「Stack 是否已發布」，冪等性判準改用 bundle asset。
+          # Idempotency check: check if release bundle asset is already attached.
           if gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
             > "$release_json" 2> "$release_error"; then
             echo 'exists=true' >> "$GITHUB_OUTPUT"
@@ -435,31 +419,16 @@ jobs:
           POSTGRES_PASSWORD=change-me
           POSTGRES_DB=near_chat
           DATABASE_URL=postgresql://change-me:change-me@db:5432/near_chat
-          # Optional. This bundle ships no Redis service, so leave it blank to
-          # run realtime single-node, or point it at a managed endpoint —
-          # rediss://default:<password>@host:6380 — for cross-node fan-out.
-          # Cross-instance presence needs Redis 7.4 or newer; older servers have
-          # no per-field TTL, so presence quietly stays single-node.
+          # Optional Redis URL for cross-instance fan-out (requires Redis 7.4+ for presence TTL).
           REDIS_URL=
-          # Only read when REDIS_URL is set. How long a presence lease survives
-          # unrefreshed, which bounds how long a crashed instance keeps its users
-          # showing as online.
           PRESENCE_TTL_MS=30000
-          # Blank generates one per process. Set it where the orchestrator has a
-          # stable per-replica name, so a restart reclaims its own lease rather
-          # than leaving a second one to expire.
           INSTANCE_ID=
           JWT_SECRET=change-me-to-a-long-random-secret
           JWT_EXPIRES_IN=15m
           CORS_ORIGINS=http://localhost:3005
           NEXT_PUBLIC_API_URL=http://localhost:4005
           UPLOADS_MOUNT_SOURCE=app_uploads
-          # Number of reverse proxies you operate in front of the backend. This
-          # bundle publishes the backend port directly, so callers arrive as
-          # themselves and 0 is correct. Raise it per proxy you add: rate limiting
-          # then reads the client IP that many entries from the right of
-          # X-Forwarded-For. Too low behind a proxy puts every caller in one
-          # bucket; too high lets callers choose their own.
+          # Number of reverse proxies in front of backend (0 if direct).
           TRUST_PROXY_HOPS=0
           EOF
 
@@ -583,9 +552,7 @@ jobs:
 
           echo "file=$notes_file" >> "$GITHUB_OUTPUT"
 
-      # 正常路徑：Release 已由 Release Please 建立，這裡只把 Stack 區段附加到既有
-      # release notes 後面，再上傳 bundle。asset 上傳放在最後一步，因為
-      # `stack_published` 正是以 asset 是否存在判定 —— 讓它成為最終的提交點。
+      # Append stack notes and upload bundle asset to the existing GitHub release.
       - name: 於既有 Release 補上 Stack artifact
         if: steps.release.outputs.exists == 'true' && steps.release.outputs.stack_published == 'false'
         shell: bash

@@ -31,16 +31,12 @@ export const makeRoomService = (
   },
   userRepo?: IUserRepository,
   messageRepo?: IMessageRepository,
-  // Emits an event directly to a specific user's personal socket room (user_${userId}).
-  // Used to notify users of events they cannot receive via room broadcast (e.g., being
-  // approved into a group they haven't joined yet).
+  // Sends an event directly to a user's personal room (user_${userId}).
   emitToUser?: (userId: string, eventName: string, payload: unknown) => void,
   avatarStore: AvatarStore = defaultAvatarStore,
   onMembershipRevoked?: (userId: string, roomId: string) => void | Promise<void>,
   onMembershipGranted?: (userId: string, roomId: string) => void | Promise<void>,
-  // Injected rather than imported at the call site so a test can decide who is
-  // online without reaching for `mock.module` — the same trailing-parameter
-  // shape as `avatarStore` above. See backend/tests/CLAUDE.md.
+  // Injected presence lookup function to support unit tests.
   readOnlineAmong: (userIds: string[]) => Promise<Set<string>> = onlineAmong,
 ) => {
   const ensureMember = async (roomId: string, userId: string) => {
@@ -79,9 +75,7 @@ export const makeRoomService = (
 
     async list(userId: string): Promise<RoomSummary[]> {
       const rooms = await repo.findByMember(userId);
-      // One presence read for the whole page. Asking per room would put the
-      // number of a person's private chats into the round-trip count of the
-      // endpoint their client calls on every load.
+      // Perform one bulk lookup to check presence of private chat partners.
       const online = await readOnlineAmong(
         rooms.flatMap((room) =>
           room.type === 'private' && room.otherMemberId ? [room.otherMemberId] : [],
@@ -142,18 +136,10 @@ export const makeRoomService = (
         await ensureMember(room.roomId, targetUserId);
         const canonicalRoom = await repo.findById(room.roomId);
         if (!canonicalRoom || canonicalRoom.isReadonly) {
-          // A block committed between the `isBlocked` check above and the second
-          // membership insert, and the trigger on that insert closed the room.
-          // The create and both `add` calls are already committed in their own
-          // transactions, so throwing alone would leave a fully-formed private
-          // room behind — one that a later unblock would happily reopen, even
-          // though the request that created it failed. Delete it here; the
-          // pair lock means nothing else can have written to it yet.
+          // If a block closed the room during creation, clean it up before failing.
           try {
             await repo.delete(room.roomId);
           } catch (cleanupError) {
-            // Reported, not rethrown: the caller must still see why the request
-            // was rejected, not how the cleanup went.
             console.error('Failed to remove a private room rejected by a block:', cleanupError);
           }
           throw new ForbiddenError('Cannot create a private room with a blocked user');
@@ -182,15 +168,7 @@ export const makeRoomService = (
       return null;
     },
 
-    /**
-     * Used by the block flow to locate the room whose sockets need revoking.
-     * It deliberately does not touch room state: the `blocks` insert trigger
-     * already closes the room inside the same transaction as the block row,
-     * and a second writer for that invariant is what let a concurrent unblock
-     * leave a room read-only with no block to undo it. Returning null when the
-     * block is gone also stops a stale request from revoking access to a room
-     * that has legitimately reopened.
-     */
+    /** Locates private room between blocked users for socket revocation. */
     async findPrivateRoomIdIfBlocked(userA: string, userB: string): Promise<string | null> {
       if (repo.findPrivateRoomIdIfBlocked) {
         return repo.findPrivateRoomIdIfBlocked(userA, userB);
@@ -313,18 +291,12 @@ export const makeRoomService = (
       if (member.role === 'owner') {
         throw new ForbiddenError('Owner cannot leave room. Transfer ownership first.');
       }
-      // Same boundary as `kickMember` and the demotion path: the subscription
-      // goes before the membership write, never after. `remove` commits in its
-      // own transaction, so revoking afterwards leaves a window in which a peer's
-      // message is published to a socket that is still in `room_<roomId>` but no
-      // longer a member.
+      // Revoke socket subscription before deleting membership record.
       await onMembershipRevoked?.(userId, roomId);
       try {
         await roomMemberRepo.remove(roomId, userId);
       } catch (error) {
-        // Still a member, so the subscription has to go back — plus the standing
-        // recovery signal, because a restored subscription replays nothing that
-        // was published while it was gone.
+        // Rollback subscription if removal fails.
         await onMembershipGranted?.(userId, roomId);
         emitToUser?.(userId, 'realtime_ready', undefined);
         throw error;
