@@ -184,6 +184,15 @@ than over the socket. Closing that is #476. The per-user session limit and
 global rate limits also remain per-instance, so a replica count above one is not
 yet a supported deployment.
 
+Two more gaps have to close before it becomes one, both from pub/sub keeping no
+backlog. A membership revocation (`socketsLeave`) lost while an instance's
+subscriber is down leaves that member's socket in the room, still receiving what
+is published there afterwards — a Sync Cursor cannot repair it, because the
+problem is a stale subscription rather than a missed event; it needs a durable
+path or a reconciliation against the database on reconnect (#477). And typing
+claims are aggregated per process, so the same user typing from two instances
+has the indication retracted by whichever node's last claim ends first (#474).
+
 ### Production Ingress & Proxy Trust
 
 `docker-compose.prod.yml` publishes every host port on `127.0.0.1`, so the local

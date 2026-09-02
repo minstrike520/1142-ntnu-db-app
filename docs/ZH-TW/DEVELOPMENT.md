@@ -165,6 +165,14 @@ socket 上。
 與全域限流同樣仍是 per-instance，所以把 replica 數量調到大於 1 目前還不是受支
 援的部署方式。
 
+要讓它成為受支援的部署方式，還有兩個源自「pub/sub 不保留 backlog」的缺口必須
+先補上。其一：成員資格撤銷（`socketsLeave`）若在某個 instance 的 subscriber 斷
+線期間送出就會永久遺失，該成員的 socket 仍留在房間裡，之後房間發布的內容都收
+得到——Sync Cursor 無法修復，因為問題是過期的訂閱而非漏收的事件；需要 durable
+傳輸，或在重連後依資料庫重新校正（#477）。其二：typing claim 以行程為單位彙
+總，同一使用者從兩個 instance 輸入時，任一節點最後一個 claim 結束就會撤回整體
+的輸入提示（#474）。
+
 ### 正式環境入口拓撲與代理信任
 
 `docker-compose.prod.yml` 的所有主機連接埠都綁定在 `127.0.0.1`，因此文件記載的本機
