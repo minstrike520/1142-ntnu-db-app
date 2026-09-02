@@ -4,6 +4,7 @@ import React, { useCallback, useState, useEffect, useLayoutEffect, useRef } from
 import { useRouter } from "next/navigation";
 import {
   useChat,
+  useRealtimeReady,
   useRightPanel,
   useTypingUsers,
   getAvatarForUser,
@@ -276,6 +277,7 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
     markRoomAsRead,
   } = useChat();
   const { showRightPanel, setShowRightPanel } = useRightPanel();
+  const realtimeReady = useRealtimeReady();
 
   const [inputText, setInputText] = useState("");
   const [mentionDraft, setMentionDraft] = useState<MentionDraft | null>(null);
@@ -730,7 +732,36 @@ export default function Chatroom({ roomId, onOpenGroupSettings }: ChatroomProps)
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-background h-full overflow-hidden">
+    <div
+      className="flex-1 flex flex-col bg-background h-full overflow-hidden"
+      // Room-level realtime readiness, the browser-observable contract the
+      // full-stack lane waits on (issue #620). It joins the session-level fact
+      // from `useRealtimeReady` to this room's own subscription status: the
+      // server excludes `pending` members when restoring subscriptions
+      // (socketServer.ts), so a pending room is rendered and its composer is
+      // usable while its channel is not joined — ready for REST, not for
+      // realtime.
+      //
+      // Pending is read from both sources because each is stale in a
+      // different situation, and either one saying pending means this socket
+      // is not in the room's channel. `myRole` arrives with the room summary,
+      // so it is the only one available on first paint — but a live demotion
+      // reaches the client as MEMBER_UPDATED, whose member reload rewrites
+      // `activeRoom.members` and leaves `myRole` untouched. `currentMember`
+      // is the mirror image: current across a role change, absent until the
+      // members have loaded.
+      //
+      // Carries the room id rather than a boolean, so a waiter names the room
+      // it means and cannot be satisfied by a previous room still mounted.
+      // `undefined` and not `false` is load-bearing: React renders
+      // `data-room-ready="false"` for a boolean, which `[data-room-ready]`
+      // would still match.
+      data-room-ready={
+        realtimeReady && activeRoom.myRole !== "pending" && !isPending
+          ? activeRoom.id
+          : undefined
+      }
+    >
       {/* Chat Panel Header */}
       <div className="h-14 border-b border-border-primary px-3 md:px-6 flex items-center justify-between select-none shrink-0 bg-surface-card z-10 gap-2">
         <div className="flex items-center gap-1 md:gap-3 min-w-0">
