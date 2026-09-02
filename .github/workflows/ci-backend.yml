@@ -17,6 +17,7 @@ jobs:
   # Runs eslint and TypeScript type checking.
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
@@ -29,6 +30,7 @@ jobs:
 
   unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
@@ -42,6 +44,7 @@ jobs:
   build:
     if: inputs.run-build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
@@ -57,6 +60,7 @@ jobs:
     name: release compose boots on the production image
     if: inputs.run-build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -230,6 +234,12 @@ jobs:
           docker compose --env-file "$RUNNER_TEMP/release.env" \
             -f docker-compose.release.yml up -d db migrate backend
 
+      - name: Output release compose smoke summary
+        run: |
+          echo "### 🐳 Release Compose Smoke Passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`near-chat-backend:ci\` (production build)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Health check, SIGTERM drain, and realtime smoke suite verified." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Collect service logs
         if: failure()
         run: |
@@ -247,6 +257,7 @@ jobs:
     name: dev compose boots on the development image
     if: inputs.run-build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -320,6 +331,12 @@ jobs:
           SMOKE_API_URL: http://localhost:4005
           SMOKE_STATE_FILE: ${{ runner.temp }}/smoke-state.json
         run: cd backend && bun run smoke
+
+      - name: Output dev compose smoke summary
+        run: |
+          echo "### 🐳 Dev Compose Smoke Passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`backend/Dockerfile\` (development build with hot reloading)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Container health, published port (:4005), and realtime smoke recovery verified." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Collect service logs
         if: failure()

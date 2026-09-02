@@ -20,6 +20,7 @@ permissions:
 jobs:
   detect:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
@@ -179,6 +180,7 @@ jobs:
     if: always()
     needs: [detect, frontend, backend, database, browser, security]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Verify every lane reached an acceptable state
         env:
@@ -224,15 +226,34 @@ jobs:
           check_lane browser "$BROWSER_RESULT" "$BROWSER_REQUIRED"
           check_lane security "$SECURITY_RESULT" "$SECURITY_REQUIRED"
 
+          status_badge() {
+            local res="$1"
+            case "$res" in
+              success) echo "✅ \`success\`" ;;
+              skipped) echo "⚪ \`skipped\`" ;;
+              failure) echo "❌ \`failure\`" ;;
+              cancelled) echo "⚠️ \`cancelled\`" ;;
+              *) echo "\`$res\`" ;;
+            esac
+          }
+
+          overall_status="✅ **All required checks passed**"
+          if [[ "$failed" != "false" ]]; then
+            overall_status="❌ **Required checks failed**"
+          fi
           {
+            echo "## CI Status Summary"
+            echo
+            echo "$overall_status"
+            echo
             echo "| Lane | Required | Result |"
-            echo "| --- | --- | --- |"
-            echo "| detect | always | \`$DETECT_RESULT\` |"
-            echo "| frontend | \`$FRONTEND_REQUIRED\` | \`$FRONTEND_RESULT\` |"
-            echo "| backend | \`$BACKEND_REQUIRED\` | \`$BACKEND_RESULT\` |"
-            echo "| database | \`$DATABASE_REQUIRED\` | \`$DATABASE_RESULT\` |"
-            echo "| browser | \`$BROWSER_REQUIRED\` | \`$BROWSER_RESULT\` |"
-            echo "| security | \`$SECURITY_REQUIRED\` | \`$SECURITY_RESULT\` |"
+            echo "| :--- | :---: | :--- |"
+            echo "| **detect** | always | $(status_badge "$DETECT_RESULT") |"
+            echo "| **frontend** | \`$FRONTEND_REQUIRED\` | $(status_badge "$FRONTEND_RESULT") |"
+            echo "| **backend** | \`$BACKEND_REQUIRED\` | $(status_badge "$BACKEND_RESULT") |"
+            echo "| **database** | \`$DATABASE_REQUIRED\` | $(status_badge "$DATABASE_RESULT") |"
+            echo "| **browser** | \`$BROWSER_REQUIRED\` | $(status_badge "$BROWSER_RESULT") |"
+            echo "| **security** | \`$SECURITY_REQUIRED\` | $(status_badge "$SECURITY_RESULT") |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           [[ "$failed" == "false" ]]

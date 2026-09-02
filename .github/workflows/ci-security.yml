@@ -9,6 +9,7 @@ permissions:
 jobs:
   security-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Restated here even though the caller already grants exactly this: a called
     # workflow can only keep or drop what the caller gave it, never add to it,
     # so spelling it out keeps the security boundary readable in this file.
@@ -98,3 +99,11 @@ jobs:
         with:
           sarif_file: workspace.sarif
           category: workspace
+
+      - name: Output security scan summary
+        if: always()
+        run: |
+          echo "### 🔒 Security Scan Completed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tool: \`cve-lite-cli\` (SARIF format)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Category: \`workspace\` uploaded to GitHub Code Scanning" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Baseline check: \`.cve-lite/baseline.json\` enforced" >> "$GITHUB_STEP_SUMMARY"

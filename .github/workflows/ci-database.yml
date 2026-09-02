@@ -10,6 +10,7 @@ jobs:
   # Runs backend integration and E2E test suites against live PostgreSQL and Redis services.
   database-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:18-alpine
@@ -45,3 +46,9 @@ jobs:
       - run: DATABASE_URL=$DATABASE_URL_TEST pnpm --filter near-chat-backend migrate:up
       - run: pnpm --filter near-chat-backend test:integration
       - run: pnpm --filter near-chat-backend test:e2e
+      - name: Output database tests summary
+        run: |
+          echo "### 🗄️ Database & Service Integration Tests Passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- PostgreSQL: \`postgres:18-alpine\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Redis: \`redis:8-alpine\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Executed: \`migrate:up\`, \`test:integration\`, \`test:e2e\`" >> "$GITHUB_STEP_SUMMARY"

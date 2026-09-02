@@ -17,10 +17,13 @@ env:
   FRONTEND_IMAGE_NAME: nearcsie/near-chat-frontend
   POSTGRES_IMAGE: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
 
+permissions: {}
+
 jobs:
   publish:
     name: 驗證版本、發布完整 Stack 與建立 Release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: write
@@ -29,7 +32,7 @@ jobs:
       id-token: write
     steps:
       - name: 取出完整版本歷史
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -269,6 +272,8 @@ jobs:
           context: .
           file: ./backend/Dockerfile.prod
           push: true
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
           tags: |
             ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ steps.version.outputs.number }}
             ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ steps.version.outputs.sha_tag }}
@@ -285,6 +290,8 @@ jobs:
           context: .
           file: ./frontend/Dockerfile.prod
           push: true
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
           build-args: |
             NEXT_PUBLIC_API_URL=http://localhost:4005
           tags: |
@@ -582,7 +589,6 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" "$BUNDLE_ARCHIVE" \
             --repo "$GITHUB_REPOSITORY"
 
-      # 備援路徑：Release 不存在（手動推 tag，或 Release Please 未建立時的復原）。
       - name: 建立 GitHub Release
         if: steps.release.outputs.exists == 'false'
         shell: bash
@@ -599,3 +605,10 @@ jobs:
             --notes-file "$STACK_NOTES_FILE" \
             --latest=false \
             "$BUNDLE_ARCHIVE"
+
+      - name: 輸出發布摘要至 Step Summary
+        if: always()
+        run: |
+          if [ -f "${{ steps.stack_notes.outputs.file }}" ]; then
+            cat "${{ steps.stack_notes.outputs.file }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
