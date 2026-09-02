@@ -1,12 +1,6 @@
 "use client";
 /* eslint-disable react-compiler/react-compiler */
-/* 
- * NOTE: The React Compiler is disabled for this file because ChatProvider contains 
- * multiple useEffect hooks that intentionally disable react-hooks/exhaustive-deps 
- * (specifically for post-mount session hydration, socket connection management, 
- * and active room member synchronization). The compiler skips optimizing components 
- * where hook dependencies are suppressed, and would otherwise emit compile-time warnings.
- */
+// React Compiler disabled: hooks intentionally omit exhaustive-deps for session hydration and socket lifecycle.
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
@@ -371,19 +365,7 @@ const ADMIN_LOGIN_PATH = withRedirectParam("/login", "/admin");
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
-// ---------------------------------------------------------------------------
-// Leaf contexts for high-frequency / UI-local state (hotspot #2, issue #383).
-//
-// These states change far more often than the chat data (typing events fire
-// on every keystroke of every peer) or are purely presentational (popover,
-// right panel). Keeping them inside the main context value forced every
-// useChat() consumer — including every ChatBubble via useTranslation — to
-// re-render on each change. They still live in ChatProvider's state; only the
-// subscription channel is separate, so this is not a ChatContext re-
-// architecture — splitting rooms/messages/socket across providers and bucketing
-// messages per room is a larger change that was deliberately left out of scope.
-// ---------------------------------------------------------------------------
-
+// Leaf contexts for high-frequency or UI-local states to prevent whole-tree re-renders.
 const TypingUsersContext = createContext<Record<string, string[]> | undefined>(undefined);
 
 const UiLanguageContext = createContext<UiLanguage | undefined>(undefined);
@@ -404,9 +386,7 @@ interface RightPanelContextType {
 
 const RightPanelContext = createContext<RightPanelContextType | undefined>(undefined);
 
-// Admin monitoring polls every 30s. Publishing it on the main ChatContext value
-// would give that value a new identity on every poll and re-render every
-// useChat() consumer in the app, so it gets its own subscription channel.
+// Admin monitoring context polled periodically without re-rendering general useChat consumers.
 interface AdminContextType {
   adminAccess: AdminAccessState;
   adminMonitoring: AdminMonitoringState;
@@ -416,10 +396,7 @@ interface AdminContextType {
 
 const AdminContext = createContext<AdminContextType | undefined>(undefined);
 
-// Static key list for the stable handler proxies built in ChatProvider. Kept
-// at module level so building the proxies never reads a ref during render.
-// The `NoMissingHandlerKey` check below fails to compile if a handler is
-// added to the `handlers` object without being listed here.
+// Static key list for building identity-stable handler proxies without render-time ref reads.
 const HANDLER_KEYS = [
   "toggleFolder",
   "handleLogout",
@@ -1556,23 +1533,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       void track(runCheckpoint());
     };
 
-    // A live durable event must never advance the cursor itself, however
-    // tempting its `changeSequence` looks. Services publish *after* their
-    // transaction commits and after a follow-up snapshot query, so two
-    // concurrent commands race in the application layer and this client can
-    // see the larger sequence first. Taking it as a watermark and then
-    // dropping the socket before the smaller one arrives would put that change
-    // permanently behind `/sync`'s `change_sequence > cursor` filter — a
-    // silently lost edit or recall.
-    //
-    // `/sync` has no such hazard: the counter row lock is held until commit,
-    // so changes become visible in sequence order and a page can never
-    // straddle a gap. The cursor is therefore checkpointed by running an
-    // ordinary cursor-only `/sync` on a timer, which is what keeps a
-    // long-lived session from paging its entire connection back on the next
-    // reconnect. Deliberately not `runSynchronization`: a periodic tick must
-    // not refresh rooms, and must not take the failure path that disconnects
-    // the socket.
+    // Periodic /sync checkpoint avoids gaps from out-of-order realtime events.
     let liveChangesSinceCheckpoint = false;
     const noteLiveDurableChange = () => {
       liveChangesSinceCheckpoint = true;
@@ -2083,12 +2044,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }).then((message) => applyCanonicalMessage(message)).catch((error) => console.error('Failed to send attachment message:', error));
   };
 
-  /**
-   * A 409 means the local revision was stale: someone else edited or recalled
-   * the message first. Silently swallowing it leaves the user looking at
-   * content the server has already replaced, so realign from the server and
-   * tell them what happened.
-   */
+  /** Handles 409 conflict by refreshing canonical message from the server. */
   const handleRevisionConflict = async (
     roomId: string,
     messageId: string,
@@ -2096,21 +2052,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     noticeKey: string,
   ): Promise<void> => {
     if (!(error instanceof ApiError) || error.status !== 409) throw error;
-    // Only promise the user a refreshed message once the canonical row is
-    // actually back in state. The fetch can fail, and the message can sit
-    // outside the page it returns — in both cases the stale revision is still
-    // on screen, and a notice claiming otherwise would be a lie.
     let refreshed = false;
     if (token) {
       try {
         const canonical = (await listMessages(token, roomId, { limit: 50 }))
           .find((row) => row.messageId === messageId);
         if (canonical) {
-          // The sidebar preview is derived from this message whenever it is
-          // the room's last one, and the conflict means the event that would
-          // normally have refreshed the summary may never arrive. Skipping it
-          // unconditionally would leave a stale preview behind a notice that
-          // claims the latest version is on screen.
           const isRoomPreview = roomsRef.current
             .some((room) => room.id === roomId && room.lastMessageId === messageId);
           applyCanonicalMessage(canonical, isRoomPreview);
@@ -2728,18 +2675,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const prevActiveRoomIdRef = useRef<string | null>(null);
 
-  // Advances the local read marker optimistically, then undoes it if the write
-  // never lands. Both callers below decide whether to send by comparing the
-  // marker with the newest message, so a marker left ahead of a failed write is
-  // self-silencing: the room looks read here while the server still counts it
-  // unread, and nothing retries until a new message, a room switch or a reload.
-  //
-  // The rollback alone is not enough, though. `groupReadStates` is a dependency
-  // of the effect below, so undoing the marker immediately re-runs the effect,
-  // which calls straight back in here — a request loop with no delay and no
-  // ceiling for as long as the write keeps failing (offline, a persistent 5xx,
-  // a permission change). The per-room backoff below is what turns that into a
-  // paced retry, and `retryTick` is what wakes the effect once it expires.
+  // Optimistic read marker state with per-room exponential backoff for failed sync attempts.
   const readPositionRetryRef = useRef(
     new Map<string, { inFlight?: string; blockedUntil?: number; attempts: number; timer?: ReturnType<typeof setTimeout> }>(),
   );
@@ -2909,22 +2845,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setAdminRefreshNonce((current) => current + 1);
   }, []);
 
-  // -------------------------------------------------------------------------
-  // Context value stabilization (hotspot #1, issue #383)
-  //
-  // The React Compiler is disabled for this file (see header), so without
-  // manual memoization every provider render would rebuild all handler
-  // closures and the context value object, forcing every useChat() consumer
-  // to re-render on any provider state change.
-  //
-  // Imperative handlers are exposed through identity-stable proxies that
-  // delegate to the latest implementation via a ref (same pattern as
-  // markRoomAsRead below). The proxies are only ever invoked from event
-  // handlers and effects — never during render — so they always observe the
-  // closures of the last committed render. Functions that consumers call
-  // during render (getReadAvatarsForMessage) use useCallback with real
-  // dependencies instead.
-  // -------------------------------------------------------------------------
+  // Identity-stable handler proxies to prevent unnecessary re-renders of useChat consumers.
   const handlers = {
     toggleFolder,
     handleLogout,
