@@ -159,11 +159,12 @@ SUBSCRIBE 會收到 `/0` PUBLISH 的訊息 —— 因此把 `REDIS_URL` 換成�
 相同的 user 與 room ID，一邊的房間事件、成員變更與強制斷線會真的落到另一邊的
 socket 上。
 
-目前**尚未**共享的是 `user_status` 推播：`realtime/presence.ts` 只在好友於發出
-端 instance 上持有 socket 時才送出，因此連在另一個 instance 上的好友要等到下一
-次 `GET /friends` 才會看到狀態變化。補上這段是 #476。每位使用者的 session 上限
-與全域限流同樣仍是 per-instance，所以把 replica 數量調到大於 1 目前還不是受支
-援的部署方式。
+`user_status` 推播同樣會跨 instance（#476）：`realtime/presence.ts` 直接送往每
+位好友的 `user_<id>` room 並交由 adapter 投遞，而不再只對「於發出端 instance 上
+持有 socket」的好友送出。這裡刻意不去查 presence lease 來決定收件者——room 的成
+員資格本來就是傳輸層對「是否存在 session」的答案，而且不像 lease 會落後於一條實
+際存活的 socket。每位使用者的 session 上限與全域限流仍是 per-instance，所以把
+replica 數量調到大於 1 目前還不是受支援的部署方式。
 
 要讓它成為受支援的部署方式，還有兩個源自「pub/sub 不保留 backlog」的缺口必須
 先補上。其一：成員資格撤銷（`socketsLeave`）若在某個 instance 的 subscriber 斷

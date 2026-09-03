@@ -115,7 +115,23 @@ export const createPresenceTracker = ({
   const isLocallyOnline = (userId: string): boolean =>
     localSocketCount(userId) > 0 || pendingDisconnects.has(userId);
 
-  /** Broadcasts online/offline status transition to online friends. */
+  /**
+   * Broadcasts an online/offline transition to the user's friends.
+   *
+   * Addressed to the friends' personal rooms and left to the adapter, rather
+   * than filtered against who this instance can see. `user_<id>` is joined the
+   * moment the socket is (`realtime/socketServer.ts`), so room membership is
+   * the transport's own answer to "is there a session to deliver to" — and
+   * since #475 it is a cluster-wide answer. Asking presence instead would
+   * re-derive it from leases that lag a live socket by up to their refresh
+   * period, and would drop every remote friend whenever the command connection
+   * is down while the publisher that carries the frame is fine.
+   *
+   * One `emit` for the whole list, not one per friend: `to()` unions the rooms
+   * into a single broadcast, so the cluster adapter publishes one frame however
+   * many friends it names, and each instance discards the rooms it holds no
+   * sockets for.
+   */
   const broadcastStatus = async (
     io: ChatServer,
     userId: string,
@@ -124,11 +140,12 @@ export const createPresenceTracker = ({
   ): Promise<void> => {
     try {
       const friends = await friendRepo.getFriends(userId);
-      for (const f of friends) {
-        if (isLocallyOnline(f.friend.userId)) {
-          io.to(`user_${f.friend.userId}`).emit('user_status', { userId, status });
-        }
-      }
+      const rooms = friends.map((f) => `user_${f.friend.userId}`);
+      // No rooms is not an empty audience: `Adapter#apply` reads an empty room
+      // set as *every* socket in the namespace, so emitting here would announce
+      // a friendless user's presence to the whole deployment.
+      if (rooms.length === 0) return;
+      io.to(rooms).emit('user_status', { userId, status });
     } catch (err) {
       console.error(`Failed to broadcast ${status} status for user ${userId}:`, err);
     }

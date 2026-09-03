@@ -1565,7 +1565,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 - **Namespace**: `/`
 - **驗證**: 連線時需在 Socket.IO `auth.token` handshake 欄位帶上 access token。
 - **訂閱**: 連線後伺服器會加入 `user_<userId>`，並加入 `room_members` 中所有非 pending 聊天室；撤銷成員資格時會移除該使用者的所有 session。
-- **部署範圍**: 設定 `REDIS_URL` 後，事件會透過 Redis cluster adapter 在 `near-chat-ws` channel 上發布，因此房間與使用者事件、room subscription 變更與強制斷線都能送達任何實例上的客戶端。投遞語意是 at most once：Redis pub/sub 不保留 backlog，連線中斷期間錯過的事件不會補送，客戶端仍以 Sync Cursor 復原而非依賴 socket。未設定 `REDIS_URL` 時使用 in-memory adapter，後端即為**單一實例**——部署兩個以上實例時，連到其他實例的客戶端會靜默漏收事件，且那些 socket 不會斷線，也就不會觸發任何復原。目前仍不支援 replica 數量大於 1 的部署：`user_status` 只會推播給位於發出端實例的好友，每位使用者的 session 上限與限流也仍是 per-instance。
+- **部署範圍**: 設定 `REDIS_URL` 後，事件會透過 Redis cluster adapter 在 `near-chat-ws` channel 上發布，因此房間與使用者事件、room subscription 變更與強制斷線都能送達任何實例上的客戶端。投遞語意是 at most once：Redis pub/sub 不保留 backlog，連線中斷期間錯過的事件不會補送，客戶端仍以 Sync Cursor 復原而非依賴 socket。未設定 `REDIS_URL` 時使用 in-memory adapter，後端即為**單一實例**——部署兩個以上實例時，連到其他實例的客戶端會靜默漏收事件，且那些 socket 不會斷線，也就不會觸發任何復原。目前仍不支援 replica 數量大於 1 的部署：每位使用者的 session 上限與限流仍是 per-instance。
 - **復原**: 客戶端必須先等待伺服器發出 `realtime_ready`，再於每次連線與 token refresh 後呼叫 `GET /sync`。不使用 `connectionStateRecovery`，Sync Cursor 是唯一復原路徑。若訂閱恢復失敗，伺服器會在發送 `realtime_ready` 前中斷 socket，讓客戶端重新握手。此外，當伺服器還原自己先前撤銷的訂閱時（條件式刪除失敗的踢除），也會在連線期間再次送出 `realtime_ready`：還原訂閱不會補送撤銷期間已發布的內容。
 
 ### 客戶端發送事件
@@ -1585,7 +1585,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 | `read_update` | `{ roomId: string, userId: string, messageId: string, readPosition?: number }` | 其他成員的已讀游標更新 |
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | 房間或成員狀態變更。`type` 欄位決定子類型，詳見 [`room_update` 子類型](#room_update-子類型)。 |
 | `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected' \| 'deleted' \| 'blocked' \| 'unblocked', createdAt: string }` | 好友生命週期通知。傳送給相關使用者；客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
-| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。是否在線的判定會跨 backend instance 共享，但這則推播不會：它只會送到好友所連上那個 instance 自己持有的 socket，因此連在別的 instance 上的用戶端要等下一次 `GET /api/v1/friends` 才看得到變化。 |
+| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。事件會送往每位好友的 `user_<id>` room，因此能送達他們在任一 instance 上的 session。每次狀態轉換只會由取得第一個 lease 或釋放最後一個 lease 的那個 instance 對整個 cluster 宣告一次。 |
 | `emergency_alert` | `{ userId: string, message: string }` | 收到緊急聯絡人的警報通知 |
 | `realtime_ready` | `void` | 有效聊天室訂閱已恢復；客戶端可以開始 `/sync`。每次連線送出一次，伺服器還原先前撤銷的訂閱時也會再送 |
 | `error` | `ApiError` | 事件處理失敗的錯誤回報 |

@@ -100,9 +100,11 @@ describe('presence tracker', () => {
       expect(await tracker.isUserOnline('user-1')).toBe(true);
       expect(await tracker.getOnlineUsers()).toContain('user-1');
 
-      // friend-2 has no connection here, so there is no local room to reach.
-      expect(io.to).toHaveBeenCalledWith('user_friend-1');
-      expect(io.to).not.toHaveBeenCalledWith('user_friend-2');
+      // Both friends are addressed in one broadcast, friend-2 included: whether
+      // a session exists for a room is the adapter's question, not this
+      // module's, and answering it here is what used to lose the friends
+      // connected to another instance.
+      expect(io.to).toHaveBeenCalledWith(['user_friend-1', 'user_friend-2']);
       expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'online' });
     });
 
@@ -155,7 +157,7 @@ describe('presence tracker', () => {
 
       await tracker.trackUserDisconnection(io, 'user-1', 'socket-tab-2', friendRepo);
       expect(await tracker.isUserOnline('user-1')).toBe(false);
-      expect(io.to).toHaveBeenCalledWith('user_friend-1');
+      expect(io.to).toHaveBeenCalledWith(['user_friend-1', 'user_friend-2']);
       expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'offline' });
     });
 
@@ -181,11 +183,13 @@ describe('presence tracker', () => {
     });
 
     /**
-     * `user_status` only reaches a friend whose socket is on the emitting
-     * instance, so an audience has to be seated on both before the transitions
-     * are observable at all. The cluster adapter (#475) would now carry the
-     * event, but `broadcastStatus` still gates on `isLocallyOnline` and never
-     * emits it; lifting that gate is #476, not the business of this module.
+     * Seats the same friend on both instances.
+     *
+     * `broadcastStatus` no longer asks who is reachable — it addresses every
+     * friend's room and lets the adapter deliver (#476) — so this is no longer
+     * what makes the transitions observable. It stays because the transitions
+     * under test here are about *which instance announces them*, and a friend
+     * present on both keeps that question separate from where the audience sits.
      */
     const seatAudience = async () => {
       await alpha.trackUserConnection(io, 'friend-1', 'socket-f-a', friendRepo);
@@ -233,6 +237,62 @@ describe('presence tracker', () => {
       await beta.trackUserConnection(betaIo, 'user-1', 'socket-b', friendRepo);
       expect(await alpha.isUserOnline('user-1')).toBe(true);
       expect(await alpha.getOnlineUsers()).toContain('user-1');
+    });
+
+    /**
+     * The defect #476 names: the friend's only session is on the *other*
+     * instance, which is the one case the old `isLocallyOnline` gate could not
+     * see. It emitted nothing at all, so the adapter had nothing to carry and
+     * the friend learned of the change only on their next `GET /friends`.
+     */
+    it('announces to a friend whose only session is on another instance', async () => {
+      // Deliberately nobody on alpha: no local socket for either friend.
+      await beta.trackUserConnection(betaIo, 'friend-1', 'socket-f-b', friendRepo);
+      roomEmit.mockClear();
+      betaEmit.mockClear();
+
+      await alpha.trackUserConnection(io, 'user-1', 'socket-a', friendRepo);
+
+      expect(io.to).toHaveBeenCalledWith(['user_friend-1', 'user_friend-2']);
+      expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'online' });
+
+      roomEmit.mockClear();
+      await alpha.trackUserDisconnection(io, 'user-1', 'socket-a', friendRepo);
+      expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'offline' });
+    });
+
+    /**
+     * `Adapter#apply` reads an empty room set as the whole namespace, so an
+     * unguarded `io.to([])` would broadcast a friendless user's presence to
+     * every connected client in the cluster. The guard is the only thing
+     * standing between this change and that, so it is pinned here.
+     */
+    it('says nothing at all for a user with no friends', async () => {
+      const friendless = { getFriends: mock().mockResolvedValue([]) };
+
+      await alpha.trackUserConnection(io, 'loner', 'socket-a', friendless);
+      await alpha.trackUserDisconnection(io, 'loner', 'socket-a', friendless);
+
+      expect(io.to).not.toHaveBeenCalled();
+      expect(roomEmit).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The push no longer consults Redis, so the window where the command
+     * connection is down while the publisher carrying the frame is healthy —
+     * two independently supervised connections — no longer costs every remote
+     * friend their notification.
+     */
+    it('still announces when the presence store cannot be reached', async () => {
+      await beta.trackUserConnection(betaIo, 'friend-1', 'socket-f-b', friendRepo);
+      await alpha.trackUserConnection(io, 'user-1', 'socket-a', friendRepo);
+      roomEmit.mockClear();
+      leases.breakRedis();
+
+      await alpha.trackUserDisconnection(io, 'user-1', 'socket-a', friendRepo);
+
+      expect(io.to).toHaveBeenCalledWith(['user_friend-1', 'user_friend-2']);
+      expect(roomEmit).toHaveBeenCalledWith('user_status', { userId: 'user-1', status: 'offline' });
     });
 
     it('resolves a whole page of users in one read', async () => {
