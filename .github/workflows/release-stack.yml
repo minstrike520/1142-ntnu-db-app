@@ -272,8 +272,6 @@ jobs:
           context: .
           file: ./backend/Dockerfile.prod
           push: true
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
           tags: |
             ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ steps.version.outputs.number }}
             ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ steps.version.outputs.sha_tag }}
@@ -290,8 +288,6 @@ jobs:
           context: .
           file: ./frontend/Dockerfile.prod
           push: true
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
           build-args: |
             NEXT_PUBLIC_API_URL=http://localhost:4005
           tags: |
