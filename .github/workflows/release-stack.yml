@@ -423,6 +423,9 @@ jobs:
           REDIS_URL=
           PRESENCE_TTL_MS=30000
           INSTANCE_ID=
+          # Set per deployment when several share one Redis: pub/sub ignores the
+          # logical database, so a different REDIS_URL database does not isolate them.
+          REALTIME_CLUSTER_ID=
           JWT_SECRET=change-me-to-a-long-random-secret
           JWT_EXPIRES_IN=15m
           CORS_ORIGINS=http://localhost:3005

@@ -1565,7 +1565,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 - **Namespace**: `/`
 - **驗證**: 連線時需在 Socket.IO `auth.token` handshake 欄位帶上 access token。
 - **訂閱**: 連線後伺服器會加入 `user_<userId>`，並加入 `room_members` 中所有非 pending 聊天室；撤銷成員資格時會移除該使用者的所有 session。
-- **部署範圍**: 事件是透過程序本地的 Socket.IO 伺服器發布，因此後端目前僅支援**單一實例**。部署兩個以上實例時，連到其他實例的客戶端會靜默漏收事件——那些 socket 不會斷線，也就不會觸發任何復原。要水平擴充必須先接上跨程序的 Socket.IO adapter（Redis 或 PostgreSQL）。
+- **部署範圍**: 設定 `REDIS_URL` 後，事件會透過 Redis cluster adapter 在 `near-chat-ws` channel 上發布，因此房間與使用者事件、room subscription 變更與強制斷線都能送達任何實例上的客戶端。投遞語意是 at most once：Redis pub/sub 不保留 backlog，連線中斷期間錯過的事件不會補送，客戶端仍以 Sync Cursor 復原而非依賴 socket。未設定 `REDIS_URL` 時使用 in-memory adapter，後端即為**單一實例**——部署兩個以上實例時，連到其他實例的客戶端會靜默漏收事件，且那些 socket 不會斷線，也就不會觸發任何復原。目前仍不支援 replica 數量大於 1 的部署：`user_status` 只會推播給位於發出端實例的好友，每位使用者的 session 上限與限流也仍是 per-instance。
 - **復原**: 客戶端必須先等待伺服器發出 `realtime_ready`，再於每次連線與 token refresh 後呼叫 `GET /sync`。不使用 `connectionStateRecovery`，Sync Cursor 是唯一復原路徑。若訂閱恢復失敗，伺服器會在發送 `realtime_ready` 前中斷 socket，讓客戶端重新握手。此外，當伺服器還原自己先前撤銷的訂閱時（條件式刪除失敗的踢除），也會在連線期間再次送出 `realtime_ready`：還原訂閱不會補送撤銷期間已發布的內容。
 
 ### 客戶端發送事件

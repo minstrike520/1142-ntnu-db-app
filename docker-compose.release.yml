@@ -69,6 +69,12 @@ services:
       # orchestrator already has a stable per-replica name, so a restarted
       # process reclaims its own presence lease instead of adding a second one.
       INSTANCE_ID: ${INSTANCE_ID:-}
+      # Blank means the unscoped `near-chat-ws` channel, which is right for a
+      # bundle that brings its own Redis. Set it, differently per deployment,
+      # when several versioned deployments share one managed Redis: pub/sub is
+      # not separated by the logical database, so distinct REDIS_URL databases
+      # do not keep them apart.
+      REALTIME_CLUSTER_ID: ${REALTIME_CLUSTER_ID:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
