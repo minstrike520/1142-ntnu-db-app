@@ -16,6 +16,7 @@ permissions:
 jobs:
   node-engine:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
@@ -26,6 +27,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
@@ -35,6 +37,7 @@ jobs:
 
   typecheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
@@ -45,6 +48,7 @@ jobs:
   # Test across Node versions to verify supported engines (22, pinned floor 22.22.2, and 24).
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -60,16 +64,31 @@ jobs:
   build:
     if: inputs.run-build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
         with:
           package: near-chat-frontend
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            frontend/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('frontend/src/**', 'frontend/public/**', 'frontend/next.config.ts') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: pnpm --filter near-chat-frontend build
+      - name: Output build summary
+        run: |
+          echo "### 🚀 Next.js Production Build Succeeded" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Runner OS: \`${{ runner.os }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Caching: \`frontend/.next/cache\` enabled" >> "$GITHUB_STEP_SUMMARY"
 
   docker-build:
     if: inputs.run-build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - name: Build the development frontend image

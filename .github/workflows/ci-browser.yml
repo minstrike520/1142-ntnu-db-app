@@ -12,6 +12,7 @@ permissions:
 jobs:
   browser-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -20,12 +21,35 @@ jobs:
         with:
           package: near-chat-frontend
 
+      - name: Get Playwright version
+        id: playwright-version
+        run: |
+          echo "version=$(pnpm --filter near-chat-frontend exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browser binaries
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
       # Install Chromium browser binary and system dependencies.
       - name: Install Chromium and system dependencies
-        run: pnpm --filter near-chat-frontend exec playwright install --with-deps chromium
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            pnpm --filter near-chat-frontend exec playwright install-deps chromium
+          else
+            pnpm --filter near-chat-frontend exec playwright install --with-deps chromium
+          fi
 
       - name: Run browser smoke tests
         run: pnpm --filter near-chat-frontend test:browser
+
+      - name: Output browser tests summary
+        run: |
+          echo "### 🌐 Browser Smoke Tests Passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Environment: Chromium (headless) against mock API" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Playwright cache hit: \`${{ steps.playwright-cache.outputs.cache-hit == 'true' }}\`" >> "$GITHUB_STEP_SUMMARY"
 
       # Upload diagnostics only when tests fail.
       - name: Upload Playwright diagnostics
@@ -43,6 +67,7 @@ jobs:
   # PostgreSQL → Socket.IO, with nothing mocked.
   fullstack-browser-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       # Same image, port and health options as ci-database.yml. Reused rather
       # than reinvented, and deliberately not Docker Compose: this lane needs an
@@ -79,8 +104,25 @@ jobs:
           bun: 'true'
       - run: pnpm install --frozen-lockfile
 
+      - name: Get Playwright version
+        id: playwright-version
+        run: |
+          echo "version=$(pnpm --filter near-chat-frontend exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browser binaries
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
       - name: Install Chromium and system dependencies
-        run: pnpm --filter near-chat-frontend exec playwright install --with-deps chromium
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            pnpm --filter near-chat-frontend exec playwright install-deps chromium
+          else
+            pnpm --filter near-chat-frontend exec playwright install --with-deps chromium
+          fi
 
       - name: Migrate database
         run: pnpm --filter near-chat-backend migrate:up
@@ -119,6 +161,13 @@ jobs:
 
       - name: Run full-stack browser tests
         run: pnpm --filter near-chat-frontend test:browser:fullstack
+
+      - name: Output full-stack browser tests summary
+        run: |
+          echo "### 🌐 Full-Stack Browser E2E Tests Passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Stack: Chromium ➔ Next.js ➔ Hono/Bun ➔ PostgreSQL 18" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Playwright cache hit: \`${{ steps.playwright-cache.outputs.cache-hit == 'true' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Real database, authentication, session cookies, and realtime events verified." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Stop application processes
         if: always()
