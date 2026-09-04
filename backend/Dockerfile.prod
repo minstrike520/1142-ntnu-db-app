@@ -3,7 +3,7 @@
 # Previously this stage copied the ROOT pnpm-lock.yaml and then ran
 # `bun install`, which ignores pnpm lockfiles entirely — the image was
 # effectively built from unpinned dependency resolution.
-FROM oven/bun:1.3.14-slim AS builder
+FROM oven/bun:1.4.0-slim AS builder
 ENV CI=true
 
 # pnpm 11 requires `node:sqlite`, which bun does not implement, so pnpm cannot
@@ -51,7 +51,7 @@ RUN pnpm deploy --filter near-chat-backend --prod --legacy /deploy
 # keeps /shared and /tsconfig.base.json at the filesystem root: backend/
 # tsconfig.json sets "rootDir": "..", so the app resolves them one level above
 # its own directory. This is not a workspace and must not be reshaped into one.
-FROM oven/bun:1.3.14-slim AS runner
+FROM oven/bun:1.4.0-slim AS runner
 ENV CI=true
 WORKDIR /app
 
