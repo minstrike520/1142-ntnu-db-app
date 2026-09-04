@@ -184,14 +184,19 @@ than over the socket. Closing that is #476. The per-user session limit and
 global rate limits also remain per-instance, so a replica count above one is not
 yet a supported deployment.
 
-Two more gaps have to close before it becomes one, both from pub/sub keeping no
+One more gap has to close before it becomes one, from pub/sub keeping no
 backlog. A membership revocation (`socketsLeave`) lost while an instance's
 subscriber is down leaves that member's socket in the room, still receiving what
 is published there afterwards — a Sync Cursor cannot repair it, because the
 problem is a stale subscription rather than a missed event; it needs a durable
-path or a reconciliation against the database on reconnect (#477). And typing
-claims are aggregated per process, so the same user typing from two instances
-has the indication retracted by whichever node's last claim ends first (#474).
+path or a reconciliation against the database on reconnect (#477).
+
+Typing is no longer one of them. `realtime/typingStore.ts` holds a claim per
+instance under `typing:room:{roomId}:user:{userId}`, so the retraction is sent
+only once no instance claims the room member any more, and a crashed instance's
+claim expires with its `TYPING_TTL_MS` field TTL rather than suppressing every
+later retraction. Without `REDIS_URL` the store is not built at all and typing
+stays exactly as single-node as it was.
 
 ### Production Ingress & Proxy Trust
 

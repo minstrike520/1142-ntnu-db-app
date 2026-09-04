@@ -17,6 +17,7 @@ This directory contains the Bun + Hono TypeScript API server for the chat applic
 | [src/utils/redis.ts](src/utils/redis.ts) | Redis connection manager built on Bun's native client. Redis holds derived state only, so an outage degrades realtime rather than stopping the API |
 | [src/realtime/presenceStore.ts](src/realtime/presenceStore.ts) | Cross-instance presence as per-instance leases in Redis (hash-field TTLs, Redis 7.4+). Its Redis semantics are pinned in `tests/integration/realtime/` against a real server |
 | [src/realtime/redisAdapter.ts](src/realtime/redisAdapter.ts) | Cross-instance event fan-out as a Socket.IO cluster adapter over the `near-chat-ws` Redis channel. Installed only when `REDIS_URL` is set, so without it the in-memory adapter keeps realtime single-node |
+| [src/realtime/typingStore.ts](src/realtime/typingStore.ts) | Cross-instance typing claims as per-instance leases in Redis, so a retraction is sent only once no instance claims the room member. Wired only when `REDIS_URL` is set, like the adapter above |
 | [migrations/](migrations/) | PostgreSQL migration files written in raw SQL, applied by the Bun.SQL runner in [src/models/migrate.ts](src/models/migrate.ts) |
 | [package.json](package.json) | NPM scripts (`pnpm run dev` for `bun --watch`, `pnpm run test`) and dependencies |
 

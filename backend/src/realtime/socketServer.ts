@@ -3,6 +3,7 @@ import { ForbiddenError, ValidationError } from '../utils/AppError';
 import type { IRoomMemberRepository } from '../models/IRoomMemberRepository';
 import type { ChatServer } from './authSocket';
 import { trackUserConnection, trackUserDisconnection, type PresenceTracker } from './presence';
+import type { TypingStore } from './typingStore';
 import { mapErrorToApiShape } from '../utils/mapError';
 import { env } from '../config/env';
 
@@ -16,6 +17,11 @@ interface SocketDeps {
   ) => Promise<T>;
   /** Optional injected presence tracker (defaults to process singleton). */
   presence?: Pick<PresenceTracker, 'trackUserConnection' | 'trackUserDisconnection'>;
+  /**
+   * Optional cross-instance typing claims. Absent means single-node typing,
+   * exactly as before Redis existed; see `bootstrap/realtime.ts`.
+   */
+  typingStore?: TypingStore;
 }
 
 const maxSessionsPerUser = (): number => env().realtime.maxSessionsPerUser;
@@ -61,6 +67,67 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
     byUser.delete(userId);
     if (byUser.size === 0) typingRooms.delete(roomId);
     return true;
+  };
+
+  /** True while this process holds any typing claim for the user in the room. */
+  const heldLocally = (roomId: string, userId: string): boolean =>
+    (typingRooms.get(roomId)?.get(userId)?.size ?? 0) > 0;
+
+  /** Serialises store writes per room member; see `syncTyping`. */
+  const syncTails = new Map<string, Promise<boolean>>();
+
+  /** A sync that is queued but has not read the local state yet. */
+  const syncPending = new Map<string, Promise<boolean>>();
+
+  /**
+   * Reconcile this instance's Redis claim with the local one, and report
+   * whether the room should now be told the user stopped.
+   *
+   * Written as a reconciler rather than a claim/release pair because the two
+   * would race: `typingRooms` is mutated before the round trip and a keystroke
+   * arriving mid-flight can invert the answer, so the write has to be derived
+   * from the local state at the moment it reaches Redis, not at the moment it
+   * was requested. Per-key serialisation makes that state stable for the
+   * duration of a round trip; the queue tail is the same shape as
+   * `utils/redis.ts`'s `onChannel`, self-deleting so a room member that stops
+   * typing leaves nothing behind.
+   *
+   * A call that finds a sync still waiting joins it instead of queueing
+   * another: an unstarted sync will read exactly what this one would, so a
+   * burst of keystrokes collapses into one write per round trip rather than
+   * one per keystroke.
+   */
+  const syncTyping = (store: TypingStore, roomId: string, userId: string): Promise<boolean> => {
+    const key = `${roomId}:${userId}`;
+    const waiting = syncPending.get(key);
+    if (waiting) return waiting;
+
+    let self: Promise<boolean> | undefined;
+    const run = async (): Promise<boolean> => {
+      if (syncPending.get(key) === self) syncPending.delete(key);
+      if (heldLocally(roomId, userId)) {
+        await store.claim(roomId, userId);
+        return false;
+      }
+      const result = await store.release(roomId, userId);
+      // A claim taken while the release was in flight is the newer truth, and
+      // the sync queued behind this one restores the field it just deleted.
+      if (heldLocally(roomId, userId)) return false;
+      // An unreachable Redis retracts as this instance always did, rather than
+      // stranding an indicator nobody can clear. Same call as `presence.ts`.
+      return !result.ok || result.value === 0;
+    };
+
+    const previous = syncTails.get(key) ?? Promise.resolve(false);
+    const next = previous.then(run, run);
+    self = next;
+    syncTails.set(key, next);
+    syncPending.set(key, next);
+    void next.catch(() => undefined).then(() => {
+      if (syncTails.get(key) === next) syncTails.delete(key);
+      if (syncPending.get(key) === next) syncPending.delete(key);
+    });
+    return next;
   };
 
   // Tracks reserved handshake slots to prevent race conditions during connection setup.
@@ -137,16 +204,45 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
     };
 
     /**
-     * Retract this socket's claim on a room, telling the room only if it was the
-     * user's last one. The single exit from typing: explicit `isTyping: false`,
-     * the TTL, and disconnect all come through here.
+     * Retract this socket's claim on a room, telling the room only once no
+     * instance claims it any more. `speak` gates the broadcast for the caller
+     * that must not speak after teardown, and is read here rather than after
+     * the round trip so a disconnect arriving mid-flight cannot swallow a
+     * retraction the claim's owner was still entitled to make.
+     *
+     * Emitting after the socket is gone is safe: `socket.to(...)` captures the
+     * adapter and the excluded socket id when it is called, and never reads the
+     * socket again — which is what lets the retraction outlive an `await`.
+     */
+    const releaseClaim = (roomId: string, speak: boolean): void => {
+      if (!removeTypingSocket(roomId, userId, socket.id)) return;
+      const store = deps.typingStore;
+      if (!store) {
+        if (speak) emitTyping(roomId, false);
+        return;
+      }
+      void syncTyping(store, roomId, userId).then(
+        (retract) => {
+          if (retract && speak) emitTyping(roomId, false);
+        },
+        () => {
+          if (speak) emitTyping(roomId, false);
+        },
+      );
+    };
+
+    /**
+     * Retract this socket's claim on a room. The single exit from typing:
+     * explicit `isTyping: false`, the TTL, and disconnect all come through
+     * here. Unlike the TTL timer this one still speaks after a disconnect —
+     * losing the connection is exactly when the room has to be told.
      */
     const stopTyping = (roomId: string) => {
       const key = typingTimerKey(roomId);
       const claim = typingClaims.get(key);
       if (claim) clearTimeout(claim.expiry);
       typingClaims.delete(key);
-      if (removeTypingSocket(roomId, userId, socket.id)) emitTyping(roomId, false);
+      releaseClaim(roomId, true);
     };
 
     // Over a copy of the keys: `stopTyping` deletes from the map it walks.
@@ -247,14 +343,20 @@ export const attachSockets = (io: ChatServer, deps: SocketDeps): void => {
         const expiry: ReturnType<typeof setTimeout> = setTimeout(() => {
           if (typingClaims.get(key)?.expiry !== expiry) return;
           typingClaims.delete(key);
-          if (removeTypingSocket(roomId, userId, socket.id) && !disconnected) {
-            emitTyping(roomId, false);
-          }
+          releaseClaim(roomId, !disconnected);
         }, ttl);
         expiry.unref?.();
         typingClaims.set(key, { expiry, checkedAt });
 
         addTypingSocket(roomId, userId, socket.id);
+        // The claim is refreshed in Redis without waiting for it: the heartbeat
+        // below states local truth, which no cluster-wide count can change, and
+        // `command` has no deadline of its own — a slow Redis would otherwise
+        // stall every keystroke. Ordering against a later release is the
+        // queue's job, not this call's.
+        if (deps.typingStore) {
+          void syncTyping(deps.typingStore, roomId, userId).catch(() => undefined);
+        }
         // Broadcast typing heartbeat to the room.
         emitTyping(roomId, true);
       } catch (err) {

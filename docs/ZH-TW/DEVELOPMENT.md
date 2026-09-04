@@ -165,13 +165,18 @@ socket 上。
 與全域限流同樣仍是 per-instance，所以把 replica 數量調到大於 1 目前還不是受支
 援的部署方式。
 
-要讓它成為受支援的部署方式，還有兩個源自「pub/sub 不保留 backlog」的缺口必須
-先補上。其一：成員資格撤銷（`socketsLeave`）若在某個 instance 的 subscriber 斷
-線期間送出就會永久遺失，該成員的 socket 仍留在房間裡，之後房間發布的內容都收
-得到——Sync Cursor 無法修復，因為問題是過期的訂閱而非漏收的事件；需要 durable
-傳輸，或在重連後依資料庫重新校正（#477）。其二：typing claim 以行程為單位彙
-總，同一使用者從兩個 instance 輸入時，任一節點最後一個 claim 結束就會撤回整體
-的輸入提示（#474）。
+要讓它成為受支援的部署方式，還有一個源自「pub/sub 不保留 backlog」的缺口必須
+先補上：成員資格撤銷（`socketsLeave`）若在某個 instance 的 subscriber 斷線期間
+送出就會永久遺失，該成員的 socket 仍留在房間裡，之後房間發布的內容都收得到
+——Sync Cursor 無法修復，因為問題是過期的訂閱而非漏收的事件；需要 durable 傳
+輸，或在重連後依資料庫重新校正（#477）。
+
+typing 已不在其列。`realtime/typingStore.ts` 以
+`typing:room:{roomId}:user:{userId}` 為 key，替每個 instance 各存一筆 claim，
+因此只有在整個 cluster 都不再持有該房間成員的 claim 時才會送出撤回；某個
+instance 崩潰後留下的 claim 也會隨 `TYPING_TTL_MS` 的 field TTL 過期，不會從此
+壓住之後所有的撤回。未設定 `REDIS_URL` 時完全不會建立這個 store，typing 維持
+與過去相同的單節點行為。
 
 ### 正式環境入口拓撲與代理信任
 
