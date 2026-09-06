@@ -6,6 +6,8 @@ import {
   realtimeChannel,
   REALTIME_CHANNEL,
 } from '../../../src/realtime/redisAdapter';
+import { createPresenceTracker } from '../../../src/realtime/presence';
+import type { ChatServer } from '../../../src/realtime/authSocket';
 
 /**
  * The one thing the unit tier cannot honestly claim: that two backend
@@ -151,6 +153,38 @@ describe('redis cluster adapter against a real Redis', () => {
     } finally {
       await stagingRedis.close();
     }
+  });
+
+  /**
+   * The end-to-end shape of #476, which neither tier could show alone: the unit
+   * suite mocks `io.to` and so only proves `broadcastStatus` decided to emit,
+   * while the cases above prove the channel carries a frame somebody else
+   * emitted. Here the real tracker announces a real transition and a friend
+   * seated only on the *other* instance receives it.
+   *
+   * No `PresenceStore` on purpose. Which instance announces a transition is
+   * decided by the leases and is covered in the unit tier; what is under test
+   * here is only that the announcement leaves this instance and arrives at the
+   * other, and a store would add a Redis 7.4 requirement (`HPEXPIRE`) this test
+   * does not otherwise have.
+   */
+  it('carries a presence transition to a friend seated only on the other instance', async () => {
+    const friendId = `${run}-f1`;
+    const onBeta = seatSocket(beta, `${run}-b5`, [`user_${friendId}`]);
+    const friendRepo = { getFriends: async () => [{ friend: { userId: friendId } }] };
+    const tracker = createPresenceTracker({ graceMs: () => 0 });
+
+    await tracker.trackUserConnection(
+      alpha as unknown as ChatServer,
+      `${run}-u1`,
+      `${run}-sock-a`,
+      friendRepo,
+    );
+
+    await eventually(() => onBeta.length > 0);
+    expect(onBeta).toEqual([
+      `2["user_status",{"userId":"${run}-u1","status":"online"}]`,
+    ]);
   });
 
   it('carries a room subscription change to the other instance', async () => {

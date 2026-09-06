@@ -177,11 +177,13 @@ every seeded environment the same user and room ids, one side's room events,
 membership changes and forced disconnects then land on the other side's
 sockets.
 
-What is *not* shared yet is the `user_status` push: `realtime/presence.ts` still
-emits it only when the friend holds a socket on the emitting instance, so a
-friend connected elsewhere sees the change on their next `GET /friends` rather
-than over the socket. Closing that is #476. The per-user session limit and
-global rate limits also remain per-instance, so a replica count above one is not
+The `user_status` push crosses instances too (#476): `realtime/presence.ts`
+addresses every friend's `user_<id>` room and lets the adapter deliver, rather
+than emitting only for friends holding a socket on the emitting instance. It
+deliberately does not consult the presence leases to decide who to address —
+room membership is the transport's own answer to whether a session exists, and
+it does not lag a live socket the way a lease does. The per-user session limit
+and global rate limits remain per-instance, so a replica count above one is not
 yet a supported deployment.
 
 Two more gaps have to close before it becomes one, both from pub/sub keeping no
