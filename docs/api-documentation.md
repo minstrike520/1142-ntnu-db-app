@@ -176,6 +176,7 @@ All errors return the following JSON structure:
   | `email` | String | Email address |
   | `bio` | String \| null | Biography |
   | `avatarUrl` | String \| null | User avatar URL |
+  | `lastActivity` | ISO 8601 | Timestamp of the user's most recent activity on any endpoint |
   | `isAdmin` | Boolean | Whether the current user may display admin navigation; protected admin routes still re-check authorization |
 - **Example**:
   ```json
@@ -185,6 +186,7 @@ All errors return the following JSON structure:
     "email": "alex@example.com",
     "bio": "Hello, this is my bio.",
     "avatarUrl": "https://example.com/avatar.png",
+    "lastActivity": "2026-09-06T12:34:56.000Z",
     "isAdmin": false
   }
   ```
