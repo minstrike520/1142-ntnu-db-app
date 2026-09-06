@@ -1,6 +1,12 @@
 "use client";
 /* eslint-disable react-compiler/react-compiler */
-// React Compiler disabled: hooks intentionally omit exhaustive-deps for session hydration and socket lifecycle.
+/* 
+ * NOTE: The React Compiler is disabled for this file because ChatProvider contains 
+ * multiple useEffect hooks that intentionally disable react-hooks/exhaustive-deps 
+ * (specifically for post-mount session hydration, socket connection management, 
+ * and active room member synchronization). The compiler skips optimizing components 
+ * where hook dependencies are suppressed, and would otherwise emit compile-time warnings.
+ */
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
@@ -8,25 +14,15 @@ import { resolveAssetUrl } from "@/lib/assets";
 import { translate } from "@/lib/i18n";
 import { NotificationBridge } from "@/lib/notificationBridge";
 import type {
-  Attachment as ApiAttachment,
-  EmergencyContactResponse,
-  Folder as ApiFolder,
-  FriendRequestResponse,
-  FriendResponse,
   MessageWithSender,
   MyProfile,
   PublicUser,
   Room,
-  RoomMember as ApiRoomMember,
-  RoomMemberRole,
-  RoomSummary,
-  UserProfile,
   UserSettings,
 } from "@shared/types";
 import {
   ApiError,
   approveRoomMember,
-  attachmentDownloadUrl,
   blockUser as blockUserApi,
   createFolder,
   createGroup,
@@ -41,7 +37,6 @@ import {
   getMe,
   joinRoomByCode,
   getMySettings,
-  getUserProfile,
   kickRoomMember,
   leaveRoom as leaveRoomApi,
   listEmergencyContacts,
@@ -54,7 +49,6 @@ import {
   recallMessage as recallMessageApi,
   markRoomRead as markRoomReadApi,
   syncChanges,
-  listRoomMembers,
   listRooms,
   logout,
   respondFriendRequest,
@@ -78,9 +72,6 @@ import {
   getAdminMetrics,
   getAdminLogs,
   getAdminSlowQueries,
-  type AdminMetricsResponse,
-  type AdminLogEntry,
-  type AdminSlowQuery,
 } from "@/lib/api";
 import { withRedirectParam } from "@/lib/redirect";
 import {
@@ -103,263 +94,54 @@ import {
   type ChatSocket,
 } from "@/lib/socket";
 
-export interface Member {
-  userId: string;
-  name: string;
-  role: RoomMemberRole;
-  nickname?: string;
-  isMuted?: boolean;
-  lastReadId?: string | null;
-  readPosition?: number;
-  avatarUrl?: string;
-}
+export * from "./types";
+export * from "./chatMappers";
 
-export interface ChatRoom {
-  id: string;
-  type: "msg" | "group";
-  name: string;
-  isOnline?: boolean;
-  otherMemberId?: string;
-  folderId?: string | null;
-  inviteCode?: string;
-  requireApproval?: boolean;
-  viewHistory?: boolean;
-  members?: Member[];
-  isArchived?: boolean;
-  isReadonly?: boolean;
-  unreadCount?: number;
-  lastMessagePreview?: string;
-  lastMessageAt?: string;
-  lastMessageId?: string;
-  lastMessageSequence?: number;
-  lastMessageChangeSequence?: number;
-  avatarUrl?: string;
-  lastReadId?: string | null;
-  myRole?: RoomMemberRole;
-}
+import {
+  type AdminAccessState,
+  type AdminContextType,
+  type AdminError,
+  type AdminMonitoringState,
+  emptyAdminMonitoringState,
+  ADMIN_POLL_INTERVAL_MS,
+  type BlockedUser,
+  type ChatContextType,
+  type ChatRoom,
+  type EmergencySettings,
+  type Folder,
+  type Friend,
+  type FriendRequest,
+  type GroupSettingsInput,
+  type HandlerKey,
+  HANDLER_KEYS,
+  type Member,
+  type Message,
+  type PreferencesInput,
+  type ProfileInput,
+  type ProfilePopoverContextType,
+  type RightPanelContextType,
+  type StoredUser,
+  type UiLanguage,
+  type User,
+} from "./types";
+import {
+  CURSOR_CHECKPOINT_INTERVAL_MS,
+  fetchRoomMembers,
+  findRequestedUser,
+  getPrivateRoomName,
+  hydrateReplyTargets,
+  mapEmergencyContact,
+  mapFolders,
+  mapFriend,
+  mapFriendRequest,
+  mapMessage,
+  mapRooms,
+  mergeMessages,
+  sortMessages,
+  summarizeMessagePreview,
+  toStoredUser,
+} from "./chatMappers";
 
-export interface Message {
-  id: string;
-  roomId: string;
-  senderId: string | null;
-  senderName: string;
-  content: string;
-  sentAt: string;
-  timestamp: string;
-  replyToId?: string;
-  isOutgoing?: boolean;
-  isRecalled?: boolean;
-  messageSequence?: number;
-  changeSequence?: number;
-  revision?: number;
-  replyTo?: {
-    senderName: string;
-    content: string;
-  } | null;
-  attachments?: { filename: string; filetype: string; url?: string }[];
-  mentions?: string[];
-  isRead?: boolean;
-}
-
-export interface Folder {
-  id: string;
-  name: string;
-  collapsed: boolean;
-}
-
-export interface User {
-  userId?: string;
-  username: string;
-  email: string;
-  avatar: string;
-  /** Navigation hint from GET /users/me; protected routes re-check access. */
-  isAdmin?: boolean;
-  bio?: string;
-  language?: UiLanguage;
-  theme?: "light" | "dark";
-  notifyDesktop?: boolean;
-  notifySound?: boolean;
-  warningEnabled?: boolean;
-  warningDays?: number;
-  lastActivity?: Date | string;
-  roomOrder?: Record<string, string[]>;
-}
-
-type StoredUser = User;
-
-export interface Friend {
-  id: string;
-  name: string;
-  email: string;
-  status: "online" | "offline";
-  isEmergencyContact?: boolean;
-  avatarUrl?: string;
-}
-
-export interface FriendRequest {
-  id: string;
-  name: string;
-  email: string;
-  direction: "incoming" | "outgoing";
-  avatarUrl?: string;
-}
-
-export interface BlockedUser {
-  id: string;
-  name: string;
-  email: string;
-  avatarUrl?: string;
-}
-
-export interface EmergencyContact {
-  id: string;
-  contactId: string;
-  name: string;
-  email: string;
-  message: string;
-}
-
-export interface EmergencySettings {
-  warningEnabled: boolean;
-  warningDays: number;
-  contacts: EmergencyContact[];
-}
-
-
-
-export type UiLanguage = "zh-TW" | "en";
-
-export const getAvatarForUser = (
-  username: string,
-  currentUserAvatar?: string,
-  currentUsername?: string,
-) => {
-  if (currentUsername && username === currentUsername) {
-    return currentUserAvatar ? resolveAssetUrl(currentUserAvatar) : "";
-  }
-  return "";
-};
-
-export interface ProfileInput {
-  username: string;
-  email: string;
-  avatar: string;
-  avatarFile?: File | null;
-  password?: string;
-  currentPassword?: string;
-  bio?: string;
-}
-
-export interface PreferencesInput {
-  theme: string;
-  language: UiLanguage;
-  notifyDesktop: boolean;
-  notifySound: boolean;
-  warningEnabled?: boolean;
-  warningDays?: number;
-}
-
-interface GroupSettingsInput {
-  name?: string;
-  requireApproval?: boolean;
-  viewHistory?: boolean;
-  isArchived?: boolean;
-  avatarFile?: File | null;
-}
-
-interface ChatContextType {
-  rooms: ChatRoom[];
-  folders: Folder[];
-  messages: Message[];
-  groupReadStates: Record<string, Record<string, string>>;
-  user: User;
-  activeRoomNicknames: Record<string, string>;
-  friends: Friend[];
-  friendRequests: FriendRequest[];
-  blockedUsers: BlockedUser[];
-  emergencySettings: EmergencySettings;
-  uiLanguage: UiLanguage;
-  isAuthenticated: boolean;
-  isAuthResolved: boolean;
-  isMounted: boolean;
-  roomsInitialized: boolean;
-  selectedFriendForSidebar: Friend | null;
-  setSelectedFriendForSidebar: React.Dispatch<React.SetStateAction<Friend | null>>;
-  hasUnsavedChanges: boolean;
-  setHasUnsavedChanges: (val: boolean) => void;
-
-  setRooms: React.Dispatch<React.SetStateAction<ChatRoom[]>>;
-  setFolders: React.Dispatch<React.SetStateAction<Folder[]>>;
-  setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
-  setUser: React.Dispatch<React.SetStateAction<User>>;
-  setActiveRoomNicknames: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-
-  toggleFolder: (folderId: string) => void;
-  handleLogout: () => void;
-  handleSendMessage: (roomId: string, content: string, replyTarget: Message | null) => void;
-  handleTyping: (roomId: string, isTyping: boolean) => void;
-  handleUploadAttachments: (
-    roomId: string,
-    files: File[],
-    options?: { content?: string; replyTarget?: Message | null },
-  ) => Promise<void>;
-  handleRecallMessage: (msgId: string) => void;
-  handleUpdateMessage: (roomId: string, messageId: string, content: string) => void;
-  handleUpdateProfile: (profile: ProfileInput) => Promise<User>;
-  handleUpdatePreferences: (preferences: PreferencesInput) => Promise<void>;
-  handleCreateRoom: (name: string, type: "msg" | "group", folderId: string) => Promise<string>;
-  handleOpenPrivateRoom: (targetUserId: string) => Promise<string>;
-  handleCreateFolder: (name: string) => Promise<void>;
-  handleDeleteFolder: (folderId: string) => Promise<void>;
-  handleRenameFolder: (folderId: string, name: string) => Promise<void>;
-  handleCategorizeRoom: (roomId: string, folderId: string | null) => Promise<void>;
-  handleModifyNickname: (roomId: string, nickname: string) => Promise<void>;
-  handleLeaveOrBlock: (roomId: string) => Promise<{ isDeleted: boolean; newActiveId?: string }>;
-  handleDeleteAccount: () => Promise<void>;
-  loadGroupMembers: (roomId: string) => Promise<Member[]>;
-  saveGroupSettings: (roomId: string, settings: GroupSettingsInput) => Promise<void>;
-  approveGroupMember: (roomId: string, userId: string) => Promise<Member[] | undefined>;
-  updateGroupMember: (
-    roomId: string,
-    userId: string,
-    data: { role?: "admin" | "member"; nickname?: string; isMuted?: boolean },
-  ) => Promise<Member[] | undefined>;
-  kickGroupMember: (roomId: string, userId: string) => Promise<Member[] | undefined>;
-  transferGroupOwner: (roomId: string, userId: string) => Promise<Member[] | undefined>;
-  handleDeleteGroupRoom: (roomId: string) => Promise<string | null>;
-  getReadAvatarsForMessage: (room: ChatRoom, msg: Message) => { name: string; displayName?: string; avatarUrl: string }[];
-
-  searchUsersForInvite: (query: string) => Promise<PublicUser[]>;
-  handleJoinByInviteCode: (inviteCode: string) => Promise<string>;
-  sendFriendRequest: (query: string) => Promise<void>;
-  acceptFriendRequest: (requestId: string) => Promise<void>;
-  rejectFriendRequest: (requestId: string) => Promise<void>;
-  removeFriend: (friendId: string) => Promise<void>;
-  blockFriend: (friendId: string) => Promise<void>;
-  unblockUser: (blockedId: string) => Promise<void>;
-  saveEmergencySettings: (settings: EmergencySettings) => Promise<void>;
-  setUiLanguage: (language: UiLanguage) => void;
-  refreshSocialData: () => Promise<void>;
-  updateRoomSorting: (nextOrder: Record<string, string[]>) => Promise<void>;
-  markRoomAsRead: (roomId: string) => void;
-}
-
-export type AdminAccessState = "checking" | "allowed" | "forbidden" | "error";
-export type AdminError = "access" | "monitoring" | null;
-export interface AdminMonitoringState {
-  metrics: AdminMetricsResponse | null;
-  logs: AdminLogEntry[];
-  slowQueries: AdminSlowQuery[];
-  lastUpdated: number | null;
-}
-
-const emptyAdminMonitoringState: AdminMonitoringState = {
-  metrics: null,
-  logs: [],
-  slowQueries: [],
-  lastUpdated: null,
-};
-export const ADMIN_POLL_INTERVAL_MS = 30_000;
 /** Login URL that returns the user to /admin once authenticated. */
 const ADMIN_LOGIN_PATH = withRedirectParam("/login", "/admin");
 
@@ -370,399 +152,11 @@ const TypingUsersContext = createContext<Record<string, string[]> | undefined>(u
 
 const UiLanguageContext = createContext<UiLanguage | undefined>(undefined);
 
-interface ProfilePopoverContextType {
-  activeProfilePopover: { instanceId: string; userId: string } | null;
-  setActiveProfilePopover: React.Dispatch<
-    React.SetStateAction<{ instanceId: string; userId: string } | null>
-  >;
-}
-
 const ProfilePopoverContext = createContext<ProfilePopoverContextType | undefined>(undefined);
-
-interface RightPanelContextType {
-  showRightPanel: boolean;
-  setShowRightPanel: React.Dispatch<React.SetStateAction<boolean>>;
-}
 
 const RightPanelContext = createContext<RightPanelContextType | undefined>(undefined);
 
-// Admin monitoring context polled periodically without re-rendering general useChat consumers.
-interface AdminContextType {
-  adminAccess: AdminAccessState;
-  adminMonitoring: AdminMonitoringState;
-  adminError: AdminError;
-  refreshAdminMonitoring: () => void;
-}
-
 const AdminContext = createContext<AdminContextType | undefined>(undefined);
-
-// Static key list for building identity-stable handler proxies without render-time ref reads.
-const HANDLER_KEYS = [
-  "toggleFolder",
-  "handleLogout",
-  "handleSendMessage",
-  "handleTyping",
-  "handleUploadAttachments",
-  "handleRecallMessage",
-  "handleUpdateMessage",
-  "handleUpdateProfile",
-  "handleUpdatePreferences",
-  "handleCreateRoom",
-  "handleOpenPrivateRoom",
-  "handleCreateFolder",
-  "handleDeleteFolder",
-  "handleRenameFolder",
-  "handleCategorizeRoom",
-  "handleModifyNickname",
-  "handleLeaveOrBlock",
-  "handleDeleteAccount",
-  "loadGroupMembers",
-  "saveGroupSettings",
-  "approveGroupMember",
-  "updateGroupMember",
-  "kickGroupMember",
-  "transferGroupOwner",
-  "handleDeleteGroupRoom",
-  "searchUsersForInvite",
-  "handleJoinByInviteCode",
-  "sendFriendRequest",
-  "acceptFriendRequest",
-  "rejectFriendRequest",
-  "removeFriend",
-  "blockFriend",
-  "unblockUser",
-  "saveEmergencySettings",
-  "setUiLanguage",
-  "refreshSocialData",
-  "updateRoomSorting",
-] as const;
-type HandlerKey = (typeof HANDLER_KEYS)[number];
-
-const toStoredUser = (
-  profile: MyProfile,
-  settings?: Partial<UserSettings>,
-): StoredUser => ({
-  userId: profile.userId,
-  username: profile.name,
-  email: profile.email,
-  avatar: profile.avatarUrl ?? "",
-  isAdmin: profile.isAdmin,
-  bio: profile.bio ?? "",
-  language: normalizeLanguage(settings?.language),
-  theme: settings?.theme ?? "light",
-  notifyDesktop: settings?.notifyDesktop ?? true,
-  notifySound: settings?.notifySound ?? true,
-  warningEnabled: settings?.warningEnabled ?? false,
-  lastActivity: profile.lastActivity,
-  roomOrder: settings?.roomOrder ?? {},
-});
-
-const formatMessageTime = (value: Date | string): string => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-};
-
-const mapAttachment = (attachment: ApiAttachment) => {
-  const filename = attachment.originalName || "attachment";
-  return {
-    filename,
-    filetype: attachment.fileType,
-    url: attachmentDownloadUrl(attachment.fileUrl),
-  };
-};
-
-const summarizeMessagePreview = (message: {
-  content: string;
-  attachments?: { filename: string }[];
-  isRecalled?: boolean;
-}) => {
-  if (message.isRecalled) return "";
-  if (message.content.trim()) return message.content.trim();
-  if (message.attachments?.length) return message.attachments[0].filename;
-  return "";
-};
-
-const isPrivateRoomFallbackName = (roomName: string | undefined, roomId: string) =>
-  roomName === `Private ${roomId.slice(0, 8)}`;
-
-const getPrivateRoomName = (
-  room: Pick<ChatRoom, "id" | "name" | "members" | "otherMemberId">,
-  currentUserId?: string,
-) => {
-  const otherMember =
-    room.members?.find((member) =>
-      currentUserId
-        ? member.userId !== currentUserId
-        : room.otherMemberId
-          ? member.userId === room.otherMemberId
-          : true,
-    ) ?? null;
-
-  if (otherMember?.name) {
-    return otherMember.name;
-  }
-
-  if (room.name && !isPrivateRoomFallbackName(room.name, room.id)) {
-    return room.name;
-  }
-
-  return "";
-};
-
-const mapMessage = (message: MessageWithSender, currentUserId?: string): Message => ({
-  id: message.messageId,
-  roomId: message.roomId,
-  senderId: message.senderId,
-  senderName: message.sender?.name ?? "Deleted User",
-  content: message.content,
-  sentAt: new Date(message.sentAt).toISOString(),
-  timestamp: formatMessageTime(message.sentAt),
-  replyToId: message.replyToId,
-  isOutgoing: Boolean(currentUserId && message.senderId === currentUserId),
-  isRecalled: message.isRecalled,
-  messageSequence: message.messageSequence,
-  changeSequence: message.changeSequence,
-  revision: message.revision,
-  replyTo: null,
-  attachments: message.attachments?.map(mapAttachment) ?? [],
-  mentions: message.mentions ?? [],
-});
-
-const hydrateReplyTargets = (items: Message[]): Message[] => {
-  const messageByRoom = new Map<string, Map<string, Message>>();
-
-  for (const item of items) {
-    let roomMessages = messageByRoom.get(item.roomId);
-    if (!roomMessages) {
-      roomMessages = new Map<string, Message>();
-      messageByRoom.set(item.roomId, roomMessages);
-    }
-    roomMessages.set(item.id, item);
-  }
-
-  return items.map((item) => {
-    if (!item.replyToId) {
-      return item.replyTo ? { ...item, replyTo: null } : item;
-    }
-
-    const replyTarget = messageByRoom.get(item.roomId)?.get(item.replyToId);
-    if (!replyTarget) {
-      return item;
-    }
-
-    const nextReplyTo = {
-      senderName: replyTarget.senderName,
-      content: replyTarget.isRecalled
-        ? ""
-        : replyTarget.content || replyTarget.attachments?.[0]?.filename || "",
-    };
-
-    if (
-      item.replyTo?.senderName === nextReplyTo.senderName &&
-      item.replyTo?.content === nextReplyTo.content
-    ) {
-      return item;
-    }
-
-    return {
-      ...item,
-      replyTo: nextReplyTo,
-    };
-  });
-};
-
-// How often a connected session re-runs `/sync` purely to move its cursor
-// forward. Long enough that an idle-but-chatty session is not making steady
-// background requests, short enough that the catch-up after a reconnect stays
-// bounded by minutes of activity rather than by the whole connection.
-const CURSOR_CHECKPOINT_INTERVAL_MS = 5 * 60_000;
-
-const mapRooms = (
-  apiRooms: RoomSummary[],
-  apiFolders: ApiFolder[],
-  currentRooms: ChatRoom[],
-  currentUserId?: string,
-): ChatRoom[] => {
-  const currentRoomById = new Map(currentRooms.map((room) => [room.id, room]));
-  const folderByRoom = new Map<string, string>();
-  for (const folder of apiFolders) {
-    for (const roomId of folder.roomIds) {
-      folderByRoom.set(roomId, folder.folderId);
-    }
-  }
-
-  return apiRooms.map((room) => {
-    const currentRoom = currentRoomById.get(room.roomId);
-    const latestMessage =
-      room.latestMessage
-        ? {
-            content: room.latestMessage.content,
-            attachments: [],
-            isRecalled: room.latestMessage.isRecalled,
-          }
-        : null;
-
-    return {
-      id: room.roomId,
-      type: room.type === "group" ? "group" : "msg",
-      avatarUrl: room.avatarUrl,
-      name:
-        room.name ||
-        (room.type === "group"
-          ? (currentRoom?.name && !isPrivateRoomFallbackName(currentRoom.name, room.roomId)
-              ? currentRoom.name
-              : `Group ${room.roomId.slice(0, 8)}`)
-          : getPrivateRoomName(
-              {
-                id: room.roomId,
-                name: currentRoom?.name ?? "",
-                members: currentRoom?.members,
-                otherMemberId: room.otherMemberId ?? currentRoom?.otherMemberId,
-              },
-              currentUserId,
-            )),
-      folderId: folderByRoom.get(room.roomId) ?? currentRoom?.folderId ?? null,
-      inviteCode: room.inviteCode,
-      requireApproval: room.requireApproval,
-      viewHistory: room.viewHistory,
-      isArchived: room.isArchived,
-      isReadonly: room.isReadonly,
-      isOnline: room.isOnline ?? currentRoom?.isOnline,
-      otherMemberId: room.otherMemberId ?? currentRoom?.otherMemberId,
-      members: currentRoom?.members ?? (room.type === "group" ? [] : undefined),
-      unreadCount: room.unreadCount ?? currentRoom?.unreadCount ?? 0,
-      lastReadId: room.lastReadId ?? currentRoom?.lastReadId ?? null,
-      myRole: room.role ?? currentRoom?.myRole,
-      lastMessagePreview: latestMessage ? summarizeMessagePreview(latestMessage) : undefined,
-      lastMessageAt: room.latestMessage
-        ? formatMessageTime(room.latestMessage.sentAt)
-        : undefined,
-      lastMessageId: room.latestMessage?.messageId,
-      lastMessageSequence: room.latestMessage?.messageSequence,
-      lastMessageChangeSequence: room.latestMessage?.changeSequence,
-    };
-  });
-};
-
-const mapFolders = (apiFolders: ApiFolder[], currentFolders: Folder[]): Folder[] => {
-  const collapsedById = new Map(currentFolders.map((folder) => [folder.id, folder.collapsed]));
-  return apiFolders.map((folder) => ({
-    id: folder.folderId,
-    name: folder.name,
-    collapsed: collapsedById.get(folder.folderId) ?? false,
-  }));
-};
-
-const normalizeLanguage = (language?: string): UiLanguage =>
-  language === "zh-TW" || language === "en" ? language : "en";
-
-const mapFriend = (item: FriendResponse, emergencyContactIds: Set<string>): Friend => ({
-  id: item.friend.userId,
-  name: item.friend.name,
-  email: "",
-  status: item.status || "offline",
-  isEmergencyContact: emergencyContactIds.has(item.friend.userId),
-  avatarUrl: item.friend.avatarUrl,
-});
-
-const mapFriendRequest = (item: FriendRequestResponse, currentUserId: string): FriendRequest => {
-  if (item.requesterId === currentUserId) {
-    return {
-      id: item.addresseeId,
-      name: item.addressee?.name ?? item.addresseeId,
-      email: "",
-      direction: "outgoing",
-      avatarUrl: item.addressee?.avatarUrl,
-    };
-  }
-  return {
-    id: item.requesterId,
-    name: item.requester?.name ?? item.requesterId,
-    email: "",
-    direction: "incoming",
-    avatarUrl: item.requester?.avatarUrl,
-  };
-};
-
-const mapEmergencyContact = (item: EmergencyContactResponse): EmergencyContact => ({
-  id: item.contactId,
-  contactId: item.contactId,
-  name: item.contact?.name ?? item.contactId,
-  email: item.contact?.email ?? "",
-  message: item.message,
-});
-
-const mapRoomMember = (member: ApiRoomMember, profile?: UserProfile): Member => ({
-  userId: member.userId,
-  name: profile?.name || member.userId,
-  role: member.role,
-  nickname: member.nickname,
-  isMuted: member.isMuted,
-  lastReadId: member.lastReadId ?? null,
-  readPosition: member.readPosition,
-  avatarUrl: profile?.avatarUrl,
-});
-
-const fetchRoomMembers = async (authToken: string, roomId: string): Promise<Member[]> => {
-  const apiMembers = await listRoomMembers(authToken, roomId);
-  const profiles = await Promise.all(
-    apiMembers.map((member) =>
-      getUserProfile(member.userId, authToken).catch(() => undefined),
-    ),
-  );
-
-  return apiMembers.map((member, index) => mapRoomMember(member, profiles[index]));
-};
-
-const findRequestedUser = (
-  candidates: PublicUser[],
-  query: string,
-): PublicUser | undefined => {
-  const normalizedQuery = query.trim().toLowerCase();
-
-  return (
-    candidates.find((candidate) => candidate.userId.toLowerCase() === normalizedQuery) ??
-    candidates.find((candidate) => candidate.name.toLowerCase() === normalizedQuery) ??
-    candidates.find((candidate) => candidate.name.toLowerCase().includes(normalizedQuery)) ??
-    candidates[0]
-  );
-};
-
-const sortMessages = (items: Message[]) =>
-  [...items].sort((a, b) => {
-    if (a.messageSequence !== undefined && b.messageSequence !== undefined) {
-      const sequenceCompare = a.messageSequence - b.messageSequence;
-      if (sequenceCompare !== 0) return sequenceCompare;
-    }
-    const sentAtCompare = new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime();
-    if (sentAtCompare !== 0) return sentAtCompare;
-    return a.id.localeCompare(b.id);
-  });
-
-const compareMessageVersion = (left: Message, right: Message): number => {
-  if (left.changeSequence !== undefined && right.changeSequence !== undefined) {
-    return left.changeSequence - right.changeSequence;
-  }
-  if (left.revision !== undefined && right.revision !== undefined) {
-    return left.revision - right.revision;
-  }
-  if (left.messageSequence !== undefined && right.messageSequence !== undefined) {
-    return left.messageSequence - right.messageSequence;
-  }
-  return new Date(left.sentAt).getTime() - new Date(right.sentAt).getTime();
-};
-
-const mergeMessages = (current: Message[], incoming: Message[]): Message[] => {
-  const byId = new Map(current.map((message) => [message.id, message]));
-  for (const message of incoming) {
-    const existing = byId.get(message.id);
-    if (!existing || compareMessageVersion(message, existing) >= 0) {
-      byId.set(message.id, message);
-    }
-  }
-  return hydrateReplyTargets(sortMessages(Array.from(byId.values())));
-};
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
