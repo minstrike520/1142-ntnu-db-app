@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.2.0](https://github.com/nearcsie/near-chat/compare/v2.1.1...v2.2.0) (2026-09-06)
+
+
+### Features
+
+* Add users.is_admin field and administrator authorization middleware ([#565](https://github.com/nearcsie/near-chat/issues/565)) ([#577](https://github.com/nearcsie/near-chat/issues/577)) ([f89ff1c](https://github.com/nearcsie/near-chat/commit/f89ff1cb314750653ae526f48603f390c1e3661e))
+* **backend:** add the admin monitoring API ([#569](https://github.com/nearcsie/near-chat/issues/569)) ([#608](https://github.com/nearcsie/near-chat/issues/608)) ([c94a7d5](https://github.com/nearcsie/near-chat/commit/c94a7d5043d99492e1d392853c025ad510c8f96d))
+* **backend:** Added request timing middleware and performance metrics consolidation ([#567](https://github.com/nearcsie/near-chat/issues/567)) ([#585](https://github.com/nearcsie/near-chat/issues/585)) ([9468e15](https://github.com/nearcsie/near-chat/commit/9468e154550251cc53028e85e85113dc5fd1dade))
+* **backend:** Establish Bun.SQL Slow Query Monitoring and Slow Query Buffer ([#568](https://github.com/nearcsie/near-chat/issues/568)) ([#590](https://github.com/nearcsie/near-chat/issues/590)) ([340a2b2](https://github.com/nearcsie/near-chat/commit/340a2b2f0407a599c6fc1267646b4338da060881))
+* **backend:** manage Redis connections on Bun's native client ([#472](https://github.com/nearcsie/near-chat/issues/472)) ([#607](https://github.com/nearcsie/near-chat/issues/607)) ([e7d2fc9](https://github.com/nearcsie/near-chat/commit/e7d2fc9887571105dba8cf3f3fa880128735f7c5))
+* **backend:** share user presence across instances through Redis ([#473](https://github.com/nearcsie/near-chat/issues/473)) ([#611](https://github.com/nearcsie/near-chat/issues/611)) ([72624c6](https://github.com/nearcsie/near-chat/commit/72624c6e0c1050b9336f0724c45f6bdf3595d166))
+* create Redis Compose service and env setup ([#471](https://github.com/nearcsie/near-chat/issues/471)) ([#526](https://github.com/nearcsie/near-chat/issues/526)) ([f814b38](https://github.com/nearcsie/near-chat/commit/f814b38adf0b53941a9bd57262acfe6fa1e910b3))
+* **frontend:** add admin monitoring page ([#635](https://github.com/nearcsie/near-chat/issues/635)) ([84e8749](https://github.com/nearcsie/near-chat/commit/84e87490f7ea29a622a8587801ea6880a3d07bd6))
+* harden recoverable realtime chat consistency and deployment safety ([#542](https://github.com/nearcsie/near-chat/issues/542)) ([a56cabe](https://github.com/nearcsie/near-chat/commit/a56cabe268eaf1cbc45d2df27694bafe63f52bd1))
+* Introducing Pino structured logging and recent log buffering ([#566](https://github.com/nearcsie/near-chat/issues/566)) ([#578](https://github.com/nearcsie/near-chat/issues/578)) ([8607914](https://github.com/nearcsie/near-chat/commit/860791459dda00bbca35c0bbc13a03e4df73eba0))
+* **migrate:** take the migration target as an explicit --database-url ([#600](https://github.com/nearcsie/near-chat/issues/600)) ([aa3298b](https://github.com/nearcsie/near-chat/commit/aa3298bc18f0ab510ea2f1a24cfa58d234a2c183))
+* **realtime:** carry realtime events across instances over Redis ([#475](https://github.com/nearcsie/near-chat/issues/475)) ([#646](https://github.com/nearcsie/near-chat/issues/646)) ([105b6d7](https://github.com/nearcsie/near-chat/commit/105b6d7630e9bf63737855a8f4b942226fae458d))
+
+
+### Bug Fixes
+
+* **backend:** deliver SIGTERM to the production backend process ([#586](https://github.com/nearcsie/near-chat/issues/586)) ([#613](https://github.com/nearcsie/near-chat/issues/613)) ([5578cce](https://github.com/nearcsie/near-chat/commit/5578cce64a47832e98cf09f9f7185887e04a1ef1))
+* **realtime:** aggregate typing state per room member ([#474](https://github.com/nearcsie/near-chat/issues/474)) ([#640](https://github.com/nearcsie/near-chat/issues/640)) ([65a8ddd](https://github.com/nearcsie/near-chat/commit/65a8dddd0573d1d689137a7094df1899ca0844ff))
+* **realtime:** deliver user_status to friends on every instance ([#476](https://github.com/nearcsie/near-chat/issues/476)) ([#647](https://github.com/nearcsie/near-chat/issues/647)) ([e1583a6](https://github.com/nearcsie/near-chat/commit/e1583a638479b3e6f6122faa2cf329f62fe31aad))
+
 ## [2.1.1](https://github.com/nearcsie/near-chat/compare/v2.1.0...v2.1.1) (2026-08-11)
 
 
