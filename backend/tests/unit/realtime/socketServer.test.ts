@@ -409,4 +409,212 @@ describe('attachSockets', () => {
       expect(afterDisconnect[0]).toBeUndefined();
     });
   });
+
+  /**
+   * The cluster half of what #640 fixed inside one process.
+   *
+   * With a cluster adapter installed, `socket.to(room)` reaches every instance,
+   * so `false` from this process's last claim retracts the indication for a
+   * user who is still typing on another instance. These pin that the retraction
+   * is now the store's decision, and that it stays this process's decision when
+   * no store is wired.
+   */
+  describe('with a cross-instance typing store', () => {
+    let storeHandlers: Record<string, any>;
+    let storeSocket: any;
+    let storeRoomEmit: Mock<any>;
+    let claims: Array<[string, string]>;
+    let releases: Array<[string, string]>;
+    let holdersLeft: number;
+    /** Resolves the next `release` by hand, to open a window mid-flight. */
+    let blockRelease: (() => void) | undefined;
+
+    const attachWithStore = (id = 'socket-1') => {
+      const handlers: Record<string, any> = {};
+      const emitToRoom = mock();
+      const socket = {
+        id,
+        data: { user: { userId: 'user-1', name: 'Alice' } },
+        rooms: new Set(['user_user-1', 'room_room-active']),
+        join: mock(),
+        leave: mock(),
+        emit: mock(),
+        to: mock(() => ({ emit: emitToRoom })),
+        on: mock((event: string, handler: any) => { handlers[event] = handler; }),
+      };
+      return { handlers, socket, emitToRoom };
+    };
+
+    let connect: (socket: any) => void;
+
+    beforeEach(() => {
+      claims = [];
+      releases = [];
+      holdersLeft = 0;
+      blockRelease = undefined;
+
+      const typingStore = {
+        async claim(roomId: string, userId: string) {
+          claims.push([roomId, userId]);
+          return { ok: true as const, value: undefined };
+        },
+        async release(roomId: string, userId: string) {
+          releases.push([roomId, userId]);
+          if (blockRelease) {
+            await new Promise<void>((resolve) => { blockRelease = resolve; });
+          }
+          return { ok: true as const, value: holdersLeft };
+        },
+      };
+
+      let handler: any;
+      const io = {
+        on: mock((event: string, fn: any) => { if (event === 'connection') handler = fn; }),
+        to: mock(() => ({ emit: mock() })),
+      } as unknown as ChatServer;
+
+      attachSockets(io, {
+        roomMemberRepository: {
+          findByUser: mock().mockResolvedValue([{ roomId: 'room-active', role: 'member' }]),
+          findMember: mock().mockResolvedValue({ roomId: 'room-active', role: 'member' }),
+        } as any,
+        typingStore,
+      });
+      connect = handler;
+
+      const first = attachWithStore();
+      storeHandlers = first.handlers;
+      storeSocket = first.socket;
+      storeRoomEmit = first.emitToRoom;
+      connect(storeSocket);
+    });
+
+    it('claims in Redis on every refresh, without waiting for it to answer', async () => {
+      await storeHandlers.typing({ roomId: 'room-active', isTyping: true });
+
+      // The heartbeat states local truth, so it must not sit behind a round trip.
+      expect(storeRoomEmit).toHaveBeenCalledWith('user_typing', {
+        roomId: 'room-active',
+        userId: 'user-1',
+        isTyping: true,
+      });
+      await Promise.resolve();
+      expect(claims).toEqual([['room-active', 'user-1']]);
+    });
+
+    it('retracts only once no instance holds a claim', async () => {
+      await storeHandlers.typing({ roomId: 'room-active', isTyping: true });
+      storeRoomEmit.mockClear();
+
+      holdersLeft = 0;
+      await storeHandlers.typing({ roomId: 'room-active', isTyping: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(releases).toEqual([['room-active', 'user-1']]);
+      expect(storeRoomEmit).toHaveBeenCalledWith('user_typing', {
+        roomId: 'room-active',
+        userId: 'user-1',
+        isTyping: false,
+      });
+    });
+
+    it('stays silent while another instance still claims the same room member', async () => {
+      await storeHandlers.typing({ roomId: 'room-active', isTyping: true });
+      storeRoomEmit.mockClear();
+
+      // The user is typing from a second instance; this one is not the last.
+      holdersLeft = 1;
+      await storeHandlers.typing({ roomId: 'room-active', isTyping: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(releases).toHaveLength(1);
+      expect(storeRoomEmit).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The race the reconciler exists for. A keystroke landing while a release
+     * is in flight has to both suppress the retraction and put the field back —
+     * a plain claim/release pair would let the HDEL win and leave this instance
+     * holding a live local claim that Redis knows nothing about.
+     */
+    it('suppresses a retraction overtaken by a keystroke, and re-claims', async () => {
+      await storeHandlers.typing({ roomId: 'room-active', isTyping: true });
+      storeRoomEmit.mockClear();
+      claims.length = 0;
+
+      blockRelease = () => {};
+      holdersLeft = 0;
+      const stopped = storeHandlers.typing({ roomId: 'room-active', isTyping: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(releases).toHaveLength(1);
+
+      // Typing resumes before Redis has answered the release.
+      await storeHandlers.typing({ roomId: 'room-active', isTyping: true });
+      blockRelease?.();
+      await stopped;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const retracted = storeRoomEmit.mock.calls.some(
+        ([, payload]: any[]) => payload?.isTyping === false,
+      );
+      expect(retracted).toBe(false);
+      expect(claims).toEqual([['room-active', 'user-1']]);
+    });
+
+    it('retracts anyway when Redis cannot answer', async () => {
+      const failing = {
+        claim: async () => ({ ok: true as const, value: undefined }),
+        release: async () => ({ ok: false as const, error: new Error('down') }),
+      };
+      let handler: any;
+      const io = {
+        on: mock((event: string, fn: any) => { if (event === 'connection') handler = fn; }),
+        to: mock(() => ({ emit: mock() })),
+      } as unknown as ChatServer;
+      attachSockets(io, {
+        roomMemberRepository: {
+          findByUser: mock().mockResolvedValue([{ roomId: 'room-active', role: 'member' }]),
+          findMember: mock().mockResolvedValue({ roomId: 'room-active', role: 'member' }),
+        } as any,
+        typingStore: failing,
+      });
+      const { handlers, socket, emitToRoom } = attachWithStore('socket-down');
+      handler(socket);
+
+      await handlers.typing({ roomId: 'room-active', isTyping: true });
+      emitToRoom.mockClear();
+      await handlers.typing({ roomId: 'room-active', isTyping: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Suppressing here would strand an indicator nobody can clear.
+      expect(emitToRoom).toHaveBeenCalledWith('user_typing', {
+        roomId: 'room-active',
+        userId: 'user-1',
+        isTyping: false,
+      });
+    });
+
+    it('still retracts when the socket disconnects', async () => {
+      await storeHandlers.typing({ roomId: 'room-active', isTyping: true });
+      storeRoomEmit.mockClear();
+      holdersLeft = 0;
+
+      storeHandlers.disconnect();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(storeRoomEmit).toHaveBeenCalledWith('user_typing', {
+        roomId: 'room-active',
+        userId: 'user-1',
+        isTyping: false,
+      });
+    });
+
+    it('asks the store nothing for a room this socket never claimed', async () => {
+      await storeHandlers.typing({ roomId: 'room-active', isTyping: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(releases).toEqual([]);
+      expect(storeRoomEmit).not.toHaveBeenCalled();
+    });
+  });
 });

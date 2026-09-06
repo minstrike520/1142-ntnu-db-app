@@ -63,9 +63,9 @@ export const realtimeChannel = (clusterId?: string): string => {
  * adapter gives, and the reason clients recover through their Sync Cursor
  * rather than by trusting the socket.
  *
- * Two consequences that a Sync Cursor cannot repair, because they are not
- * missed events but wrong local state, and that must be closed before a
- * replica count above one becomes a supported deployment:
+ * One consequence that a Sync Cursor cannot repair, because it is not a missed
+ * event but wrong local state, and that must be closed before a replica count
+ * above one becomes a supported deployment:
  *
  * - A `SOCKETS_LEAVE` lost to an outage leaves a revoked member's socket in
  *   `room_<id>` on that instance, still receiving what the room publishes
@@ -75,10 +75,12 @@ export const realtimeChannel = (clusterId?: string): string => {
  *   subscriptions from durable membership on connect; what is missing is
  *   re-running that, and leaving the rooms that are no longer permitted, after
  *   a reconnect. Tracked on #477.
- * - Typing claims are aggregated per process in `socketServer.ts`, so with the
- *   same user typing from two instances the last local claim to end retracts
- *   the indication for everyone. That is #474's remaining acceptance
- *   criterion, which this adapter unblocks rather than resolves.
+ *
+ * Typing was the other one, and is closed: widening the reach of `user_typing`
+ * left its aggregation stopped at the process boundary, so `realtime/
+ * typingStore.ts` moved the "is this the last claim anywhere" question into
+ * Redis. A lost frame still costs a retraction, which the client's own expiry
+ * timer covers.
  *
  * A Redis outage degrades rather than fails: `ClusterAdapter#broadcast`
  * publishes inside a `try`/`catch` and calls `super.broadcast` regardless, so

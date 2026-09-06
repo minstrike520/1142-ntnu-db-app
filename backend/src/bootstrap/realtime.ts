@@ -8,6 +8,7 @@ import { attachSocketAuth } from '../realtime/authSocket';
 import { attachSockets } from '../realtime/socketServer';
 import type { RealtimePublisher } from '../realtime/publisher';
 import { createRedisAdapter } from '../realtime/redisAdapter';
+import { createRedisTypingStore } from '../realtime/typingStore';
 import type { RedisManager } from '../utils/redis';
 import { env } from '../config/env';
 
@@ -72,6 +73,17 @@ export const createRealtime = ({
     roomMemberRepository: repositories.roomMembers,
     friendRepository: repositories.friends,
     withRoomSubscriptionLock: publisher.withRoomSubscriptionLock,
+    // Gated on `REDIS_URL` for the same reason as the adapter above: without
+    // Redis there is no second instance to aggregate with, and a store over a
+    // manager that refuses every command would only warn about a Redis nobody
+    // asked for.
+    typingStore: redisUrl
+      ? createRedisTypingStore({
+          redis,
+          instanceId: config.instanceId,
+          ttlMs: realtime.typingTtlMs,
+        })
+      : undefined,
   });
 
   return { io, engine };
