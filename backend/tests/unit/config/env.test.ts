@@ -53,6 +53,9 @@ describe('env', () => {
       sessionReservationTtlMs: DEFAULT_SESSION_RESERVATION_TTL_MS,
       presenceGraceMs: DEFAULT_PRESENCE_GRACE_MS,
       presenceTtlMs: DEFAULT_PRESENCE_TTL_MS,
+      // Unset by default: the realtime channel stays unscoped unless a
+      // deployment sharing its Redis names itself.
+      clusterId: undefined,
     });
     expect(config.attachments).toEqual({
       restrictionEnabled: false,
@@ -150,6 +153,7 @@ describe('env', () => {
         SESSION_RESERVATION_TTL_MS: '500',
         PRESENCE_GRACE_MS: '0',
         PRESENCE_TTL_MS: '12000',
+        REALTIME_CLUSTER_ID: 'staging',
       });
 
       expect(config.realtime).toEqual({
@@ -158,6 +162,7 @@ describe('env', () => {
         sessionReservationTtlMs: 500,
         presenceGraceMs: 0,
         presenceTtlMs: 12000,
+        clusterId: 'staging',
       });
     });
 
@@ -175,6 +180,12 @@ describe('env', () => {
 
       expect(config.realtime.typingTtlMs).toBe(DEFAULT_TYPING_TTL_MS);
       expect(config.realtime.presenceGraceMs).toBe(0);
+    });
+
+    it('treats a blank cluster id as unset, so the channel stays unscoped', () => {
+      expect(env({}).realtime.clusterId).toBeUndefined();
+      expect(env({ REALTIME_CLUSTER_ID: '   ' }).realtime.clusterId).toBeUndefined();
+      expect(env({ REALTIME_CLUSTER_ID: ' staging ' }).realtime.clusterId).toBe('staging');
     });
 
     it('drops the presence grace period under the test runner', () => {

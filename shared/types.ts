@@ -34,7 +34,7 @@ export interface User {
   createdAt: Date;
   deletedAt?: Date | null;
   roomOrder?: Record<string, string[]>;
-  /** Grants access to `/api/v1/admin/*`; never included in API responses. */
+  /** Grants access to `/api/v1/admin/*`; never included in public profiles. */
   isAdmin: boolean;
 }
 
@@ -61,6 +61,8 @@ export interface UserProfile {
 export interface MyProfile extends UserProfile {
   email: string;
   lastActivity: Date;
+  /** Current user's navigation hint; admin routes still perform fresh checks. */
+  isAdmin: boolean;
 }
 
 export interface UserSettings {

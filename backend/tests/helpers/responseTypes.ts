@@ -21,6 +21,7 @@ export interface AdminHealthResponse {
 
 export interface UserProfileResponse extends AuthUser {
   email?: string;
+  isAdmin?: boolean;
 }
 
 export interface RoomResponse {

@@ -16,6 +16,7 @@ permissions:
 jobs:
   node-engine:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
@@ -26,6 +27,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
@@ -35,6 +37,7 @@ jobs:
 
   typecheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
@@ -42,37 +45,13 @@ jobs:
           package: near-chat-frontend
       - run: pnpm --filter near-chat-frontend typecheck
 
+  # Test across Node versions to verify supported engines (22, pinned floor 22.22.2, and 24).
   test:
     runs-on: ubuntu-latest
-    # The only job in CI given a Node version matrix, and deliberately so. All
-    # legs install a byte-identical dependency tree — pnpm resolves from the
-    # lockfile, and optional-dependency filtering keys on os/cpu/libc, never on
-    # the Node version — so the matrix varies exactly one thing: the binary that
-    # executes the task. That only buys signal where the Node version is what
-    # the floor is about, and here it is: jsdom is the sole package in the graph
-    # that sets the 22.22.2 floor, and this job is its only consumer
-    # (frontend/vitest.config.ts runs `environment: "jsdom"`). lint, typecheck
-    # and build would each cost another runner slot on every workflow-touching
-    # PR to re-prove floors already covered by these legs (eslint 22.13.0, next
-    # 20.9.0).
+    timeout-minutes: 10
     strategy:
-      # Off, not stylistic: with fail-fast on, the failing leg cancels the other
-      # and destroys the signal this matrix exists to produce — which version
-      # broke it. That would make the matrix strictly worse than no matrix.
       fail-fast: false
       matrix:
-        # '22' is what every other job resolves to via the setup-workspace
-        # default (the latest 22.x, 22.23.2 today), and is listed first because
-        # it is the leg that represents the rest of CI. '22.22.2' is the literal
-        # floor declared in the root package.json `engines.node`, set by
-        # jsdom@30's `^22.22.2 || ^24.15.0 || >=26.0.0`. An exact pin is correct
-        # for a matrix leg and wrong for a default: it proves the floor itself
-        # is runnable, at the cost of a ~10-20s Node download (it is outside the
-        # runner toolcache) and of receiving no later 22.x security fixes. Do
-        # not "fix" it into a floating tag — that would delete the coverage.
-        # Keep this literal at the minimum version derived by the node-engine
-        # guard. The other legs intentionally float to the newest releases of
-        # the supported Node 22 and Node 24 lines.
         node-version: ['22', '22.22.2', '24']
     steps:
       - uses: actions/checkout@v7
@@ -85,16 +64,31 @@ jobs:
   build:
     if: inputs.run-build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-workspace
         with:
           package: near-chat-frontend
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            frontend/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('frontend/src/**', 'frontend/public/**', 'frontend/next.config.ts') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: pnpm --filter near-chat-frontend build
+      - name: Output build summary
+        run: |
+          echo "### 🚀 Next.js Production Build Succeeded" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Runner OS: \`${{ runner.os }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Caching: \`frontend/.next/cache\` enabled" >> "$GITHUB_STEP_SUMMARY"
 
   docker-build:
     if: inputs.run-build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - name: Build the development frontend image

@@ -98,12 +98,14 @@ describe("chatMappers", () => {
         name: "Alice",
         email: "alice@test.com",
         avatarUrl: "/avatars/alice.png",
+        isAdmin: true,
         bio: "Hello",
         lastActivity: new Date(),
       };
       const user = toStoredUser(profile, { language: "zh-TW", theme: "dark" });
       expect(user.userId).toBe("u-1");
       expect(user.username).toBe("Alice");
+      expect(user.isAdmin).toBe(true);
       expect(user.language).toBe("zh-TW");
       expect(user.theme).toBe("dark");
     });

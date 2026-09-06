@@ -1,8 +1,10 @@
 import { describe, it, expect, mock, afterEach } from 'bun:test';
 import { createBunRuntimeServer, createRealtime } from '../../../src/bootstrap/realtime';
+import { REALTIME_CHANNEL } from '../../../src/realtime/redisAdapter';
 import type { Server as Engine } from '@socket.io/bun-engine';
 
 const originalServe = Bun.serve;
+const originalRedisUrl = process.env.REDIS_URL;
 
 const stubEngine = () => ({
   handler: () => ({ websocket: {} }),
@@ -11,6 +13,10 @@ const stubEngine = () => ({
 
 afterEach(() => {
   (Bun as unknown as { serve: typeof Bun.serve }).serve = originalServe;
+  // `env()` re-reads `process.env` on every call, so a leaked `REDIS_URL` would
+  // change what later files in this tier assemble.
+  if (originalRedisUrl === undefined) delete process.env.REDIS_URL;
+  else process.env.REDIS_URL = originalRedisUrl;
 });
 
 describe('createBunRuntimeServer', () => {
@@ -82,6 +88,9 @@ describe('createRealtime', () => {
         bind: mock(),
         withRoomSubscriptionLock: mock(),
       } as never,
+      // Never consulted: without `REDIS_URL` the in-memory adapter is installed
+      // and the manager is not asked for a subscription.
+      redis: {} as never,
     });
 
     // `io.bind(engine)` means Socket.IO never sees the raw request, so its own
@@ -89,6 +98,49 @@ describe('createRealtime', () => {
     expect(engine.opts.cors).toEqual({
       origin: ['http://localhost:3000'],
       credentials: true,
+    });
+  });
+
+  describe('cluster adapter', () => {
+    const build = () => {
+      const subscribed: string[] = [];
+      const redis = {
+        subscribe: async (channel: string) => {
+          subscribed.push(channel);
+          return { ok: true as const, value: undefined };
+        },
+        unsubscribe: async () => ({ ok: true as const, value: undefined }),
+        publish: async () => ({ ok: true as const, value: 0 }),
+      };
+      const { io } = createRealtime({
+        config: { port: 4000, corsOrigins: [], instanceId: 'test-instance' },
+        repositories: {
+          roomMembers: { findByUser: mock(), findMember: mock() },
+          friends: { getFriends: mock() },
+        } as never,
+        publisher: { bind: mock(), withRoomSubscriptionLock: mock() } as never,
+        redis: redis as never,
+      });
+      return { io, subscribed };
+    };
+
+    it('installs the Redis adapter when REDIS_URL is configured', async () => {
+      process.env.REDIS_URL = 'redis://redis:6379';
+      const { subscribed } = build();
+
+      // `init()` is not awaited by Socket.IO, so let the subscribe settle.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(subscribed).toEqual([REALTIME_CHANNEL]);
+    });
+
+    it('leaves the in-memory adapter in place when REDIS_URL is absent', async () => {
+      delete process.env.REDIS_URL;
+      const { subscribed } = build();
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Nothing subscribed means nothing to supervise: a deployment without
+      // Redis keeps exactly the single-node realtime it had before.
+      expect(subscribed).toEqual([]);
     });
   });
 });

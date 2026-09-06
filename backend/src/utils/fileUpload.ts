@@ -15,14 +15,7 @@ export interface UploadedFile {
   stream?: ReadableStream | null;
 }
 
-/**
- * Reduce a client-supplied multipart filename to a single, inert path segment.
- *
- * The browser controls this value, and Bun keeps whatever it is given, so it can
- * carry `../` (or a Windows-style `..\`) and escape the upload directory once it
- * reaches `path.join`. The human-readable name is persisted separately as
- * `originalname`, so the on-disk name only has to be unique and safe.
- */
+/** Sanitizes client-provided filename into a safe path segment without path traversal. */
 export const sanitizeStoredFileName = (rawName: string): string => {
   const segment = path.posix.basename(String(rawName ?? '').replace(/\\/g, '/'));
   const safe = segment
@@ -32,29 +25,10 @@ export const sanitizeStoredFileName = (rawName: string): string => {
   return safe.length > 0 ? safe.slice(-100) : 'upload';
 };
 
-/**
- * Slack allowed on top of the file's own size, to cover multipart boundaries,
- * part headers and other field values. Generous on purpose: it only has to keep
- * a legitimate at-the-limit upload from tripping the envelope check, because the
- * authoritative per-file check still runs on the decoded `File`.
- */
+// Allowance for multipart envelope headers and boundaries.
 const MULTIPART_OVERHEAD_ALLOWANCE = 64 * 1024;
 
-/**
- * Wrap a request body so it stops being read once `maxBytes` have gone past.
- *
- * This is what makes the upload cap real rather than advisory. Parsing the body
- * first and checking `File.size` afterwards means the whole payload is received
- * and decoded before it can be rejected, so any authenticated user can make the
- * server buffer an arbitrarily large request; the `Content-Length` pre-check
- * below does not close that off, since a client is free to under-declare the
- * length or omit it entirely with `Transfer-Encoding: chunked`.
- *
- * Counting the bytes as they arrive is independent of anything the client
- * declares. On the first chunk that crosses the limit the source is cancelled —
- * which tears down the underlying request — and the error surfaces out of
- * whichever parser is consuming this stream.
- */
+/** Enforces byte limit on incoming request stream to avoid buffering oversized bodies. */
 const limitBodyStream = (
   body: ReadableStream<Uint8Array>,
   maxBytes: number,
@@ -86,17 +60,7 @@ const limitBodyStream = (
   });
 };
 
-/**
- * Decode the request's form body, reading at most `maxBytes` from the wire.
- *
- * `Response.formData()` is used in place of Hono's `c.req.parseBody()` because
- * it can be pointed at our own limited stream; `parseBody()` always reads
- * `c.req.raw` in full. The accepted content types are the same ones Hono parses
- * (`multipart/form-data` and `application/x-www-form-urlencoded`), so a request
- * that used to yield an empty body still ends up at the same `file is required`
- * rejection below — as does a malformed multipart body, which the old path let
- * escape as a 500.
- */
+/** Decodes multipart form body using byte-limited stream. */
 const parseFormBody = async (c: Context, maxBytes?: number): Promise<FormData> => {
   const raw = c.req.raw;
   const contentType = raw.headers.get('content-type') ?? '';
@@ -111,8 +75,6 @@ const parseFormBody = async (c: Context, maxBytes?: number): Promise<FormData> =
   try {
     return await new Response(stream, { headers: { 'content-type': contentType } }).formData();
   } catch (error) {
-    // Our own limit error has to keep its identity; anything else means the
-    // client sent a body this endpoint cannot read a file out of.
     if (error instanceof ValidationError) {
       throw error;
     }
@@ -135,9 +97,7 @@ export async function parseSingleFile(
 ): Promise<UploadedFile> {
   const fieldName = options.fieldName ?? 'file';
 
-  // Honest clients that declare an oversized upload are turned away without a
-  // single byte being read. This is only an optimisation — the declared length
-  // is client-controlled, so `limitBodyStream` is what actually enforces the cap.
+  // Fast-path rejection if declared Content-Length already exceeds limit.
   if (options.maxBytes) {
     const declaredLength = Number(c.req.header('content-length'));
     if (Number.isFinite(declaredLength) && declaredLength > options.maxBytes + MULTIPART_OVERHEAD_ALLOWANCE) {

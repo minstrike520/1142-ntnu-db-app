@@ -48,6 +48,7 @@ export const toStoredUser = (
   username: profile.name,
   email: profile.email,
   avatar: profile.avatarUrl ?? "",
+  isAdmin: profile.isAdmin,
   bio: profile.bio ?? "",
   language: normalizeLanguage(settings?.language),
   theme: settings?.theme ?? "light",

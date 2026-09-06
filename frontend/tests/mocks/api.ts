@@ -61,6 +61,12 @@ export const __failNextListMessages = (): void => {
 
 let activeAccessToken: string | null = TEST_TOKEN;
 let settingsState: UserSettings = { ...mySettings };
+let adminAccess = false;
+let currentUserIsAdmin = false;
+let adminHealthStatus: number | null = null;
+let adminMonitoringStatus: number | null = null;
+let adminMonitoringGate: Promise<void> | null = null;
+let releaseAdminMonitoring: (() => void) | null = null;
 
 /** Recorded mutation calls, for asserting handler behaviour in tests. */
 const apiCallLog: Array<{ fn: string; args: unknown[] }> = [];
@@ -71,6 +77,13 @@ export const __getApiCallLog = (fn?: string): Array<{ fn: string; args: unknown[
 export const __resetApiMock = (): void => {
   activeAccessToken = TEST_TOKEN;
   settingsState = { ...mySettings };
+  adminAccess = false;
+  currentUserIsAdmin = false;
+  adminHealthStatus = null;
+  adminMonitoringStatus = null;
+  releaseAdminMonitoring?.();
+  adminMonitoringGate = null;
+  releaseAdminMonitoring = null;
   apiCallLog.length = 0;
   conflictingMessageIds.clear();
   failNextListMessages = false;
@@ -83,7 +96,87 @@ export const getApiBaseUrl = (): string => "http://mock-api.test";
 export const getActiveAccessToken = (): string | null => activeAccessToken;
 export const setActiveAccessToken = (token: string | null): void => {
   activeAccessToken = token;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("auth:token-changed"));
+  }
 };
+
+export const __setAdminAccess = (allowed: boolean): void => {
+  adminAccess = allowed;
+};
+
+export const __setCurrentUserAdmin = (isAdmin: boolean): void => {
+  currentUserIsAdmin = isAdmin;
+};
+
+export const __setAdminHealthStatus = (status: number | null): void => {
+  adminHealthStatus = status;
+};
+
+export const __setAdminMonitoringStatus = (status: number | null): void => {
+  adminMonitoringStatus = status;
+};
+
+export const __holdNextAdminMonitoring = (): (() => void) => {
+  if (adminMonitoringGate) throw new Error("admin monitoring is already held");
+  adminMonitoringGate = new Promise<void>((resolve) => {
+    releaseAdminMonitoring = resolve;
+  });
+  return () => {
+    releaseAdminMonitoring?.();
+    adminMonitoringGate = null;
+    releaseAdminMonitoring = null;
+  };
+};
+
+export const getAdminHealth = async (): Promise<{ status: "ok" }> => {
+  apiCallLog.push({ fn: "getAdminHealth", args: [] });
+  if (adminHealthStatus !== null) {
+    throw new ApiError("Admin health failed", adminHealthStatus);
+  }
+  if (!adminAccess) throw new ApiError("Forbidden", 403, "FORBIDDEN");
+  return { status: "ok" };
+};
+
+/**
+ * The three monitoring endpoints share one call log, gate and failure switch;
+ * only the payload differs.
+ */
+const adminMonitoringEndpoint = <T>(fn: string, payload: () => T) => async (): Promise<T> => {
+  apiCallLog.push({ fn, args: [] });
+  await adminMonitoringGate;
+  if (adminMonitoringStatus !== null) throw new ApiError("Admin monitoring failed", adminMonitoringStatus);
+  return payload();
+};
+
+export const getAdminMetrics = adminMonitoringEndpoint("getAdminMetrics", () => ({
+  process: {
+    uptimeSeconds: 120,
+    cpu: { userMs: 10, systemMs: 5, percent: 2.5 },
+    memory: { rssBytes: 1000, heapUsedBytes: 500, heapTotalBytes: 800, externalBytes: 100 },
+  },
+  requests: {
+    totalRequests: 12,
+    statusClasses: { "1xx": 0, "2xx": 10, "3xx": 0, "4xx": 2, "5xx": 0, other: 0 },
+    latency: { count: 10, avgMs: 4, p50Ms: 3, p95Ms: 8, p99Ms: 9, maxMs: 10 },
+    sampleSize: 10,
+    sampleCapacity: 1000,
+  },
+  at: Date.now(),
+}));
+
+export const getAdminLogs = adminMonitoringEndpoint("getAdminLogs", () => ({
+  entries: [{ level: 30, time: Date.now(), msg: "request completed" }],
+  retained: 1,
+  capacity: 200,
+}));
+
+export const getAdminSlowQueries = adminMonitoringEndpoint("getAdminSlowQueries", () => ({
+  queries: [{ query: "SELECT 1", durationMs: 120, at: Date.now() }],
+  retained: 1,
+  capacity: 100,
+  thresholdMs: 100,
+}));
 
 export const refreshTokens = async (): Promise<AuthResponse> => ({
   token: TEST_TOKEN,
@@ -94,7 +187,7 @@ export const register = async (): Promise<AuthResponse> => refreshTokens();
 export const login = async (): Promise<AuthResponse> => refreshTokens();
 export const logout = async (): Promise<void> => undefined;
 
-export const getMe = async (): Promise<MyProfile> => ({ ...myProfile });
+export const getMe = async (): Promise<MyProfile> => ({ ...myProfile, isAdmin: currentUserIsAdmin });
 
 export const getUserProfile = async (userId: string): Promise<UserProfile> => {
   const profile = profiles[userId];

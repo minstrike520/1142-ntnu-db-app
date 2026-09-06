@@ -183,8 +183,9 @@ describe('presence tracker', () => {
     /**
      * `user_status` only reaches a friend whose socket is on the emitting
      * instance, so an audience has to be seated on both before the transitions
-     * are observable at all. That limit is the subject of #475/#476, not of
-     * this module — see `broadcastStatus`.
+     * are observable at all. The cluster adapter (#475) would now carry the
+     * event, but `broadcastStatus` still gates on `isLocallyOnline` and never
+     * emits it; lifting that gate is #476, not the business of this module.
      */
     const seatAudience = async () => {
       await alpha.trackUserConnection(io, 'friend-1', 'socket-f-a', friendRepo);

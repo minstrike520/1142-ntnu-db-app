@@ -7,13 +7,10 @@ permissions:
   contents: read
 
 jobs:
-  # integration and e2e share one job on purpose: they need identical Postgres
-  # setup, and running them as separate jobs meant installing dependencies and
-  # migrating the schema twice for no added signal. backend's own `test` script
-  # already runs unit, integration and e2e sequentially against a single
-  # database, so this is an existing supported path rather than a new one.
+  # Runs backend integration and E2E test suites against live PostgreSQL and Redis services.
   database-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:18-alpine
@@ -23,27 +20,11 @@ jobs:
           POSTGRES_DB: ntnu_test
         ports:
           - 5433:5432
-        # The health command names the user and database explicitly. A bare
-        # `pg_isready` probes as the container's own user, which is root here,
-        # so every 2s probe logged `FATAL: role "root" does not exist` in the
-        # service container output. The gate was always correct — pg_isready
-        # reports whether the server is accepting connections regardless — but
-        # the noise buried real errors when reading those logs.
-        #
-        # Literal values rather than `$POSTGRES_USER`: they are set four lines
-        # above in this same block, so indirection buys nothing here. The shell
-        # that runs this is the container's, not Compose's, so the `$$` escaping
-        # the compose files use would expand to a PID rather than a variable.
         options: >-
           --health-cmd "pg_isready -U postgres -d ntnu_test"
           --health-interval 2s
           --health-timeout 5s
           --health-retries 10
-      # The integration tier pins the Redis semantics that presence leases rest
-      # on — per-field TTLs, HLEN excluding expired fields, the key vanishing
-      # with its last field — and a fake cannot answer for any of them. Same
-      # image as the dev stack, on the same host port, so the default in
-      # tests/integration/realtime/presenceStore.int.test.ts also works locally.
       redis:
         image: redis:8-alpine
         ports:
@@ -54,9 +35,6 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      # The migration runner reads DATABASE_URL; the test helpers read
-      # DATABASE_URL_TEST (tests/helpers/testPool.ts throws without it). Both
-      # are needed — see the explicit DATABASE_URL on the migrate step below.
       DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5433/ntnu_test
       REDIS_URL_TEST: redis://localhost:6385
     steps:
@@ -68,3 +46,9 @@ jobs:
       - run: DATABASE_URL=$DATABASE_URL_TEST pnpm --filter near-chat-backend migrate:up
       - run: pnpm --filter near-chat-backend test:integration
       - run: pnpm --filter near-chat-backend test:e2e
+      - name: Output database tests summary
+        run: |
+          echo "### 🗄️ Database & Service Integration Tests Passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- PostgreSQL: \`postgres:18-alpine\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Redis: \`redis:8-alpine\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Executed: \`migrate:up\`, \`test:integration\`, \`test:e2e\`" >> "$GITHUB_STEP_SUMMARY"

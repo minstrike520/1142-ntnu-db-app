@@ -161,12 +161,37 @@ name to reuse. Per-field TTLs need **Redis 7.4 or newer** — against an older
 server the write fails, the backend logs the requirement once, and presence
 falls back to this instance only.
 
-What is *not* shared yet is the `user_status` push: `io.to()` reaches only the
-sockets held by the emitting process, so a friend connected to a different
-instance sees the change on their next `GET /friends` rather than over the
-socket. Closing that is the Redis event bus in #475/#476. The per-user session
-limit, global rate limits and cross-node change fan-out also remain
-per-instance, so a replica count above one is not yet a supported deployment.
+Event fan-out is shared as well, whenever `REDIS_URL` is set:
+`realtime/redisAdapter.ts` installs a Socket.IO cluster adapter over the
+`near-chat-ws` channel, so `io.to()`, room subscription changes and forced
+disconnects all carry to the other instances (#475). Delivery is at most once —
+Redis pub/sub keeps no backlog, so what an instance missed while unreachable is
+gone, and clients recover through their Sync Cursor.
+
+Point two deployments at one Redis and set `REALTIME_CLUSTER_ID` differently on
+each. Pub/sub is not scoped by the logical database — a `SUBSCRIBE` on `/1`
+receives what `/0` published — so distinct `REDIS_URL` databases do *not*
+separate them, and the channel name is the only thing that does. Left unset they
+share `near-chat-ws` and become one Socket.IO cluster; since `db:seed` gives
+every seeded environment the same user and room ids, one side's room events,
+membership changes and forced disconnects then land on the other side's
+sockets.
+
+What is *not* shared yet is the `user_status` push: `realtime/presence.ts` still
+emits it only when the friend holds a socket on the emitting instance, so a
+friend connected elsewhere sees the change on their next `GET /friends` rather
+than over the socket. Closing that is #476. The per-user session limit and
+global rate limits also remain per-instance, so a replica count above one is not
+yet a supported deployment.
+
+Two more gaps have to close before it becomes one, both from pub/sub keeping no
+backlog. A membership revocation (`socketsLeave`) lost while an instance's
+subscriber is down leaves that member's socket in the room, still receiving what
+is published there afterwards — a Sync Cursor cannot repair it, because the
+problem is a stale subscription rather than a missed event; it needs a durable
+path or a reconciliation against the database on reconnect (#477). And typing
+claims are aggregated per process, so the same user typing from two instances
+has the indication retracted by whichever node's last claim ends first (#474).
 
 ### Production Ingress & Proxy Trust
 

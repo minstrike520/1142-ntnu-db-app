@@ -100,6 +100,12 @@ services:
       # replaces its own presence lease instead of adding a second one that has
       # to wait out the TTL.
       - INSTANCE_ID
+      # Pass-through only, for the same reason: unset means the unscoped
+      # `near-chat-ws` channel, which is right for a stack that owns its `redis`
+      # service. Set it, differently per deployment, only when two stacks share
+      # one Redis — pub/sub is not separated by the logical database, so a
+      # distinct REDIS_URL database does not keep them apart.
+      - REALTIME_CLUSTER_ID
       - CI=true
     depends_on:
       db:

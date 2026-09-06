@@ -176,6 +176,7 @@ All errors return the following JSON structure:
   | `email` | String | Email address |
   | `bio` | String \| null | Biography |
   | `avatarUrl` | String \| null | User avatar URL |
+  | `isAdmin` | Boolean | Whether the current user may display admin navigation; protected admin routes still re-check authorization |
 - **Example**:
   ```json
   {
@@ -183,7 +184,8 @@ All errors return the following JSON structure:
     "name": "Alex",
     "email": "alex@example.com",
     "bio": "Hello, this is my bio.",
-    "avatarUrl": "https://example.com/avatar.png"
+    "avatarUrl": "https://example.com/avatar.png",
+    "isAdmin": false
   }
   ```
 
@@ -594,7 +596,8 @@ All errors return the following JSON structure:
     "name": "user123",
     "email": "user@example.com",
     "bio": "I am a new user.",
-    "avatarUrl": null
+    "avatarUrl": null,
+    "isAdmin": false
   }
   ```
 
@@ -643,7 +646,8 @@ All errors return the following JSON structure:
     "name": "user123",
     "email": "user@example.com",
     "bio": "Updated bio details",
-    "avatarUrl": null
+    "avatarUrl": null,
+    "isAdmin": false
   }
   ```
 
@@ -1563,8 +1567,7 @@ endpoint sets the flag; see `docs/DEVELOPMENT.md` for the bootstrap procedure.
 - **Namespace**: `/`
 - **Authentication**: Connection requires the access token in the Socket.IO `auth.token` handshake field.
 - **Subscriptions**: Upon connection, the server adds the socket to `user_<userId>` and to every non-pending room in `room_members`. Membership revocation removes every session from that room.
-- **Deployment scope**: Events are published through the process-local Socket.IO server, so the backend runs as a **single instance**. Two or more instances would silently drop events for clients connected to a different one — those sockets stay connected, so no recovery is triggered. Horizontal scaling requires a cross-process Socket.IO adapter (Redis or PostgreSQL) first.
-- **Deployment scope**: Events are published through the process-local Socket.IO server, so the backend runs as a **single instance**. Two or more instances would silently drop events for clients connected to a different one — those sockets stay connected, so no recovery is triggered. Horizontal scaling requires a cross-process Socket.IO adapter (Redis or PostgreSQL) first.
+- **Deployment scope**: With `REDIS_URL` set, events are published through a Redis cluster adapter on the `near-chat-ws` channel, so room and user events, room subscription changes and forced disconnects all reach clients held by any instance. Delivery is at most once: Redis pub/sub keeps no backlog, so an instance that was unreachable does not receive what it missed, and clients recover through their Sync Cursor rather than through the socket. Without `REDIS_URL` the in-memory adapter is used and the backend is a **single instance** — two or more would silently drop events for clients connected to a different one, and those sockets stay connected, so no recovery is triggered. More than one replica is still not a supported deployment: `user_status` is pushed only to friends on the emitting instance, and the per-user session limit and rate limits remain per-instance.
 - **Recovery**: Clients wait for the server's `realtime_ready` event, then call `GET /sync` after every connection and token refresh. `connectionStateRecovery` is disabled; Sync Cursor is the single recovery path. If subscription restoration fails, the server disconnects the socket without sending `realtime_ready`, so the client retries the handshake. The server may also send `realtime_ready` again mid-session after it restores a subscription it had revoked (a kick that lost its conditional delete), because a restored subscription replays nothing that was published while it was gone.
 
 ### Client-to-Server Events

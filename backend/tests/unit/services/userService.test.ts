@@ -204,7 +204,15 @@ describe('userService', () => {
         bio: 'Hello there',
         avatarUrl: 'https://example.com/avatar.png',
         lastActivity: new Date('2026-01-01T00:00:00.000Z'),
+        isAdmin: false,
       });
+    });
+
+    it('includes the current user admin flag without exposing it in public profiles', async () => {
+      mockRepo.findById.mockResolvedValue({ ...baseUser(), isAdmin: true });
+
+      await expect(userService.getMe('u1')).resolves.toMatchObject({ isAdmin: true });
+      await expect(userService.getUserProfile('u1')).resolves.not.toHaveProperty('isAdmin');
     });
 
     it('returns a public user profile', async () => {
@@ -232,6 +240,7 @@ describe('userService', () => {
         bio: 'Hello there',
         avatarUrl: 'https://example.com/new.png',
         lastActivity: new Date('2026-01-01T00:00:00.000Z'),
+        isAdmin: false,
       });
     });
 

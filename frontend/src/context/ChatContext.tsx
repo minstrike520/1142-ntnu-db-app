@@ -68,7 +68,12 @@ import {
   getActiveAccessToken,
   setActiveAccessToken,
   refreshTokensExclusive,
+  getAdminHealth,
+  getAdminMetrics,
+  getAdminLogs,
+  getAdminSlowQueries,
 } from "@/lib/api";
+import { withRedirectParam } from "@/lib/redirect";
 import {
   createChatSocket,
   onEmergencyAlert,
@@ -88,10 +93,17 @@ import {
   sendTyping,
   type ChatSocket,
 } from "@/lib/socket";
+
 export * from "./types";
 export * from "./chatMappers";
 
 import {
+  type AdminAccessState,
+  type AdminContextType,
+  type AdminError,
+  type AdminMonitoringState,
+  emptyAdminMonitoringState,
+  ADMIN_POLL_INTERVAL_MS,
   type BlockedUser,
   type ChatContextType,
   type ChatRoom,
@@ -130,21 +142,12 @@ import {
   toStoredUser,
 } from "./chatMappers";
 
+/** Login URL that returns the user to /admin once authenticated. */
+const ADMIN_LOGIN_PATH = withRedirectParam("/login", "/admin");
+
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
-// ---------------------------------------------------------------------------
-// Leaf contexts for high-frequency / UI-local state (hotspot #2, issue #383).
-//
-// These states change far more often than the chat data (typing events fire
-// on every keystroke of every peer) or are purely presentational (popover,
-// right panel). Keeping them inside the main context value forced every
-// useChat() consumer — including every ChatBubble via useTranslation — to
-// re-render on each change. They still live in ChatProvider's state; only the
-// subscription channel is separate, so this is not a ChatContext re-
-// architecture — splitting rooms/messages/socket across providers and bucketing
-// messages per room is a larger change that was deliberately left out of scope.
-// ---------------------------------------------------------------------------
-
+// Leaf contexts for high-frequency or UI-local states to prevent whole-tree re-renders.
 const TypingUsersContext = createContext<Record<string, string[]> | undefined>(undefined);
 
 const UiLanguageContext = createContext<UiLanguage | undefined>(undefined);
@@ -153,6 +156,7 @@ const ProfilePopoverContext = createContext<ProfilePopoverContextType | undefine
 
 const RightPanelContext = createContext<RightPanelContextType | undefined>(undefined);
 
+const AdminContext = createContext<AdminContextType | undefined>(undefined);
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -185,10 +189,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const [isMounted, setIsMounted] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthResolved, setIsAuthResolved] = useState(false);
   const [roomsInitialized, setRoomsInitialized] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | undefined>(undefined);
   const [user, setUser] = useState<User>({ username: "", email: "", avatar: "" });
+  const [adminAccess, setAdminAccess] = useState<AdminAccessState>("checking");
+  const [adminMonitoring, setAdminMonitoring] = useState<AdminMonitoringState>(emptyAdminMonitoringState);
+  const [adminError, setAdminError] = useState<AdminError>(null);
+  const [adminRefreshNonce, setAdminRefreshNonce] = useState(0);
+  const [adminCheckNonce, setAdminCheckNonce] = useState(0);
+  const [adminVerifiedToken, setAdminVerifiedToken] = useState<string | null>(null);
+  const [adminVerifiedSessionKey, setAdminVerifiedSessionKey] = useState<string | null>(null);
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -306,6 +318,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setToken(null);
     setCurrentUserId(undefined);
     setIsAuthenticated(false);
+    setIsAuthResolved(true);
     setRoomsInitialized(false);
     setRooms([]);
     setFolders([]);
@@ -438,11 +451,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const customEvent = e as CustomEvent<{ token: string; user: unknown }>;
       setToken(customEvent.detail.token);
     };
+    const handleTokenChanged = () => {
+      setToken(getActiveAccessToken());
+    };
     window.addEventListener('auth:token-expired', handleExpired);
     window.addEventListener('auth:token-refreshed', handleRefreshed);
+    window.addEventListener('auth:token-changed', handleTokenChanged);
     return () => {
       window.removeEventListener('auth:token-expired', handleExpired);
       window.removeEventListener('auth:token-refreshed', handleRefreshed);
+      window.removeEventListener('auth:token-changed', handleTokenChanged);
     };
   }, []);
 
@@ -458,6 +476,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect -- post-mount localStorage session hydration */
     if (!isMounted) return;
+
+    const loginPath = pathname === "/admin" ? ADMIN_LOGIN_PATH : "/login";
 
     const savedUser = localStorage.getItem("user");
     const savedTheme = localStorage.getItem("theme");
@@ -528,6 +548,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setToken(currentToken);
         setActiveAccessToken(currentToken);
         setIsAuthenticated(true);
+        setIsAuthResolved(true);
         await Promise.all([
           refreshRoomsAndFolders(currentToken, profile.userId),
           refreshSocialData(currentToken, settings, profile.userId),
@@ -536,7 +557,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         console.error(error);
         if (!cancelled) {
           clearSession();
-          window.location.replace("/login");
+          window.location.replace(loginPath);
         }
       }
     })();
@@ -551,6 +572,149 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     roomsRef.current = rooms;
   }, [rooms]);
+
+  // Admin verification and monitoring deliberately live with the session
+  // lifecycle. The page only consumes this state; it must not create a second
+  // token/polling lifecycle of its own.
+  /* eslint-disable react-hooks/set-state-in-effect -- admin state setup after auth */
+  useEffect(() => {
+    if (pathname !== "/admin") {
+      return;
+    }
+    if (!isMounted || !isAuthResolved) return;
+    // The route guard in app/(main)/layout.tsx owns the redirect to login;
+    // here we only need to stay idle until a session exists.
+    if (!isAuthenticated || !token) return;
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const authToken = token;
+    const sessionKey = currentUserId ?? "anonymous";
+    setAdminAccess("checking");
+    setAdminVerifiedToken(null);
+    setAdminVerifiedSessionKey(null);
+    setAdminMonitoring(emptyAdminMonitoringState);
+    setAdminError(null);
+
+    void getAdminHealth(authToken)
+      .then(() => {
+        if (cancelled) return;
+        setAdminVerifiedToken(authToken);
+        setAdminVerifiedSessionKey(sessionKey);
+        setAdminAccess("allowed");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.status === 401) {
+          clearSession();
+          router.replace(ADMIN_LOGIN_PATH);
+          return;
+        }
+        if (error instanceof ApiError && error.status === 403) {
+          setAdminAccess("forbidden");
+          return;
+        }
+        console.error("Failed to verify admin access:", error);
+        setAdminError("access");
+        setAdminAccess("error");
+        retryTimer = setTimeout(() => {
+          if (!cancelled) setAdminCheckNonce((current) => current + 1);
+        }, ADMIN_POLL_INTERVAL_MS);
+      });
+
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+    };
+  }, [adminCheckNonce, currentUserId, isAuthenticated, isAuthResolved, isMounted, pathname, router, token]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    if (
+      pathname !== "/admin" ||
+      adminAccess !== "allowed" ||
+      adminVerifiedToken !== token ||
+      adminVerifiedSessionKey !== (currentUserId ?? "anonymous") ||
+      !isAuthenticated ||
+      !token
+    ) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight = false;
+    const authToken = token;
+
+    const scheduleNextPoll = () => {
+      if (!cancelled) {
+        timer = setTimeout(() => {
+          timer = undefined;
+          void loadMonitoringData();
+        }, ADMIN_POLL_INTERVAL_MS);
+      }
+    };
+
+    const loadMonitoringData = async () => {
+      if (cancelled || inFlight) return;
+      const currentToken = getActiveAccessToken();
+      if (!currentToken || currentToken !== authToken) return;
+
+      inFlight = true;
+      let shouldContinuePolling = true;
+      try {
+        const [metricsResult, logsResult, slowQueriesResult] = await Promise.allSettled([
+          getAdminMetrics(authToken),
+          getAdminLogs(authToken),
+          getAdminSlowQueries(authToken),
+        ]);
+        if (cancelled) return;
+
+        const results = [metricsResult, logsResult, slowQueriesResult];
+        const rejectedResults = results.filter(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        const authorizationError = rejectedResults.find(
+          (result) => result.reason instanceof ApiError && (result.reason.status === 401 || result.reason.status === 403),
+        );
+        if (authorizationError) throw authorizationError.reason;
+        if (rejectedResults[0]) throw rejectedResults[0].reason;
+        if (metricsResult.status !== "fulfilled" || logsResult.status !== "fulfilled" || slowQueriesResult.status !== "fulfilled") {
+          return;
+        }
+
+        setAdminMonitoring({
+          metrics: metricsResult.value,
+          logs: logsResult.value.entries,
+          slowQueries: slowQueriesResult.value.queries,
+          lastUpdated: metricsResult.value.at,
+        });
+        setAdminError(null);
+      } catch (error: unknown) {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.status === 401) {
+          shouldContinuePolling = false;
+          clearSession();
+          router.replace(ADMIN_LOGIN_PATH);
+          return;
+        }
+        if (error instanceof ApiError && error.status === 403) {
+          shouldContinuePolling = false;
+          setAdminAccess("forbidden");
+          return;
+        }
+        console.error("Failed to load admin monitoring data:", error);
+        setAdminError("monitoring");
+      } finally {
+        inFlight = false;
+        if (shouldContinuePolling) scheduleNextPoll();
+      }
+    };
+
+    void loadMonitoringData();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [adminAccess, adminRefreshNonce, adminVerifiedSessionKey, adminVerifiedToken, currentUserId, isAuthenticated, pathname, router, token]);
 
   useEffect(() => {
     if (!token || !currentUserId) return;
@@ -763,23 +927,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       void track(runCheckpoint());
     };
 
-    // A live durable event must never advance the cursor itself, however
-    // tempting its `changeSequence` looks. Services publish *after* their
-    // transaction commits and after a follow-up snapshot query, so two
-    // concurrent commands race in the application layer and this client can
-    // see the larger sequence first. Taking it as a watermark and then
-    // dropping the socket before the smaller one arrives would put that change
-    // permanently behind `/sync`'s `change_sequence > cursor` filter — a
-    // silently lost edit or recall.
-    //
-    // `/sync` has no such hazard: the counter row lock is held until commit,
-    // so changes become visible in sequence order and a page can never
-    // straddle a gap. The cursor is therefore checkpointed by running an
-    // ordinary cursor-only `/sync` on a timer, which is what keeps a
-    // long-lived session from paging its entire connection back on the next
-    // reconnect. Deliberately not `runSynchronization`: a periodic tick must
-    // not refresh rooms, and must not take the failure path that disconnects
-    // the socket.
+    // Periodic /sync checkpoint avoids gaps from out-of-order realtime events.
     let liveChangesSinceCheckpoint = false;
     const noteLiveDurableChange = () => {
       liveChangesSinceCheckpoint = true;
@@ -1290,12 +1438,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }).then((message) => applyCanonicalMessage(message)).catch((error) => console.error('Failed to send attachment message:', error));
   };
 
-  /**
-   * A 409 means the local revision was stale: someone else edited or recalled
-   * the message first. Silently swallowing it leaves the user looking at
-   * content the server has already replaced, so realign from the server and
-   * tell them what happened.
-   */
+  /** Handles 409 conflict by refreshing canonical message from the server. */
   const handleRevisionConflict = async (
     roomId: string,
     messageId: string,
@@ -1303,21 +1446,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     noticeKey: string,
   ): Promise<void> => {
     if (!(error instanceof ApiError) || error.status !== 409) throw error;
-    // Only promise the user a refreshed message once the canonical row is
-    // actually back in state. The fetch can fail, and the message can sit
-    // outside the page it returns — in both cases the stale revision is still
-    // on screen, and a notice claiming otherwise would be a lie.
     let refreshed = false;
     if (token) {
       try {
         const canonical = (await listMessages(token, roomId, { limit: 50 }))
           .find((row) => row.messageId === messageId);
         if (canonical) {
-          // The sidebar preview is derived from this message whenever it is
-          // the room's last one, and the conflict means the event that would
-          // normally have refreshed the summary may never arrive. Skipping it
-          // unconditionally would leave a stale preview behind a notice that
-          // claims the latest version is on screen.
           const isRoomPreview = roomsRef.current
             .some((room) => room.id === roomId && room.lastMessageId === messageId);
           applyCanonicalMessage(canonical, isRoomPreview);
@@ -1935,18 +2069,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const prevActiveRoomIdRef = useRef<string | null>(null);
 
-  // Advances the local read marker optimistically, then undoes it if the write
-  // never lands. Both callers below decide whether to send by comparing the
-  // marker with the newest message, so a marker left ahead of a failed write is
-  // self-silencing: the room looks read here while the server still counts it
-  // unread, and nothing retries until a new message, a room switch or a reload.
-  //
-  // The rollback alone is not enough, though. `groupReadStates` is a dependency
-  // of the effect below, so undoing the marker immediately re-runs the effect,
-  // which calls straight back in here — a request loop with no delay and no
-  // ceiling for as long as the write keeps failing (offline, a persistent 5xx,
-  // a permission change). The per-room backoff below is what turns that into a
-  // paced retry, and `retryTick` is what wakes the effect once it expires.
+  // Optimistic read marker state with per-room exponential backoff for failed sync attempts.
   const readPositionRetryRef = useRef(
     new Map<string, { inFlight?: string; blockedUntil?: number; attempts: number; timer?: ReturnType<typeof setTimeout> }>(),
   );
@@ -2112,22 +2235,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // -------------------------------------------------------------------------
-  // Context value stabilization (hotspot #1, issue #383)
-  //
-  // The React Compiler is disabled for this file (see header), so without
-  // manual memoization every provider render would rebuild all handler
-  // closures and the context value object, forcing every useChat() consumer
-  // to re-render on any provider state change.
-  //
-  // Imperative handlers are exposed through identity-stable proxies that
-  // delegate to the latest implementation via a ref (same pattern as
-  // markRoomAsRead below). The proxies are only ever invoked from event
-  // handlers and effects — never during render — so they always observe the
-  // closures of the last committed render. Functions that consumers call
-  // during render (getReadAvatarsForMessage) use useCallback with real
-  // dependencies instead.
-  // -------------------------------------------------------------------------
+  const refreshAdminMonitoring = useCallback(() => {
+    setAdminRefreshNonce((current) => current + 1);
+  }, []);
+
+  // Identity-stable handler proxies to prevent unnecessary re-renders of useChat consumers.
   const handlers = {
     toggleFolder,
     handleLogout,
@@ -2202,6 +2314,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       emergencySettings,
       uiLanguage,
       isAuthenticated,
+      isAuthResolved,
       isMounted,
       roomsInitialized,
       selectedFriendForSidebar,
@@ -2230,6 +2343,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       emergencySettings,
       uiLanguage,
       isAuthenticated,
+      isAuthResolved,
       isMounted,
       roomsInitialized,
       selectedFriendForSidebar,
@@ -2250,28 +2364,35 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [showRightPanel],
   );
 
+  const adminValue = useMemo<AdminContextType>(
+    () => ({ adminAccess, adminMonitoring, adminError, refreshAdminMonitoring }),
+    [adminAccess, adminMonitoring, adminError, refreshAdminMonitoring],
+  );
+
   return (
     <ChatContext.Provider value={contextValue}>
       <UiLanguageContext.Provider value={uiLanguage}>
         <TypingUsersContext.Provider value={typingUsers}>
           <ProfilePopoverContext.Provider value={profilePopoverValue}>
             <RightPanelContext.Provider value={rightPanelValue}>
-              {children}
-              {messageNoticeKey && (
-                <div
-                  role="status"
-                  className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg"
-                >
-                  <span>{translate(uiLanguage, messageNoticeKey)}</span>
-                  <button
-                    type="button"
-                    className="font-semibold underline"
-                    onClick={() => setMessageNoticeKey(null)}
+              <AdminContext.Provider value={adminValue}>
+                {children}
+                {messageNoticeKey && (
+                  <div
+                    role="status"
+                    className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg"
                   >
-                    {translate(uiLanguage, "chatroom.dismissNotice")}
-                  </button>
-                </div>
-              )}
+                    <span>{translate(uiLanguage, messageNoticeKey)}</span>
+                    <button
+                      type="button"
+                      className="font-semibold underline"
+                      onClick={() => setMessageNoticeKey(null)}
+                    >
+                      {translate(uiLanguage, "chatroom.dismissNotice")}
+                    </button>
+                  </div>
+                )}
+              </AdminContext.Provider>
             </RightPanelContext.Provider>
           </ProfilePopoverContext.Provider>
         </TypingUsersContext.Provider>
@@ -2284,6 +2405,18 @@ export function useChat() {
   const context = useContext(ChatContext);
   if (context === undefined) {
     throw new Error("useChat must be used within a ChatProvider");
+  }
+  return context;
+}
+
+/**
+ * Admin access state and monitoring snapshot. Separate from useChat so the 30s
+ * poll only re-renders the admin surface.
+ */
+export function useAdmin() {
+  const context = useContext(AdminContext);
+  if (context === undefined) {
+    throw new Error("useAdmin must be used within a ChatProvider");
   }
   return context;
 }

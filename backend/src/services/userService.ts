@@ -56,11 +56,12 @@ const toUserProfile = (user: Pick<User, 'userId' | 'name' | 'bio' | 'avatarUrl'>
 });
 
 const toMyProfile = (
-  user: Pick<User, 'userId' | 'name' | 'email' | 'bio' | 'avatarUrl' | 'lastActivity'>,
+  user: Pick<User, 'userId' | 'name' | 'email' | 'bio' | 'avatarUrl' | 'lastActivity' | 'isAdmin'>,
 ): MyProfile => ({
   ...toUserProfile(user),
   email: user.email,
   lastActivity: user.lastActivity,
+  isAdmin: user.isAdmin,
 });
 
 const toUserSettings = (

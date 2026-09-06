@@ -1,8 +1,8 @@
-import type React from "react";
 import type {
   PublicUser,
   RoomMemberRole,
 } from "@shared/types";
+import type { AdminLogEntry, AdminMetricsResponse, AdminSlowQuery } from "@/lib/api";
 
 export interface Member {
   userId: string;
@@ -73,6 +73,7 @@ export interface User {
   username: string;
   email: string;
   avatar: string;
+  isAdmin?: boolean;
   bio?: string;
   language?: UiLanguage;
   theme?: "light" | "dark";
@@ -166,6 +167,7 @@ export interface ChatContextType {
   emergencySettings: EmergencySettings;
   uiLanguage: UiLanguage;
   isAuthenticated: boolean;
+  isAuthResolved: boolean;
   isMounted: boolean;
   roomsInitialized: boolean;
   selectedFriendForSidebar: Friend | null;
@@ -282,3 +284,28 @@ export const HANDLER_KEYS = [
 ] as const;
 
 export type HandlerKey = (typeof HANDLER_KEYS)[number];
+
+export type AdminAccessState = "checking" | "allowed" | "forbidden" | "error";
+export type AdminError = "access" | "monitoring" | null;
+export interface AdminMonitoringState {
+  metrics: AdminMetricsResponse | null;
+  logs: AdminLogEntry[];
+  slowQueries: AdminSlowQuery[];
+  lastUpdated: number | null;
+}
+
+export const emptyAdminMonitoringState: AdminMonitoringState = {
+  metrics: null,
+  logs: [],
+  slowQueries: [],
+  lastUpdated: null,
+};
+
+export const ADMIN_POLL_INTERVAL_MS = 30_000;
+
+export interface AdminContextType {
+  adminAccess: AdminAccessState;
+  adminMonitoring: AdminMonitoringState;
+  adminError: AdminError;
+  refreshAdminMonitoring: () => void;
+}

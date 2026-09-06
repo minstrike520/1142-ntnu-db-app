@@ -21,9 +21,13 @@ import UserIcon from "@iconify-react/boxicons/user";
 import PlusSquareIcon from "@iconify-react/boxicons/plus-square";
 import JoinGroupIcon from "@iconify-react/boxicons/arrow-down-stroke-square";
 import FolderPlusIcon from "@iconify-react/boxicons/folder-plus";
+import BarChartIcon from "@iconify-react/boxicons/bar-chart";
 import { resolveAssetUrl } from "@/lib/assets";
+type SidebarProps = {
+  isAdmin?: boolean;
+};
 
-export default function Sidebar() {
+export default function Sidebar({ isAdmin = false }: SidebarProps) {
   const router = useRouter();
   const pathname = usePathname();
   const {
@@ -132,6 +136,14 @@ export default function Sidebar() {
       onClick: () => router.push("/emergency"),
       icon: <AlertTriangleIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
     },
+    ...(isAdmin
+      ? [{
+          label: t("adminPage.navLabel"),
+          active: pathname === "/admin",
+          onClick: () => router.push("/admin"),
+          icon: <BarChartIcon aria-hidden="true" className="h-5 w-5 shrink-0" />,
+        }]
+      : []),
     {
       label: t("sidebar.settings"),
       active: isSettingsPage,
