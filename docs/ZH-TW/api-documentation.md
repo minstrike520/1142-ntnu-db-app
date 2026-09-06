@@ -1585,7 +1585,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
 | `read_update` | `{ roomId: string, userId: string, messageId: string, readPosition?: number }` | 其他成員的已讀游標更新 |
 | `room_update` | `{ type: string, roomId: string, data: unknown }` | 房間或成員狀態變更。`type` 欄位決定子類型，詳見 [`room_update` 子類型](#room_update-子類型)。 |
 | `friend_request` | `{ requesterId: string, addresseeId: string, status: 'pending' \| 'accepted' \| 'rejected' \| 'deleted' \| 'blocked' \| 'unblocked', createdAt: string }` | 好友生命週期通知。傳送給相關使用者；客戶端收到後不論 `status` 為何，皆應重新拉取好友與待確認請求列表。 |
-| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。事件會送往每位好友的 `user_<id>` room，因此能送達他們在任一 instance 上的 session。在 Redis 可連線的情況下，每次狀態轉換只會由取得第一個 lease 或釋放最後一個 lease 的那個 instance 對整個 cluster 宣告一次。**降級情境：** 若 Redis command connection 中斷，各 instance 會退回依自己的本機狀態判斷，因此客戶端可能收到重複的 `online`，或在使用者仍連線於其他 instance 時收到 `offline`。客戶端以最後收到的值為準，權威讀取為 `GET /api/v1/friends`。 |
+| `user_status` | `{ userId: string, status: 'online' \| 'offline' }` | 好友的上線 / 下線狀態更新。於好友連線或斷線時推送。事件會送往每位好友的 `user_<id>` room，因此能送達他們在任一 instance 上的 session。在 Redis 可連線的情況下，每次狀態轉換只會由取得第一個 lease 或釋放最後一個 lease 的那個 instance 對整個 cluster 宣告一次。**降級情境：** 若 Redis command connection 中斷，各 instance 會退回依自己的本機狀態判斷，因此客戶端可能收到重複的 `online`，或在使用者仍連線於其他 instance 時收到 `offline`。中斷期間 `GET /api/v1/friends` 無法用來校正：其 `status` 來自同一組 presence 查詢，同樣會退回成回應端 instance 自己的連線，因而把連在其他 instance 的使用者回報為 offline。兩條路徑都要等 Redis 恢復連線後才會收斂。 |
 | `emergency_alert` | `{ userId: string, message: string }` | 收到緊急聯絡人的警報通知 |
 | `realtime_ready` | `void` | 有效聊天室訂閱已恢復；客戶端可以開始 `/sync`。每次連線送出一次，伺服器還原先前撤銷的訂閱時也會再送 |
 | `error` | `ApiError` | 事件處理失敗的錯誤回報 |
