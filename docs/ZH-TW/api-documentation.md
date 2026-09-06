@@ -175,6 +175,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
   | `email` | 字串 | 電子郵件信箱 |
   | `bio` | 字串 \| null | 個人簡介 |
   | `avatarUrl` | 字串 \| null | 使用者頭像網址 |
+  | `lastActivity` | ISO 8601 | 使用者在任何端點上最後一次活動的時間戳 |
   | `isAdmin` | 布林值 | 目前登入者是否可顯示管理員導覽；受保護的管理員路由仍會重新驗證權限 |
 - **範例**:
   ```json
@@ -184,6 +185,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4005
     "email": "alex@example.com",
     "bio": "Hello, this is my bio.",
     "avatarUrl": "https://example.com/avatar.png",
+    "lastActivity": "2026-09-06T12:34:56.000Z",
     "isAdmin": false
   }
   ```
