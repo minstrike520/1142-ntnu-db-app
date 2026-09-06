@@ -87,7 +87,7 @@ describe("message list memo boundary", () => {
   });
 
   test("reply and recall actions still work through the stable row callbacks", async () => {
-    const app = await mountChatApp("/chat/room-1");
+    await mountChatApp("/chat/room-1");
 
     // Hover actions render for every non-recalled row; pick the last one.
     fireEvent.click(screen.getAllByText("Reply").at(-1)!);
